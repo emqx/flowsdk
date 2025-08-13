@@ -1,0 +1,47 @@
+[package]
+name = "mqtt-grpc-duality"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]] # Bin to run the simple server
+name = "simple-server"
+path = "src/bin/server.rs"
+
+[[bin]] # Bin to run the simple client
+name = "simple-client"
+path = "src/bin/client.rs"
+
+[[bin]] # Bin to run the S-PROXY
+name = "s-proxy"
+path = "src/bin/s-proxy.rs"
+
+[[bin]] # Bin to run the R-PROXY
+name = "r-proxy"
+path = "src/bin/r-proxy.rs"
+
+[[bin]] # Bin to run the S-Client
+name = "s-client"
+path = "src/bin/s-client.rs"
+
+[dependencies]
+tonic = "*"
+prost = "0.14"
+tokio = { version = "1.0", features = ["macros", "rt-multi-thread"] }
+tonic-prost = "0.14.0"
+serde = { version = "1.0.218", features = ["derive"] }
+hex = "0.4"
+bytes = "1"
+dashmap = "5.5"
+tracing = "0.1"
+tracing-subscriber = "0.3"
+arbitrary = { version = "1", optional = true, features = ["derive"] }
+serde_json = "1.0"
+
+[features]
+default = ["strict-protocol-compliance"]
+strict-protocol-compliance = []
+
+
+[build-dependencies]
+tonic-build = "*"
+tonic-prost-build = "*"

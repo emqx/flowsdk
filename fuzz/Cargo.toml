@@ -1,0 +1,29 @@
+[package]
+name = "mqtt-grpc-duality-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+
+[dependencies.mqtt-grpc-duality]
+path = ".."
+features = ["arbitrary"]
+
+[[bin]]
+name = "fuzz_parser_funs"
+path = "fuzz_targets/fuzz_parser_funs.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "fuzz_mqtt_packet_symmetric"
+path = "fuzz_targets/fuzz_mqtt_packet_symmetric.rs"
+test = false
+doc = false
+bench = false
