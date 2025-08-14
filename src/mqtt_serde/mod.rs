@@ -19,11 +19,11 @@ pub(crate) fn encode_utf8_string(s: &str) -> Result<Vec<u8>, ParseError> {
     if s.len() > u16::MAX as usize {
         return Err(ParseError::StringTooLong);
     }
-    
+
     // MQTT 5.0 Protocol Compliance: Strict UTF-8 validation
     #[cfg(feature = "strict-protocol-compliance")]
     validate_mqtt_utf8_string(s)?;
-    
+
     Ok(Utf8String::encode(s))
 }
 
@@ -33,33 +33,34 @@ fn validate_mqtt_utf8_string(s: &str) -> Result<(), ParseError> {
     // - U+0000 (null character)
     // - U+D800 to U+DFFF (UTF-16 surrogate pairs)
     // - BOM (Byte Order Mark) at the beginning
-    
+
     for (i, ch) in s.char_indices() {
         let code_point = ch as u32;
-        
+
         match code_point {
             // Check for null character
             0x0000 => {
                 return Err(ParseError::ParseError(
-                    "UTF-8 string contains null character (U+0000)".to_string()
+                    "UTF-8 string contains null character (U+0000)".to_string(),
                 ));
             }
             // Check for UTF-16 surrogate pairs
             0xD800..=0xDFFF => {
-                return Err(ParseError::ParseError(
-                    format!("UTF-8 string contains surrogate character (U+{:04X})", code_point)
-                ));
+                return Err(ParseError::ParseError(format!(
+                    "UTF-8 string contains surrogate character (U+{:04X})",
+                    code_point
+                )));
             }
             // Check for BOM at the beginning
             0xFEFF if i == 0 => {
                 return Err(ParseError::ParseError(
-                    "UTF-8 string starts with BOM (U+FEFF)".to_string()
+                    "UTF-8 string starts with BOM (U+FEFF)".to_string(),
                 ));
             }
             _ => {} // Valid character
         }
     }
-    
+
     Ok(())
 }
 
@@ -71,22 +72,23 @@ pub(crate) fn validate_topic_filter(topic_filter: &str) -> Result<(), ParseError
             "Topic filter cannot be empty".to_string(),
         ));
     }
-    
+
     // Check maximum length (65535 bytes for UTF-8 strings)
     if topic_filter.len() > 65535 {
         return Err(ParseError::StringTooLong);
     }
-    
+
     // Split into levels for wildcard validation
     let levels: Vec<&str> = topic_filter.split('/').collect();
-    
+
     for (i, level) in levels.iter().enumerate() {
         // Multi-level wildcard (#) validation
         if level.contains('#') {
             // # must be the only character in the level
             if *level != "#" {
                 return Err(ParseError::ParseError(
-                    "Multi-level wildcard (#) must be the only character in topic level".to_string(),
+                    "Multi-level wildcard (#) must be the only character in topic level"
+                        .to_string(),
                 ));
             }
             // # must be the last level
@@ -96,18 +98,19 @@ pub(crate) fn validate_topic_filter(topic_filter: &str) -> Result<(), ParseError
                 ));
             }
         }
-        
+
         // Single-level wildcard (+) validation
         if level.contains('+') {
             // + must be the only character in the level
             if *level != "+" {
                 return Err(ParseError::ParseError(
-                    "Single-level wildcard (+) must be the only character in topic level".to_string(),
+                    "Single-level wildcard (+) must be the only character in topic level"
+                        .to_string(),
                 ));
             }
         }
     }
-    
+
     Ok(())
 }
 
@@ -119,29 +122,30 @@ pub(crate) fn validate_shared_subscription(topic_filter: &str) -> Result<(), Par
         let parts: Vec<&str> = topic_filter.splitn(3, '/').collect();
         if parts.len() < 3 {
             return Err(ParseError::ParseError(
-                "Invalid shared subscription format: must be $share/ShareName/TopicFilter".to_string(),
+                "Invalid shared subscription format: must be $share/ShareName/TopicFilter"
+                    .to_string(),
             ));
         }
-        
+
         let share_name = parts[1];
         let actual_topic_filter = parts[2];
-        
+
         if share_name.is_empty() {
             return Err(ParseError::ParseError(
                 "Shared subscription ShareName cannot be empty".to_string(),
             ));
         }
-        
+
         if actual_topic_filter.is_empty() {
             return Err(ParseError::ParseError(
                 "Shared subscription TopicFilter cannot be empty".to_string(),
             ));
         }
-        
+
         // Validate the actual topic filter part
         validate_topic_filter(actual_topic_filter)?;
     }
-    
+
     Ok(())
 }
 
@@ -242,11 +246,11 @@ mod protocol_compliance_tests {
         // Missing share name
         let result = validate_shared_subscription("$share//home/temperature");
         assert!(result.is_err());
-        
+
         // Missing topic filter
         let result = validate_shared_subscription("$share/group1/");
         assert!(result.is_err());
-        
+
         // Incomplete format
         let result = validate_shared_subscription("$share/group1");
         assert!(result.is_err());

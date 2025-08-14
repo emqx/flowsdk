@@ -263,6 +263,36 @@ service MqttRelayService {
 
   // mqtt subscribe RPC.
   rpc MQTTSubscribe(mqttv5.Subscribe) returns (mqttv5.Suback);
+
+  // mqtt suback RPC - server subscription acknowledgment.
+  rpc MQTTSuback(mqttv5.Suback) returns (RelayResponse);
+
+  // mqtt unsubscribe RPC.
+  rpc MQTTUnsubscribe(mqttv5.Unsubscribe) returns (mqttv5.Unsuback);
+
+  // mqtt unsuback RPC - server unsubscription acknowledgment.
+  rpc MQTTUnsuback(mqttv5.Unsuback) returns (RelayResponse);
+
+  // mqtt puback RPC - QoS 1 acknowledgment.
+  rpc MQTTPuback(mqttv5.Puback) returns (RelayResponse);
+
+  // mqtt pubrec RPC - QoS 2 publish received (step 1).
+  rpc MQTTPubrec(mqttv5.Pubrec) returns (mqttv5.Pubrel);
+
+  // mqtt pubrel RPC - QoS 2 publish release (step 2).
+  rpc MQTTPubrel(mqttv5.Pubrel) returns (mqttv5.Pubcomp);
+
+  // mqtt pubcomp RPC - QoS 2 publish complete (step 3).
+  rpc MQTTPubcomp(mqttv5.Pubcomp) returns (RelayResponse);
+
+  // mqtt pingreq RPC - client ping request.
+  rpc MQTTPingreq(mqttv5.Pingreq) returns (mqttv5.Pingresp);
+
+  // mqtt disconnect RPC - graceful disconnection.
+  rpc MQTTDisconnect(mqttv5.Disconnect) returns (RelayResponse);
+
+  // mqtt auth RPC - authentication exchange (MQTT 5.0).
+  rpc MQTTAuth(mqttv5.Auth) returns (mqttv5.Auth);
 }
 
 // Response for unary RelayPacket RPC.

@@ -74,6 +74,137 @@ impl MqttRelayService for MyRelay {
         };
         Ok(Response::new(m))
     }
+
+    async fn mqtt_puback(
+        &self,
+        request: Request<mqttv5pb::Puback>,
+    ) -> Result<Response<RelayResponse>, Status> {
+        println!("Got a PubAck request: {:?}", request);
+
+        let reply = RelayResponse {
+            status_code: 0,
+            error_message: String::new(),
+        };
+        Ok(Response::new(reply))
+    }
+
+    async fn mqtt_pubrec(
+        &self,
+        request: Request<mqttv5pb::Pubrec>,
+    ) -> Result<Response<mqttv5pb::Pubrel>, Status> {
+        println!("Got a PubRec request: {:?}", request);
+
+        let pubrel = mqttv5pb::Pubrel {
+            message_id: request.get_ref().message_id,
+            reason_code: 0,
+            properties: Default::default(),
+        };
+        Ok(Response::new(pubrel))
+    }
+
+    async fn mqtt_pubrel(
+        &self,
+        request: Request<mqttv5pb::Pubrel>,
+    ) -> Result<Response<mqttv5pb::Pubcomp>, Status> {
+        println!("Got a PubRel request: {:?}", request);
+
+        let pubcomp = mqttv5pb::Pubcomp {
+            message_id: request.get_ref().message_id,
+            reason_code: 0,
+            properties: Default::default(),
+        };
+        Ok(Response::new(pubcomp))
+    }
+
+    async fn mqtt_pubcomp(
+        &self,
+        request: Request<mqttv5pb::Pubcomp>,
+    ) -> Result<Response<RelayResponse>, Status> {
+        println!("Got a PubComp request: {:?}", request);
+
+        let reply = RelayResponse {
+            status_code: 0,
+            error_message: String::new(),
+        };
+        Ok(Response::new(reply))
+    }
+
+    async fn mqtt_unsubscribe(
+        &self,
+        request: Request<mqttv5pb::Unsubscribe>,
+    ) -> Result<Response<mqttv5pb::Unsuback>, Status> {
+        println!("Got an Unsubscribe request: {:?}", request);
+
+        let topic_count = request.get_ref().topic_filters.len();
+        let unsuback = mqttv5pb::Unsuback {
+            message_id: request.get_ref().message_id,
+            reason_codes: vec![0; topic_count], // Success for all topics
+            properties: Default::default(),
+        };
+        Ok(Response::new(unsuback))
+    }
+
+    async fn mqtt_pingreq(
+        &self,
+        request: Request<mqttv5pb::Pingreq>,
+    ) -> Result<Response<mqttv5pb::Pingresp>, Status> {
+        println!("Got a PingReq request: {:?}", request);
+
+        let pingresp = mqttv5pb::Pingresp {};
+        Ok(Response::new(pingresp))
+    }
+
+    async fn mqtt_disconnect(
+        &self,
+        request: Request<mqttv5pb::Disconnect>,
+    ) -> Result<Response<RelayResponse>, Status> {
+        println!("Got a Disconnect request: {:?}", request);
+
+        let reply = RelayResponse {
+            status_code: 0,
+            error_message: String::new(),
+        };
+        Ok(Response::new(reply))
+    }
+
+    async fn mqtt_auth(
+        &self,
+        request: Request<mqttv5pb::Auth>,
+    ) -> Result<Response<mqttv5pb::Auth>, Status> {
+        println!("Got an Auth request: {:?}", request);
+
+        let auth_response = mqttv5pb::Auth {
+            reason_code: 0, // Success
+            properties: Default::default(),
+        };
+        Ok(Response::new(auth_response))
+    }
+
+    async fn mqtt_suback(
+        &self,
+        request: Request<mqttv5pb::Suback>,
+    ) -> Result<Response<RelayResponse>, Status> {
+        println!("Got a SubAck request: {:?}", request);
+
+        let reply = RelayResponse {
+            status_code: 0,
+            error_message: String::new(),
+        };
+        Ok(Response::new(reply))
+    }
+
+    async fn mqtt_unsuback(
+        &self,
+        request: Request<mqttv5pb::Unsuback>,
+    ) -> Result<Response<RelayResponse>, Status> {
+        println!("Got an UnsubAck request: {:?}", request);
+
+        let reply = RelayResponse {
+            status_code: 0,
+            error_message: String::new(),
+        };
+        Ok(Response::new(reply))
+    }
 }
 
 #[tokio::main]

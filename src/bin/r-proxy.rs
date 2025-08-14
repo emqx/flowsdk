@@ -7,6 +7,7 @@ use mqtt_grpc_duality::mqtt_serde::mqttv5;
 use mqtt_grpc_duality::mqtt_serde::mqttv5::common::properties::Property;
 use mqtt_grpc_duality::mqtt_serde::mqttv5::connack::MqttConnAck;
 use mqtt_grpc_duality::mqtt_serde::mqttv5::connect::MqttConnect;
+use mqtt_grpc_duality::mqtt_serde::mqttv5::suback::MqttSubAck;
 use mqtt_grpc_duality::mqtt_serde::parser::stream::MqttParser;
 use mqttv5pb::mqtt_relay_service_client::MqttRelayServiceClient;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -291,30 +292,346 @@ async fn mqtt_client_loop(
             // Read from the client connection
             _ = conn.read_h.read_buf(parser.buffer_mut()) => {
                 match parser.next_packet() {
-                    Ok(Some(MqttPacket::Publish(publish))) => {
-                        // Handle incoming publish packets
-                        info!("Received Publish packet: {:?}", publish);
-                        // Forward the publish packet to the gRPC server
-                        let publish_msg: mqttv5pb::Publish = publish.into();
-                        //@TODO: not necessarily with x-client-id
-                        let mut request = tonic::Request::new(publish_msg);
-                        request.metadata_mut().insert(
-                            "x-client-id",
-                            tonic::metadata::MetadataValue::try_from(
-                                conn.client_id.clone()
-                            ).unwrap(),
-                        );
-                        // @TODO: here may not be QoS1
-                        let response = conn.grpc_client.mqtt_publish_qos1(
-                            request
-                        ).await;
-                        if response.is_err() {
-                            eprintln!("Failed to send Publish packet to gRPC server {:?}", response.err().unwrap());
-                        }
-                    }
-
                     Ok(Some(packet)) => {
-                        eprintln!("Received unexpected packet: {:?}", packet);
+                        match packet {
+                            MqttPacket::Connect(connect) => {
+                                info!("Received Connect packet: {:?}", connect);
+                                // Connect should be handled during initial connection setup
+                                eprintln!("Unexpected Connect packet in client loop");
+                            }
+
+                            MqttPacket::ConnAck(connack) => {
+                                info!("Received ConnAck packet: {:?}", connack);
+                                // ConnAck is typically sent by server, not expected from client
+                                eprintln!("Unexpected ConnAck packet from client");
+                            }
+
+                            MqttPacket::Publish(publish) => {
+                                info!("Received Publish packet: {:?}", publish);
+                                // Forward the publish packet to the gRPC server
+                                let publish_msg: mqttv5pb::Publish = publish.into();
+                                let mut request = tonic::Request::new(publish_msg);
+                                request.metadata_mut().insert(
+                                    "x-client-id",
+                                    tonic::metadata::MetadataValue::try_from(
+                                        conn.client_id.clone()
+                                    ).unwrap(),
+                                );
+
+                                // Handle different QoS levels
+                                let response = conn.grpc_client.mqtt_publish_qos1(request).await;
+                                if let Err(e) = response {
+                                    eprintln!("Failed to send Publish packet to gRPC server: {:?}", e);
+                                }
+                            }
+
+                            MqttPacket::PubAck(puback) => {
+                                info!("Received PubAck packet: {:?}", puback);
+                                // Convert to gRPC and send via MQTTPuback
+                                let puback_msg: mqttv5pb::Puback = puback.into();
+                                let mut request = tonic::Request::new(puback_msg);
+                                request.metadata_mut().insert(
+                                    "x-client-id",
+                                    tonic::metadata::MetadataValue::try_from(
+                                        conn.client_id.clone()
+                                    ).unwrap(),
+                                );
+
+                                let response = conn.grpc_client.mqtt_puback(request).await;
+                                if let Err(e) = response {
+                                    eprintln!("Failed to send PubAck packet to gRPC server: {:?}", e);
+                                } else {
+                                    info!("Successfully sent PubAck to gRPC server");
+                                }
+                            }
+
+                            MqttPacket::PubRec(pubrec) => {
+                                info!("Received PubRec packet: {:?}", pubrec);
+                                // Convert to gRPC and send via MQTTPubrec
+                                let pubrec_msg: mqttv5pb::Pubrec = pubrec.into();
+                                let mut request = tonic::Request::new(pubrec_msg);
+                                request.metadata_mut().insert(
+                                    "x-client-id",
+                                    tonic::metadata::MetadataValue::try_from(
+                                        conn.client_id.clone()
+                                    ).unwrap(),
+                                );
+
+                                let response = conn.grpc_client.mqtt_pubrec(request).await;
+                                match response {
+                                    Ok(pubrel_response) => {
+                                        info!("Received PubRel response from gRPC server");
+                                        // Convert gRPC PubRel back to MQTT and send to client
+                                        let mqtt_pubrel: mqttv5::pubrel::MqttPubRel = pubrel_response.into_inner().into();
+                                        if let Ok(pubrel_bytes) = mqtt_pubrel.to_bytes() {
+                                            if let Err(e) = conn.write_h.write_all(&pubrel_bytes).await {
+                                                eprintln!("Failed to send PubRel to client: {:?}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to send PubRec packet to gRPC server: {:?}", e);
+                                    }
+                                }
+                            }
+
+                            MqttPacket::PubRel(pubrel) => {
+                                info!("Received PubRel packet: {:?}", pubrel);
+                                // Convert to gRPC and send via MQTTPubrel
+                                let pubrel_msg: mqttv5pb::Pubrel = pubrel.into();
+                                let mut request = tonic::Request::new(pubrel_msg);
+                                request.metadata_mut().insert(
+                                    "x-client-id",
+                                    tonic::metadata::MetadataValue::try_from(
+                                        conn.client_id.clone()
+                                    ).unwrap(),
+                                );
+
+                                let response = conn.grpc_client.mqtt_pubrel(request).await;
+                                match response {
+                                    Ok(pubcomp_response) => {
+                                        info!("Received PubComp response from gRPC server");
+                                        // Convert gRPC PubComp back to MQTT and send to client
+                                        let mqtt_pubcomp: mqttv5::pubcomp::MqttPubComp = pubcomp_response.into_inner().into();
+                                        if let Ok(pubcomp_bytes) = mqtt_pubcomp.to_bytes() {
+                                            if let Err(e) = conn.write_h.write_all(&pubcomp_bytes).await {
+                                                eprintln!("Failed to send PubComp to client: {:?}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to send PubRel packet to gRPC server: {:?}", e);
+                                    }
+                                }
+                            }
+
+                            MqttPacket::PubComp(pubcomp) => {
+                                info!("Received PubComp packet: {:?}", pubcomp);
+                                // Convert to gRPC and send via MQTTPubcomp
+                                let pubcomp_msg: mqttv5pb::Pubcomp = pubcomp.into();
+                                let mut request = tonic::Request::new(pubcomp_msg);
+                                request.metadata_mut().insert(
+                                    "x-client-id",
+                                    tonic::metadata::MetadataValue::try_from(
+                                        conn.client_id.clone()
+                                    ).unwrap(),
+                                );
+
+                                let response = conn.grpc_client.mqtt_pubcomp(request).await;
+                                if let Err(e) = response {
+                                    eprintln!("Failed to send PubComp packet to gRPC server: {:?}", e);
+                                } else {
+                                    info!("Successfully sent PubComp to gRPC server");
+                                }
+                            }
+
+                            MqttPacket::Subscribe(subscribe) => {
+                                info!("Received Subscribe packet: {:?}", subscribe);
+                                // Forward the subscribe packet to the gRPC server
+                                let subscribe_msg: mqttv5pb::Subscribe = subscribe.into();
+                                let mut request = tonic::Request::new(subscribe_msg);
+                                request.metadata_mut().insert(
+                                    "x-client-id",
+                                    tonic::metadata::MetadataValue::try_from(
+                                        conn.client_id.clone()
+                                    ).unwrap(),
+                                );
+
+                                let response = conn.grpc_client.mqtt_subscribe(request).await;
+                                match response {
+                                    Ok(suback_response) => {
+                                        info!("Received SubAck from gRPC server");
+                                        // Convert gRPC SubAck back to MQTT and send to client
+                                        let mqtt_suback: MqttSubAck = suback_response.into_inner().into();
+                                        if let Ok(suback_bytes) = mqtt_suback.to_bytes() {
+                                            if let Err(e) = conn.write_h.write_all(&suback_bytes).await {
+                                                eprintln!("Failed to send SubAck to client: {:?}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to send Subscribe packet to gRPC server: {:?}", e);
+                                    }
+                                }
+                            }
+
+                            MqttPacket::SubAck(suback) => {
+                                info!("Received SubAck packet: {:?}", suback);
+                                // SubAck is typically sent by server, not expected from client
+                                // But if received, convert to gRPC and send via MQTTSuback
+                                eprintln!("Unexpected SubAck packet from client, forwarding to gRPC server");
+
+                                let suback_msg: mqttv5pb::Suback = suback.into();
+                                let mut request = tonic::Request::new(suback_msg);
+                                request.metadata_mut().insert(
+                                    "x-client-id",
+                                    tonic::metadata::MetadataValue::try_from(
+                                        conn.client_id.clone()
+                                    ).unwrap(),
+                                );
+
+                                let response = conn.grpc_client.mqtt_suback(request).await;
+                                if let Err(e) = response {
+                                    eprintln!("Failed to send SubAck packet to gRPC server: {:?}", e);
+                                } else {
+                                    info!("Successfully sent SubAck to gRPC server");
+                                }
+                            }
+
+                            MqttPacket::Unsubscribe(unsubscribe) => {
+                                info!("Received Unsubscribe packet: {:?}", unsubscribe);
+                                // Convert to gRPC and send via MQTTUnsubscribe
+                                let unsubscribe_msg: mqttv5pb::Unsubscribe = unsubscribe.into();
+                                let mut request = tonic::Request::new(unsubscribe_msg);
+                                request.metadata_mut().insert(
+                                    "x-client-id",
+                                    tonic::metadata::MetadataValue::try_from(
+                                        conn.client_id.clone()
+                                    ).unwrap(),
+                                );
+
+                                let response = conn.grpc_client.mqtt_unsubscribe(request).await;
+                                match response {
+                                    Ok(unsuback_response) => {
+                                        info!("Received UnsubAck from gRPC server");
+                                        // Convert gRPC UnsubAck back to MQTT and send to client
+                                        let mqtt_unsuback: mqttv5::unsuback::MqttUnsubAck = unsuback_response.into_inner().into();
+                                        if let Ok(unsuback_bytes) = mqtt_unsuback.to_bytes() {
+                                            if let Err(e) = conn.write_h.write_all(&unsuback_bytes).await {
+                                                eprintln!("Failed to send UnsubAck to client: {:?}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to send Unsubscribe packet to gRPC server: {:?}", e);
+                                    }
+                                }
+                            }
+
+                            MqttPacket::UnsubAck(unsuback) => {
+                                info!("Received UnsubAck packet: {:?}", unsuback);
+                                // UnsubAck is typically sent by server, not expected from client
+                                // But if received, convert to gRPC and send via MQTTUnsuback
+                                eprintln!("Unexpected UnsubAck packet from client, forwarding to gRPC server");
+
+                                let unsuback_msg: mqttv5pb::Unsuback = unsuback.into();
+                                let mut request = tonic::Request::new(unsuback_msg);
+                                request.metadata_mut().insert(
+                                    "x-client-id",
+                                    tonic::metadata::MetadataValue::try_from(
+                                        conn.client_id.clone()
+                                    ).unwrap(),
+                                );
+
+                                let response = conn.grpc_client.mqtt_unsuback(request).await;
+                                if let Err(e) = response {
+                                    eprintln!("Failed to send UnsubAck packet to gRPC server: {:?}", e);
+                                } else {
+                                    info!("Successfully sent UnsubAck to gRPC server");
+                                }
+                            }
+
+                            MqttPacket::PingReq(pingreq) => {
+                                info!("Received PingReq packet: {:?}", pingreq);
+                                // Convert to gRPC and send via MQTTPingreq
+                                let pingreq_msg: mqttv5pb::Pingreq = pingreq.into();
+                                let mut request = tonic::Request::new(pingreq_msg);
+                                request.metadata_mut().insert(
+                                    "x-client-id",
+                                    tonic::metadata::MetadataValue::try_from(
+                                        conn.client_id.clone()
+                                    ).unwrap(),
+                                );
+
+                                let response = conn.grpc_client.mqtt_pingreq(request).await;
+                                match response {
+                                    Ok(_pingresp_response) => {
+                                        info!("Received PingResp from gRPC server");
+                                        // Convert gRPC PingResp back to MQTT and send to client
+                                        let mqtt_pingresp = mqttv5::pingresp::MqttPingResp::new();
+                                        if let Ok(pingresp_bytes) = mqtt_pingresp.to_bytes() {
+                                            if let Err(e) = conn.write_h.write_all(&pingresp_bytes).await {
+                                                eprintln!("Failed to send PingResp to client: {:?}", e);
+                                            } else {
+                                                info!("Sent PingResp to client");
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to send PingReq packet to gRPC server: {:?}", e);
+                                        // Fallback: respond with PingResp directly
+                                        let pingresp = mqttv5::pingresp::MqttPingResp::new();
+                                        if let Ok(pingresp_bytes) = pingresp.to_bytes() {
+                                            if let Err(e) = conn.write_h.write_all(&pingresp_bytes).await {
+                                                eprintln!("Failed to send PingResp to client: {:?}", e);
+                                            } else {
+                                                info!("Sent PingResp to client (fallback)");
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
+                            MqttPacket::PingResp(pingresp) => {
+                                info!("Received PingResp packet: {:?}", pingresp);
+                                // PingResp is typically sent by server, not expected from client
+                                eprintln!("Unexpected PingResp packet from client");
+                            }
+
+                            MqttPacket::Disconnect(disconnect) => {
+                                info!("Received Disconnect packet: {:?}", disconnect);
+                                // Convert to gRPC and send via MQTTDisconnect
+                                let disconnect_msg: mqttv5pb::Disconnect = disconnect.into();
+                                let mut request = tonic::Request::new(disconnect_msg);
+                                request.metadata_mut().insert(
+                                    "x-client-id",
+                                    tonic::metadata::MetadataValue::try_from(
+                                        conn.client_id.clone()
+                                    ).unwrap(),
+                                );
+
+                                let response = conn.grpc_client.mqtt_disconnect(request).await;
+                                if let Err(e) = response {
+                                    eprintln!("Failed to send Disconnect packet to gRPC server: {:?}", e);
+                                } else {
+                                    info!("Successfully sent Disconnect to gRPC server");
+                                }
+
+                                // Client is disconnecting gracefully
+                                info!("Client {} is disconnecting gracefully", conn.client_id);
+                                return Ok(()); // Exit the function to close connection
+                            }
+
+                            MqttPacket::Auth(auth) => {
+                                info!("Received Auth packet: {:?}", auth);
+                                // Convert to gRPC and send via MQTTAuth
+                                let auth_msg: mqttv5pb::Auth = auth.into();
+                                let mut request = tonic::Request::new(auth_msg);
+                                request.metadata_mut().insert(
+                                    "x-client-id",
+                                    tonic::metadata::MetadataValue::try_from(
+                                        conn.client_id.clone()
+                                    ).unwrap(),
+                                );
+
+                                let response = conn.grpc_client.mqtt_auth(request).await;
+                                match response {
+                                    Ok(auth_response) => {
+                                        info!("Received Auth response from gRPC server");
+                                        // Convert gRPC Auth response back to MQTT and send to client
+                                        let mqtt_auth: mqttv5::auth::MqttAuth = auth_response.into_inner().into();
+                                        if let Ok(auth_bytes) = mqtt_auth.to_bytes() {
+                                            if let Err(e) = conn.write_h.write_all(&auth_bytes).await {
+                                                eprintln!("Failed to send Auth response to client: {:?}", e);
+                                            }
+                                        }
+                                    }
+                                    Err(e) => {
+                                        eprintln!("Failed to send Auth packet to gRPC server: {:?}", e);
+                                    }
+                                }
+                            }
+                        }
                     }
                     Ok(None) => {
                         // Incomplete packet, continue reading
@@ -452,6 +769,271 @@ impl From<mqttv5pb::Connack> for MqttConnAck {
             session_present: connack_grpc.session_present,
             reason_code: connack_grpc.reason_code as u8,
             properties: Some(convert_grpc_properties_to_mqtt(connack_grpc.properties)),
+        }
+    }
+}
+
+impl From<mqttv5::subscribe::MqttSubscribe> for mqttv5pb::Subscribe {
+    fn from(subscribe: mqttv5::subscribe::MqttSubscribe) -> Self {
+        mqttv5pb::Subscribe {
+            message_id: subscribe.packet_id as u32,
+            subscriptions: subscribe
+                .subscriptions
+                .into_iter()
+                .map(|sub| mqttv5pb::TopicSubscription {
+                    topic_filter: sub.topic_filter,
+                    qos: sub.qos as u32,
+                    no_local: sub.no_local,
+                    retain_as_published: sub.retain_as_published,
+                    retain_handling: sub.retain_handling as u32,
+                })
+                .collect(),
+            properties: convert_mqtt_properties_to_grpc(subscribe.properties),
+        }
+    }
+}
+
+impl From<mqttv5pb::Suback> for MqttSubAck {
+    fn from(suback_grpc: mqttv5pb::Suback) -> Self {
+        MqttSubAck {
+            packet_id: suback_grpc.message_id as u16,
+            reason_codes: suback_grpc
+                .reason_codes
+                .into_iter()
+                .map(|code| code as u8)
+                .collect(),
+            properties: convert_grpc_properties_to_mqtt(suback_grpc.properties),
+        }
+    }
+}
+
+// Add conversion implementations for other packet types
+impl From<mqttv5::puback::MqttPubAck> for mqttv5pb::Puback {
+    fn from(puback: mqttv5::puback::MqttPubAck) -> Self {
+        mqttv5pb::Puback {
+            message_id: puback.packet_id as u32,
+            reason_code: puback.reason_code as u32,
+            properties: convert_mqtt_properties_to_grpc(puback.properties),
+        }
+    }
+}
+
+impl From<mqttv5::pubrec::MqttPubRec> for mqttv5pb::Pubrec {
+    fn from(pubrec: mqttv5::pubrec::MqttPubRec) -> Self {
+        mqttv5pb::Pubrec {
+            message_id: pubrec.packet_id as u32,
+            reason_code: pubrec.reason_code as u32,
+            properties: convert_mqtt_properties_to_grpc(pubrec.properties),
+        }
+    }
+}
+
+impl From<mqttv5::pubrel::MqttPubRel> for mqttv5pb::Pubrel {
+    fn from(pubrel: mqttv5::pubrel::MqttPubRel) -> Self {
+        mqttv5pb::Pubrel {
+            message_id: pubrel.packet_id as u32,
+            reason_code: pubrel.reason_code as u32,
+            properties: convert_mqtt_properties_to_grpc(pubrel.properties),
+        }
+    }
+}
+
+impl From<mqttv5::pubcomp::MqttPubComp> for mqttv5pb::Pubcomp {
+    fn from(pubcomp: mqttv5::pubcomp::MqttPubComp) -> Self {
+        mqttv5pb::Pubcomp {
+            message_id: pubcomp.packet_id as u32,
+            reason_code: pubcomp.reason_code as u32,
+            properties: convert_mqtt_properties_to_grpc(pubcomp.properties),
+        }
+    }
+}
+
+impl From<mqttv5::unsubscribe::MqttUnsubscribe> for mqttv5pb::Unsubscribe {
+    fn from(unsubscribe: mqttv5::unsubscribe::MqttUnsubscribe) -> Self {
+        mqttv5pb::Unsubscribe {
+            message_id: unsubscribe.packet_id as u32,
+            topic_filters: unsubscribe.topic_filters,
+            properties: convert_mqtt_properties_to_grpc(unsubscribe.properties),
+        }
+    }
+}
+
+impl From<mqttv5::pingreq::MqttPingReq> for mqttv5pb::Pingreq {
+    fn from(_pingreq: mqttv5::pingreq::MqttPingReq) -> Self {
+        mqttv5pb::Pingreq {}
+    }
+}
+
+impl From<mqttv5::disconnect::MqttDisconnect> for mqttv5pb::Disconnect {
+    fn from(disconnect: mqttv5::disconnect::MqttDisconnect) -> Self {
+        mqttv5pb::Disconnect {
+            reason_code: disconnect.reason_code as u32,
+            properties: convert_mqtt_properties_to_grpc(disconnect.properties),
+        }
+    }
+}
+
+impl From<mqttv5::auth::MqttAuth> for mqttv5pb::Auth {
+    fn from(auth: mqttv5::auth::MqttAuth) -> Self {
+        mqttv5pb::Auth {
+            reason_code: auth.reason_code as u32,
+            properties: convert_mqtt_properties_to_grpc(auth.properties),
+        }
+    }
+}
+
+// Create MqttPacket from individual packet types for RelayPacket RPC
+impl From<mqttv5::publish::MqttPublish> for mqttv5pb::MqttPacket {
+    fn from(publish: mqttv5::publish::MqttPublish) -> Self {
+        mqttv5pb::MqttPacket {
+            packet: Some(mqttv5pb::mqtt_packet::Packet::Publish(publish.into())),
+        }
+    }
+}
+
+impl From<mqttv5::puback::MqttPubAck> for mqttv5pb::MqttPacket {
+    fn from(puback: mqttv5::puback::MqttPubAck) -> Self {
+        mqttv5pb::MqttPacket {
+            packet: Some(mqttv5pb::mqtt_packet::Packet::Puback(puback.into())),
+        }
+    }
+}
+
+impl From<mqttv5::pubrec::MqttPubRec> for mqttv5pb::MqttPacket {
+    fn from(pubrec: mqttv5::pubrec::MqttPubRec) -> Self {
+        mqttv5pb::MqttPacket {
+            packet: Some(mqttv5pb::mqtt_packet::Packet::Pubrec(pubrec.into())),
+        }
+    }
+}
+
+impl From<mqttv5::pubrel::MqttPubRel> for mqttv5pb::MqttPacket {
+    fn from(pubrel: mqttv5::pubrel::MqttPubRel) -> Self {
+        mqttv5pb::MqttPacket {
+            packet: Some(mqttv5pb::mqtt_packet::Packet::Pubrel(pubrel.into())),
+        }
+    }
+}
+
+impl From<mqttv5::pubcomp::MqttPubComp> for mqttv5pb::MqttPacket {
+    fn from(pubcomp: mqttv5::pubcomp::MqttPubComp) -> Self {
+        mqttv5pb::MqttPacket {
+            packet: Some(mqttv5pb::mqtt_packet::Packet::Pubcomp(pubcomp.into())),
+        }
+    }
+}
+
+impl From<mqttv5::subscribe::MqttSubscribe> for mqttv5pb::MqttPacket {
+    fn from(subscribe: mqttv5::subscribe::MqttSubscribe) -> Self {
+        mqttv5pb::MqttPacket {
+            packet: Some(mqttv5pb::mqtt_packet::Packet::Subscribe(subscribe.into())),
+        }
+    }
+}
+
+impl From<mqttv5::unsubscribe::MqttUnsubscribe> for mqttv5pb::MqttPacket {
+    fn from(unsubscribe: mqttv5::unsubscribe::MqttUnsubscribe) -> Self {
+        mqttv5pb::MqttPacket {
+            packet: Some(mqttv5pb::mqtt_packet::Packet::Unsubscribe(
+                unsubscribe.into(),
+            )),
+        }
+    }
+}
+
+impl From<mqttv5::pingreq::MqttPingReq> for mqttv5pb::MqttPacket {
+    fn from(pingreq: mqttv5::pingreq::MqttPingReq) -> Self {
+        mqttv5pb::MqttPacket {
+            packet: Some(mqttv5pb::mqtt_packet::Packet::Pingreq(pingreq.into())),
+        }
+    }
+}
+
+impl From<mqttv5::disconnect::MqttDisconnect> for mqttv5pb::MqttPacket {
+    fn from(disconnect: mqttv5::disconnect::MqttDisconnect) -> Self {
+        mqttv5pb::MqttPacket {
+            packet: Some(mqttv5pb::mqtt_packet::Packet::Disconnect(disconnect.into())),
+        }
+    }
+}
+
+impl From<mqttv5::auth::MqttAuth> for mqttv5pb::MqttPacket {
+    fn from(auth: mqttv5::auth::MqttAuth) -> Self {
+        mqttv5pb::MqttPacket {
+            packet: Some(mqttv5pb::mqtt_packet::Packet::Auth(auth.into())),
+        }
+    }
+}
+
+// Add response conversions for gRPC to MQTT
+impl From<mqttv5pb::Pubrel> for mqttv5::pubrel::MqttPubRel {
+    fn from(pubrel_grpc: mqttv5pb::Pubrel) -> Self {
+        mqttv5::pubrel::MqttPubRel {
+            packet_id: pubrel_grpc.message_id as u16,
+            reason_code: pubrel_grpc.reason_code as u8,
+            properties: convert_grpc_properties_to_mqtt(pubrel_grpc.properties),
+        }
+    }
+}
+
+impl From<mqttv5pb::Pubcomp> for mqttv5::pubcomp::MqttPubComp {
+    fn from(pubcomp_grpc: mqttv5pb::Pubcomp) -> Self {
+        mqttv5::pubcomp::MqttPubComp {
+            packet_id: pubcomp_grpc.message_id as u16,
+            reason_code: pubcomp_grpc.reason_code as u8,
+            properties: convert_grpc_properties_to_mqtt(pubcomp_grpc.properties),
+        }
+    }
+}
+
+impl From<mqttv5pb::Unsuback> for mqttv5::unsuback::MqttUnsubAck {
+    fn from(unsuback_grpc: mqttv5pb::Unsuback) -> Self {
+        mqttv5::unsuback::MqttUnsubAck {
+            packet_id: unsuback_grpc.message_id as u16,
+            reason_codes: unsuback_grpc
+                .reason_codes
+                .into_iter()
+                .map(|code| code as u8)
+                .collect(),
+            properties: convert_grpc_properties_to_mqtt(unsuback_grpc.properties),
+        }
+    }
+}
+
+// Add missing MQTT to gRPC conversions
+impl From<mqttv5::suback::MqttSubAck> for mqttv5pb::Suback {
+    fn from(suback: mqttv5::suback::MqttSubAck) -> Self {
+        mqttv5pb::Suback {
+            message_id: suback.packet_id as u32,
+            reason_codes: suback
+                .reason_codes
+                .into_iter()
+                .map(|code| code as u32)
+                .collect(),
+            properties: convert_mqtt_properties_to_grpc(suback.properties),
+        }
+    }
+}
+
+impl From<mqttv5::unsuback::MqttUnsubAck> for mqttv5pb::Unsuback {
+    fn from(unsuback: mqttv5::unsuback::MqttUnsubAck) -> Self {
+        mqttv5pb::Unsuback {
+            message_id: unsuback.packet_id as u32,
+            reason_codes: unsuback
+                .reason_codes
+                .into_iter()
+                .map(|code| code as u32)
+                .collect(),
+            properties: convert_mqtt_properties_to_grpc(unsuback.properties),
+        }
+    }
+}
+
+impl From<mqttv5pb::Auth> for mqttv5::auth::MqttAuth {
+    fn from(auth_grpc: mqttv5pb::Auth) -> Self {
+        mqttv5::auth::MqttAuth {
+            reason_code: auth_grpc.reason_code as u8,
+            properties: convert_grpc_properties_to_mqtt(auth_grpc.properties),
         }
     }
 }

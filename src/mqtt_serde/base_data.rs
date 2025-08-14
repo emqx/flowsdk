@@ -62,7 +62,7 @@ impl VariableByteInteger {
         if buffer.is_empty() {
             return Err(ParseError::BufferTooShort);
         }
-        
+
         loop {
             let byte = *buffer.get(i).ok_or(ParseError::More(
                 1,
@@ -75,7 +75,7 @@ impl VariableByteInteger {
                     "invalid remaining length, MSB is 1".to_string(),
                 ));
             }
-            
+
             value += (byte & 127) as usize * multiplier;
             assert!(
                 value <= 268_435_455,
@@ -91,7 +91,7 @@ impl VariableByteInteger {
                 break;
             }
         }
-        
+
         // MQTT 5.0 Protocol Compliance: Check for non-minimal VBI encoding
         #[cfg(feature = "strict-protocol-compliance")]
         {
@@ -104,7 +104,7 @@ impl VariableByteInteger {
                 ));
             }
         }
-        
+
         Ok((value, i))
     }
 }

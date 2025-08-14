@@ -72,7 +72,7 @@ pub fn parse_connack(buffer: &[u8]) -> Result<ParseOk, ParseError> {
     // MQTT 5.0 3.2.2.1 Connack Flag
     let session_present_byte = *buffer.get(offset).ok_or(ParseError::BufferTooShort)?;
     let session_present: bool = (session_present_byte & 0x01) == 1u8;
-    
+
     // MQTT 5.0 Protocol Compliance: Reserved bits must be 0
     #[cfg(feature = "strict-protocol-compliance")]
     if session_present_byte & 0xFE != 0 {

@@ -104,7 +104,7 @@ impl MqttControlPacket for MqttPublish {
 
         // MQTT 5.0: 3.3.1.2 QoS
         let qos = Self::qos(first_byte);
-        
+
         // MQTT 5.0 Protocol Compliance: QoS validation
         #[cfg(feature = "strict-protocol-compliance")]
         if qos == 3 {
@@ -115,7 +115,7 @@ impl MqttControlPacket for MqttPublish {
 
         // MQTT 5.0: 3.3.1.3 Retain
         let retain = (first_byte & 0x1) != 0;
-        
+
         // MQTT 5.0 Protocol Compliance: DUP flag validation for QoS 0
         #[cfg(feature = "strict-protocol-compliance")]
         if qos == 0 && dup {
@@ -142,7 +142,7 @@ impl MqttControlPacket for MqttPublish {
                 _ => return Err(ParseError::ParseError("Expected TopicName".to_string())),
             };
         offset += consumed;
-        
+
         // MQTT 5.0 Protocol Compliance: Topic name must not contain wildcards
         #[cfg(feature = "strict-protocol-compliance")]
         if topic_name.contains('#') || topic_name.contains('+') {

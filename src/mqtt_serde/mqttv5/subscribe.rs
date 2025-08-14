@@ -104,7 +104,7 @@ impl TopicSubscription {
         // Parse Topic Filter (UTF-8 String)
         let (topic_filter, consumed) = parse_utf8_string(&buffer[offset..])?;
         offset += consumed;
-        
+
         // MQTT 5.0 Protocol Compliance: Topic filter validation
         #[cfg(feature = "strict-protocol-compliance")]
         {
@@ -126,7 +126,7 @@ impl TopicSubscription {
 
         let (qos, no_local, retain_as_published, retain_handling) =
             Self::decode_subscription_options(options);
-            
+
         // MQTT 5.0 Protocol Compliance: No Local flag validation for Shared Subscriptions
         #[cfg(feature = "strict-protocol-compliance")]
         if no_local && topic_filter.starts_with("$share/") {
@@ -630,7 +630,8 @@ mod tests {
     #[test]
     fn test_subscribe_invalid_subscription_options_reserved_bits() {
         // [MQTT-3.8.3-5]
-        let sub = MqttSubscribe::new_simple(1, vec![TopicSubscription::new_simple("a/b".to_string(), 1)]);
+        let sub =
+            MqttSubscribe::new_simple(1, vec![TopicSubscription::new_simple("a/b".to_string(), 1)]);
         let mut bytes = sub.to_bytes().unwrap();
 
         // In this simple case, the options byte is the last byte.
@@ -644,7 +645,16 @@ mod tests {
     #[test]
     fn test_subscribe_no_local_on_shared_subscription_is_invalid() {
         // [MQTT-3.8.3-4]
-        let sub = MqttSubscribe::new_simple(1, vec![TopicSubscription::new("$share/g/t".to_string(), 1, true, false, 0)]);
+        let sub = MqttSubscribe::new_simple(
+            1,
+            vec![TopicSubscription::new(
+                "$share/g/t".to_string(),
+                1,
+                true,
+                false,
+                0,
+            )],
+        );
         let bytes = sub.to_bytes().unwrap();
         let result = MqttSubscribe::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));
@@ -653,7 +663,10 @@ mod tests {
     #[test]
     fn test_subscribe_invalid_topic_filter_wildcard_not_last() {
         // [MQTT-4.7.1-1]
-        let sub = MqttSubscribe::new_simple(1, vec![TopicSubscription::new_simple("a/#/b".to_string(), 1)]);
+        let sub = MqttSubscribe::new_simple(
+            1,
+            vec![TopicSubscription::new_simple("a/#/b".to_string(), 1)],
+        );
         let bytes = sub.to_bytes().unwrap();
         let result = MqttSubscribe::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));
@@ -662,7 +675,10 @@ mod tests {
     #[test]
     fn test_subscribe_invalid_topic_filter_wildcard_not_level() {
         // [MQTT-4.7.1-2]
-        let sub = MqttSubscribe::new_simple(1, vec![TopicSubscription::new_simple("a/b+".to_string(), 1)]);
+        let sub = MqttSubscribe::new_simple(
+            1,
+            vec![TopicSubscription::new_simple("a/b+".to_string(), 1)],
+        );
         let bytes = sub.to_bytes().unwrap();
         let result = MqttSubscribe::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));
@@ -671,7 +687,8 @@ mod tests {
     #[test]
     fn test_subscribe_empty_topic_filter_is_invalid() {
         // [MQTT-4.7.3-1]
-        let sub = MqttSubscribe::new_simple(1, vec![TopicSubscription::new_simple("".to_string(), 1)]);
+        let sub =
+            MqttSubscribe::new_simple(1, vec![TopicSubscription::new_simple("".to_string(), 1)]);
         let bytes = sub.to_bytes().unwrap();
         let result = MqttSubscribe::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));
@@ -687,7 +704,10 @@ mod tests {
             "$share/g#/t", // wildcard in share name
         ];
         for topic in topics {
-            let sub = MqttSubscribe::new_simple(1, vec![TopicSubscription::new_simple(topic.to_string(), 1)]);
+            let sub = MqttSubscribe::new_simple(
+                1,
+                vec![TopicSubscription::new_simple(topic.to_string(), 1)],
+            );
             let bytes = sub.to_bytes().unwrap();
             let result = MqttSubscribe::from_bytes(&bytes);
             assert!(matches!(result, Err(ParseError::ParseError(_))));
