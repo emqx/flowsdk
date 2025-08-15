@@ -53,7 +53,7 @@ impl MqttRelayService for MyRelay {
         let clientid = request.get_ref().client_id.clone();
         let (tx, rx) = mpsc::channel(32);
 
-        let (connack, stream) = match mqtt_connect_to_broker(request).await {
+        let stream = match mqtt_connect_to_broker(request).await {
             Ok(s) => s,
             Err(e) => {
                 return Err(e);
@@ -77,7 +77,12 @@ impl MqttRelayService for MyRelay {
             mqtt_client_loop(rx, stream, grpc_client).await;
         });
 
-        let m: mqttv5pb::Connack = connack.into();
+        // Return a default successful CONNACK - the real CONNACK will be forwarded by mqtt_client_loop
+        let m = mqttv5pb::Connack {
+            session_present: false,
+            reason_code: 0, // Success
+            properties: vec![],
+        };
 
         Ok(Response::new(m))
     }
@@ -303,13 +308,7 @@ impl MqttRelayService for MyRelay {
 
 async fn mqtt_connect_to_broker(
     request: Request<mqttv5pb::Connect>,
-) -> Result<
-    (
-        mqtt_serde::mqttv5::connack::MqttConnAck,
-        tokio::net::TcpStream,
-    ),
-    Status,
-> {
+) -> Result<tokio::net::TcpStream, Status> {
     let msg: mqtt_serde::mqttv5::connect::MqttConnect = request.into_inner().into();
     let addr = "127.0.0.1:1883".parse().unwrap();
     let socket = TcpSocket::new_v4()?;
@@ -321,45 +320,8 @@ async fn mqtt_connect_to_broker(
         .write_all(&data)
         .await
         .map_err(|e| Status::internal(e.to_string()))?;
-    let connack = wait_for_connack(&mut stream)
-        .await
-        .map_err(|e| Status::internal(format!("Failed to receive connack from broker: {}", e)))?;
-    println!("Connected to MQTT broker at {}", addr);
-    Ok((connack, stream))
-}
-
-async fn wait_for_connack(
-    stream: &mut tokio::net::TcpStream,
-) -> Result<mqtt_serde::mqttv5::connack::MqttConnAck, Status> {
-    let mut parser = MqttParser::new();
-
-    loop {
-        let n = stream
-            .read_buf(parser.buffer_mut())
-            .await
-            .map_err(|e| Status::internal(e.to_string()))?;
-        if n == 0 {
-            return Err(Status::unavailable("Connection closed by the broker"));
-        }
-
-        match parser.next_packet() {
-            Ok(Some(mqtt_grpc_duality::mqtt_serde::control_packet::MqttPacket::ConnAck(
-                connack,
-            ))) => {
-                return Ok(connack);
-            }
-            Ok(Some(_)) => {
-                // Ignore other packets @FIXME: return an error for unexpected packets
-            }
-            Ok(None) => {
-                // Incomplete packet, continue reading
-            }
-            Err(e) => {
-                eprintln!("Error parsing ConnAck: {:?}", e);
-                return Err(Status::internal("Failed to parse ConnAck"));
-            }
-        }
-    }
+    println!("CONNECT packet sent to MQTT broker at {}", addr);
+    Ok(stream)
 }
 
 #[tokio::main]
