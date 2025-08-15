@@ -10,6 +10,7 @@ use crate::mqtt_serde::mqttv5;
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[serde(tag = "type")]
+#[allow(clippy::large_enum_variant)]
 pub enum MqttPacket {
     Connect(mqttv5::connect::MqttConnect),
     ConnAck(mqttv5::connack::MqttConnAck),

@@ -350,7 +350,7 @@ mod tests {
     #[test]
     fn test_parse_suback() {
         let packet_bytes: [u8; 6] = [0x90, 0x04, 0xa9, 0x8f, 0x00, 0x00];
-        let result = MqttSubAck::from_bytes(&packet_bytes.to_vec());
+        let result = MqttSubAck::from_bytes(packet_bytes.as_ref());
         match result {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 assert_eq!(consumed, 6);

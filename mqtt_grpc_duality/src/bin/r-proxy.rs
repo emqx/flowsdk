@@ -3,8 +3,8 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
+use flowsdk::mqtt_serde::control_packet::MqttControlPacket;
 use flowsdk::mqtt_serde::control_packet::MqttPacket;
-use flowsdk::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket as InternalMqttPacket};
 use flowsdk::mqtt_serde::mqttv5;
 use flowsdk::mqtt_serde::mqttv5::connack::MqttConnAck;
 use flowsdk::mqtt_serde::mqttv5::connect::MqttConnect;

@@ -98,7 +98,7 @@ mod tests {
 
     #[test]
     fn test_pingreq_default() {
-        let pingreq = MqttPingReq::default();
+        let pingreq = MqttPingReq;
         assert_eq!(
             pingreq.control_packet_type(),
             ControlPacketType::PINGREQ as u8

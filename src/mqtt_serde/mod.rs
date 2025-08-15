@@ -149,6 +149,24 @@ pub(crate) fn validate_shared_subscription(topic_filter: &str) -> Result<(), Par
     Ok(())
 }
 
+// MQTT 5.0 Spec, 1.5.5
+fn encode_variable_length(len: usize) -> Vec<u8> {
+    VariableByteInteger::encode(len as u32)
+}
+
+// for property
+fn decode_binary_data(buffer: &[u8]) -> Result<(Vec<u8>, usize), ParseError> {
+    BinaryData::decode(buffer)
+}
+
+pub fn topic_name(buffer: &[u8]) -> Result<(String, usize), ParseError> {
+    Utf8String::decode(buffer)
+}
+
+pub fn packet_id(buffer: &[u8]) -> Result<(u16, usize), ParseError> {
+    TwoByteInteger::decode(buffer)
+}
+
 #[cfg(test)]
 mod protocol_compliance_tests {
     use super::*;
@@ -263,22 +281,4 @@ mod protocol_compliance_tests {
         let result = encode_utf8_string(test_string);
         assert!(result.is_ok());
     }
-}
-
-// MQTT 5.0 Spec, 1.5.5
-fn encode_variable_length(len: usize) -> Vec<u8> {
-    VariableByteInteger::encode(len as u32)
-}
-
-// for property
-fn decode_binary_data(buffer: &[u8]) -> Result<(Vec<u8>, usize), ParseError> {
-    BinaryData::decode(buffer)
-}
-
-pub fn topic_name(buffer: &[u8]) -> Result<(String, usize), ParseError> {
-    Utf8String::decode(buffer)
-}
-
-pub fn packet_id(buffer: &[u8]) -> Result<(u16, usize), ParseError> {
-    TwoByteInteger::decode(buffer)
 }

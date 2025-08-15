@@ -38,13 +38,13 @@ impl MqttConnect {
         MqttConnect {
             protocol_name: "MQTT".to_string(),
             protocol_version: 5,
-            keep_alive: keep_alive,
-            client_id: client_id,
-            will: will,
-            username: username,
-            password: password,
-            properties: properties,
-            clean_start: clean_start,
+            keep_alive,
+            client_id,
+            will,
+            username,
+            password,
+            properties,
+            clean_start,
         }
     }
 
@@ -292,10 +292,10 @@ impl MqttControlPacket for MqttConnect {
             protocol_version,
             keep_alive,
             client_id: client_id.to_string(),
-            will: will,
-            username: username,
-            password: password,
-            properties: properties,
+            will,
+            username,
+            password,
+            properties,
             clean_start: connect_flags & 0x02 != 0,
         });
 
