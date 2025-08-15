@@ -4,7 +4,8 @@ version = "0.1.0"
 edition = "2021"
 
 [workspace]
-members = [".", "proxy"]
+members = [".", "mqtt_grpc_duality"]
+exclude = ["fuzz"]
 
 [dependencies]
 tonic = "*"

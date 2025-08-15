@@ -11,7 +11,7 @@ This project is organized as a Cargo workspace with two main components:
 - **Shared Conversions**: gRPC ↔ MQTT conversion utilities
 - **Example Applications**: Simple client/server demos
 
-### 🔗 Proxy Workspace (`proxy/`)  
+### 🔗 Proxy Workspace (`mqtt_grpc_duality/`)  
 - **Dedicated Proxy Applications**: Client-facing (`r-proxy`) and server-side (`s-proxy`) proxies
 - **Self-contained**: Own protobuf definitions and shared conversion logic
 - **Production Ready**: Optimized for deployment scenarios
@@ -58,7 +58,7 @@ gRPC Clients → r-proxy → gRPC → s-proxy → MQTT Broker
 - **`simple-client`**: Basic gRPC client example  
 - **`s-client`**: Streaming client example
 
-#### Proxy Components (in `proxy/` workspace)
+#### Proxy Components (in `mqtt_grpc_duality/` workspace)
 - **`r-proxy`**: Client-facing proxy - receives gRPC calls and forwards to s-proxy
 - **`s-proxy`**: Server-side proxy - connects to MQTT broker and handles bidirectional communication
 
@@ -173,8 +173,8 @@ This implementation follows the MQTT v5.0 specification with:
 ## Contributing
 
 1. **Core MQTT Protocol**: Changes go in `src/mqtt_serde/`
-2. **gRPC Conversions**: Shared logic in `src/grpc_conversions.rs` and `proxy/src/lib.rs`
-3. **Proxy Applications**: New features in `proxy/src/bin/`
+2. **gRPC Conversions**: Shared logic in `src/grpc_conversions.rs` and `mqtt_grpc_duality/src/lib.rs`
+3. **Proxy Applications**: New features in `mqtt_grpc_duality/src/bin/`
 4. **Examples**: Simple demos in `src/bin/`
 
 ## License

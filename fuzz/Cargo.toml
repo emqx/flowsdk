@@ -1,8 +1,10 @@
 [package]
-name = "mqtt-grpc-duality-fuzz"
+name = "flowsdk-fuzz"
 version = "0.0.0"
 publish = false
 edition = "2021"
+
+[workspace]
 
 [package.metadata]
 cargo-fuzz = true
@@ -10,7 +12,7 @@ cargo-fuzz = true
 [dependencies]
 libfuzzer-sys = "0.4"
 
-[dependencies.mqtt-grpc-duality]
+[dependencies.flowsdk]
 path = ".."
 features = ["arbitrary"]
 
