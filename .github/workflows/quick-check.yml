@@ -1,0 +1,44 @@
+name: Quick Check
+
+on:
+  push:
+    branches: [ '*' ]
+
+jobs:
+  quick-check:
+    name: Quick Check
+    runs-on: ubuntu-latest
+    if: "!contains(github.event.head_commit.message, '[skip ci]')"
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+          mqtt_grpc_duality/target
+        key: ${{ runner.os }}-quick-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+
+    - name: Quick build check
+      run: cargo check --workspace
+
+    - name: Basic clippy check
+      run: cargo clippy --workspace -- -D warnings
+
+    - name: Quick test
+      run: |
+        cargo test --lib
+        cd mqtt_grpc_duality && cargo test --lib

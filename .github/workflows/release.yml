@@ -1,0 +1,204 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*.*.*'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  create-release:
+    name: Create Release
+    runs-on: ubuntu-latest
+    outputs:
+      upload_url: ${{ steps.create_release.outputs.upload_url }}
+      version: ${{ steps.get_version.outputs.version }}
+    
+    steps:
+    - name: Get version from tag
+      id: get_version
+      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+
+    - name: Create Release
+      id: create_release
+      uses: actions/create-release@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        tag_name: ${{ github.ref }}
+        release_name: FlowSDK ${{ steps.get_version.outputs.version }}
+        body: |
+          ## FlowSDK ${{ steps.get_version.outputs.version }}
+          
+          ### Features
+          - MQTT v5.0 protocol implementation
+          - gRPC bidirectional streaming support
+          - High-performance proxy applications
+          
+          ### Downloads
+          Download the appropriate binary for your platform below.
+          
+          ### Changelog
+          See the full changelog at [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
+        draft: false
+        prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
+
+  build-and-upload:
+    name: Build and Upload Release Assets
+    needs: create-release
+    runs-on: ${{ matrix.os }}
+    
+    strategy:
+      matrix:
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-latest
+            asset_name_suffix: linux-amd64
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-latest
+            asset_name_suffix: linux-arm64
+          - target: x86_64-apple-darwin
+            os: macos-latest
+            asset_name_suffix: macos-amd64
+          - target: aarch64-apple-darwin
+            os: macos-latest
+            asset_name_suffix: macos-arm64
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            asset_name_suffix: windows-amd64
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        targets: ${{ matrix.target }}
+
+    - name: Install cross-compilation tools (Linux ARM64)
+      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y gcc-aarch64-linux-gnu
+
+    - name: Configure cross-compilation (Linux ARM64)
+      if: matrix.target == 'aarch64-unknown-linux-gnu'
+      run: |
+        echo "[target.aarch64-unknown-linux-gnu]" >> ~/.cargo/config.toml
+        echo "linker = \"aarch64-linux-gnu-gcc\"" >> ~/.cargo/config.toml
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build release binaries
+      run: |
+        cd mqtt_grpc_duality
+        cargo build --release --target ${{ matrix.target }}
+
+    - name: Create release package (Unix)
+      if: runner.os != 'Windows'
+      run: |
+        mkdir -p release-package
+        cp mqtt_grpc_duality/target/${{ matrix.target }}/release/r-proxy release-package/
+        cp mqtt_grpc_duality/target/${{ matrix.target }}/release/s-proxy release-package/
+        cp README.md release-package/
+        cp mqtt_grpc_duality/README.md release-package/PROXY-README.md
+        tar -czf flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.tar.gz -C release-package .
+
+    - name: Create release package (Windows)
+      if: runner.os == 'Windows'
+      run: |
+        mkdir release-package
+        cp mqtt_grpc_duality/target/${{ matrix.target }}/release/r-proxy.exe release-package/
+        cp mqtt_grpc_duality/target/${{ matrix.target }}/release/s-proxy.exe release-package/
+        cp README.md release-package/
+        cp mqtt_grpc_duality/README.md release-package/PROXY-README.md
+        Compress-Archive -Path release-package/* -DestinationPath flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.zip
+
+    - name: Upload Release Asset (Unix)
+      if: runner.os != 'Windows'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.tar.gz
+        asset_name: flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.tar.gz
+        asset_content_type: application/gzip
+
+    - name: Upload Release Asset (Windows)
+      if: runner.os == 'Windows'
+      uses: actions/upload-release-asset@v1
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      with:
+        upload_url: ${{ needs.create-release.outputs.upload_url }}
+        asset_path: ./flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.zip
+        asset_name: flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.zip
+        asset_content_type: application/zip
+
+  publish-crate:
+    name: Publish to crates.io
+    needs: create-release
+    runs-on: ubuntu-latest
+    if: "!contains(needs.create-release.outputs.version, '-')"  # Only for stable releases
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Publish flowsdk to crates.io
+      run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
+      continue-on-error: true  # In case it's already published
+
+  create-docker-images:
+    name: Create Docker Images
+    needs: create-release
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Log in to Docker Hub
+      uses: docker/login-action@v3
+      with:
+        username: ${{ secrets.DOCKER_USERNAME }}
+        password: ${{ secrets.DOCKER_PASSWORD }}
+
+    - name: Build and push r-proxy image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: mqtt_grpc_duality/Dockerfile.r-proxy
+        push: true
+        tags: |
+          ${{ secrets.DOCKER_USERNAME }}/flowsdk-r-proxy:latest
+          ${{ secrets.DOCKER_USERNAME }}/flowsdk-r-proxy:${{ needs.create-release.outputs.version }}
+        platforms: linux/amd64,linux/arm64
+
+    - name: Build and push s-proxy image
+      uses: docker/build-push-action@v5
+      with:
+        context: .
+        file: mqtt_grpc_duality/Dockerfile.s-proxy
+        push: true
+        tags: |
+          ${{ secrets.DOCKER_USERNAME }}/flowsdk-s-proxy:latest
+          ${{ secrets.DOCKER_USERNAME }}/flowsdk-s-proxy:${{ needs.create-release.outputs.version }}
+        platforms: linux/amd64,linux/arm64

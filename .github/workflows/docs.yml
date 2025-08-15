@@ -1,0 +1,179 @@
+name: Documentation
+
+on:
+  push:
+    branches: [ main, dev/* ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  documentation:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-docs-${{ hashFiles('**/Cargo.lock') }}
+
+    - name: Build documentation
+      run: |
+        cargo doc --workspace --all-features --no-deps
+        
+    - name: Check for broken links in docs
+      run: |
+        cargo doc --workspace --all-features --no-deps 2>&1 | tee doc-output.txt
+        if grep -i "warning.*broken.*link\|error.*broken.*link" doc-output.txt; then
+          echo "Found broken links in documentation!"
+          exit 1
+        fi
+
+    - name: Deploy documentation (main branch only)
+      if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: peaceiris/actions-gh-pages@v3
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        publish_dir: ./target/doc
+        destination_dir: docs
+
+  lint-markdown:
+    name: Lint Markdown
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install markdownlint
+      run: npm install -g markdownlint-cli
+
+    - name: Lint markdown files
+      run: |
+        markdownlint README.md mqtt_grpc_duality/README.md docs/*.md || true
+
+  check-links:
+    name: Check Links
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install markdown-link-check
+      run: npm install -g markdown-link-check
+
+    - name: Check links in README
+      run: |
+        markdown-link-check README.md --config .github/markdown-link-check-config.json || true
+
+    - name: Check links in proxy README
+      run: |
+        markdown-link-check mqtt_grpc_duality/README.md --config .github/markdown-link-check-config.json || true
+
+    - name: Check links in docs
+      run: |
+        find docs -name "*.md" -exec markdown-link-check {} --config .github/markdown-link-check-config.json \; || true
+
+  spell-check:
+    name: Spell Check
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Setup Node.js
+      uses: actions/setup-node@v4
+      with:
+        node-version: '18'
+
+    - name: Install cspell
+      run: npm install -g cspell
+
+    - name: Create cspell config
+      run: |
+        cat > cspell.json << 'EOF'
+        {
+          "version": "0.2",
+          "language": "en",
+          "words": [
+            "flowsdk",
+            "mqtt",
+            "grpc",
+            "protobuf",
+            "tokio",
+            "serde",
+            "prost",
+            "tonic",
+            "dashmap",
+            "mqttv5",
+            "connack",
+            "puback",
+            "pubrel",
+            "pubcomp",
+            "suback",
+            "unsuback",
+            "qos",
+            "utf8",
+            "rustc",
+            "clippy",
+            "rustfmt",
+            "github",
+            "codecov",
+            "linux",
+            "macos",
+            "windows",
+            "aarch64",
+            "x86_64",
+            "dockerfile",
+            "cargo",
+            "toml",
+            "yaml",
+            "crates",
+            "serialization",
+            "deserialization",
+            "bidirectional",
+            "impl",
+            "async",
+            "await",
+            "struct",
+            "enum",
+            "Vec",
+            "HashMap",
+            "String"
+          ],
+          "ignorePaths": [
+            "target/**",
+            "**/target/**",
+            ".git/**",
+            "**/.git/**",
+            "fuzz/artifacts/**",
+            "fuzz/corpus/**"
+          ]
+        }
+        EOF
+
+    - name: Run spell check
+      run: |
+        cspell "**/*.md" "**/*.rs" --config cspell.json || true
