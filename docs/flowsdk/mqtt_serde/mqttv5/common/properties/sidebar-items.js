@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"enum":["Property"],"fn":["encode_properities_hdr","parse_properties_hdr"],"type":["Properties"]};

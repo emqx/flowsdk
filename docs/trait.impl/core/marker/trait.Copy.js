@@ -1,0 +1,9 @@
+(function() {
+    var implementors = Object.fromEntries([["mqtt_grpc_proxy",[["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.89.0/core/marker/trait.Copy.html\" title=\"trait core::marker::Copy\">Copy</a> for <a class=\"enum\" href=\"mqtt_grpc_proxy/mqttv5pb/enum.MessageDirection.html\" title=\"enum mqtt_grpc_proxy::mqttv5pb::MessageDirection\">MessageDirection</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.89.0/core/marker/trait.Copy.html\" title=\"trait core::marker::Copy\">Copy</a> for <a class=\"enum\" href=\"mqtt_grpc_proxy/mqttv5pb/enum.QoS.html\" title=\"enum mqtt_grpc_proxy::mqttv5pb::QoS\">QoS</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.89.0/core/marker/trait.Copy.html\" title=\"trait core::marker::Copy\">Copy</a> for <a class=\"enum\" href=\"mqtt_grpc_proxy/mqttv5pb/session_control/enum.ControlType.html\" title=\"enum mqtt_grpc_proxy::mqttv5pb::session_control::ControlType\">ControlType</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.89.0/core/marker/trait.Copy.html\" title=\"trait core::marker::Copy\">Copy</a> for <a class=\"struct\" href=\"mqtt_grpc_proxy/mqttv5pb/struct.Pingreq.html\" title=\"struct mqtt_grpc_proxy::mqttv5pb::Pingreq\">Pingreq</a>"],["impl <a class=\"trait\" href=\"https://doc.rust-lang.org/1.89.0/core/marker/trait.Copy.html\" title=\"trait core::marker::Copy\">Copy</a> for <a class=\"struct\" href=\"mqtt_grpc_proxy/mqttv5pb/struct.Pingresp.html\" title=\"struct mqtt_grpc_proxy::mqttv5pb::Pingresp\">Pingresp</a>"]]]]);
+    if (window.register_implementors) {
+        window.register_implementors(implementors);
+    } else {
+        window.pending_implementors = implementors;
+    }
+})()
+//{"start":57,"fragment_lengths":[1486]}
