@@ -2,20 +2,20 @@
 // This module provides shared conversion implementations between MQTT and protobuf types
 // Used by both r-proxy and s-proxy to eliminate code duplication
 
+use flowsdk::mqtt_serde::mqttv5::auth::MqttAuth;
 use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
-use flowsdk::mqtt_serde::mqttv5::connect::MqttConnect;
 use flowsdk::mqtt_serde::mqttv5::connack::MqttConnAck;
-use flowsdk::mqtt_serde::mqttv5::publish::MqttPublish;
+use flowsdk::mqtt_serde::mqttv5::connect::MqttConnect;
+use flowsdk::mqtt_serde::mqttv5::disconnect::MqttDisconnect;
 use flowsdk::mqtt_serde::mqttv5::puback::MqttPubAck;
+use flowsdk::mqtt_serde::mqttv5::pubcomp::MqttPubComp;
+use flowsdk::mqtt_serde::mqttv5::publish::MqttPublish;
 use flowsdk::mqtt_serde::mqttv5::pubrec::MqttPubRec;
 use flowsdk::mqtt_serde::mqttv5::pubrel::MqttPubRel;
-use flowsdk::mqtt_serde::mqttv5::pubcomp::MqttPubComp;
-use flowsdk::mqtt_serde::mqttv5::subscribe::MqttSubscribe;
 use flowsdk::mqtt_serde::mqttv5::suback::MqttSubAck;
-use flowsdk::mqtt_serde::mqttv5::unsubscribe::MqttUnsubscribe;
+use flowsdk::mqtt_serde::mqttv5::subscribe::MqttSubscribe;
 use flowsdk::mqtt_serde::mqttv5::unsuback::MqttUnsubAck;
-use flowsdk::mqtt_serde::mqttv5::disconnect::MqttDisconnect;
-use flowsdk::mqtt_serde::mqttv5::auth::MqttAuth;
+use flowsdk::mqtt_serde::mqttv5::unsubscribe::MqttUnsubscribe;
 
 // Generate protobuf types at compile time
 pub mod mqttv5pb {
@@ -206,7 +206,11 @@ impl TryFrom<mqttv5pb::Property> for Property {
                 Ok(Property::WillDelayInterval(val))
             }
             Some(mqttv5pb::property::PropertyType::RequestResponseInformation(val)) => {
-                Ok(Property::RequestResponseInformation(if val { 1 } else { 0 }))
+                Ok(Property::RequestResponseInformation(if val {
+                    1
+                } else {
+                    0
+                }))
             }
             Some(mqttv5pb::property::PropertyType::ResponseInformation(val)) => {
                 Ok(Property::ResponseInformation(val))
@@ -239,13 +243,25 @@ impl TryFrom<mqttv5pb::Property> for Property {
                 Ok(Property::MaximumPacketSize(val))
             }
             Some(mqttv5pb::property::PropertyType::WildcardSubscriptionAvailable(val)) => {
-                Ok(Property::WildcardSubscriptionAvailable(if val { 1 } else { 0 }))
+                Ok(Property::WildcardSubscriptionAvailable(if val {
+                    1
+                } else {
+                    0
+                }))
             }
             Some(mqttv5pb::property::PropertyType::SubscriptionIdentifiersAvailable(val)) => {
-                Ok(Property::SubscriptionIdentifierAvailable(if val { 1 } else { 0 }))
+                Ok(Property::SubscriptionIdentifierAvailable(if val {
+                    1
+                } else {
+                    0
+                }))
             }
             Some(mqttv5pb::property::PropertyType::SharedSubscriptionAvailable(val)) => {
-                Ok(Property::SharedSubscriptionAvailable(if val { 1 } else { 0 }))
+                Ok(Property::SharedSubscriptionAvailable(if val {
+                    1
+                } else {
+                    0
+                }))
             }
             None => Err(()),
         }
@@ -340,7 +356,11 @@ impl From<MqttUnsubAck> for mqttv5pb::Unsuback {
     fn from(unsuback: MqttUnsubAck) -> Self {
         mqttv5pb::Unsuback {
             message_id: unsuback.packet_id as u32,
-            reason_codes: unsuback.reason_codes.into_iter().map(|c| c as u32).collect(),
+            reason_codes: unsuback
+                .reason_codes
+                .into_iter()
+                .map(|c| c as u32)
+                .collect(),
             properties: Vec::new(), // TODO: Convert properties
         }
     }
@@ -371,13 +391,19 @@ impl From<mqttv5pb::Subscribe> for MqttSubscribe {
         MqttSubscribe {
             packet_id: subscribe.message_id as u16,
             properties: Vec::new(), // TODO: Convert properties
-            subscriptions: subscribe.subscriptions.into_iter().map(|s| flowsdk::mqtt_serde::mqttv5::subscribe::TopicSubscription {
-                topic_filter: s.topic_filter,
-                qos: s.qos as u8,
-                no_local: false,
-                retain_as_published: false,
-                retain_handling: 0,
-            }).collect(),
+            subscriptions: subscribe
+                .subscriptions
+                .into_iter()
+                .map(
+                    |s| flowsdk::mqtt_serde::mqttv5::subscribe::TopicSubscription {
+                        topic_filter: s.topic_filter,
+                        qos: s.qos as u8,
+                        no_local: false,
+                        retain_as_published: false,
+                        retain_handling: 0,
+                    },
+                )
+                .collect(),
         }
     }
 }
@@ -453,7 +479,11 @@ impl From<mqttv5pb::Auth> for MqttAuth {
 // Missing reverse implementations for r-proxy compatibility
 impl From<mqttv5pb::Connack> for MqttConnAck {
     fn from(connack: mqttv5pb::Connack) -> Self {
-        let properties: Vec<Property> = connack.properties.into_iter().filter_map(|p| p.try_into().ok()).collect();
+        let properties: Vec<Property> = connack
+            .properties
+            .into_iter()
+            .filter_map(|p| p.try_into().ok())
+            .collect();
         MqttConnAck {
             session_present: connack.session_present,
             reason_code: connack.reason_code as u8,
@@ -466,13 +496,17 @@ impl From<MqttSubscribe> for mqttv5pb::Subscribe {
     fn from(subscribe: MqttSubscribe) -> Self {
         mqttv5pb::Subscribe {
             message_id: subscribe.packet_id as u32,
-            subscriptions: subscribe.subscriptions.into_iter().map(|sub| mqttv5pb::TopicSubscription {
-                topic_filter: sub.topic_filter,
-                qos: sub.qos as u32,
-                no_local: sub.no_local,
-                retain_as_published: sub.retain_as_published,
-                retain_handling: sub.retain_handling as u32,
-            }).collect(),
+            subscriptions: subscribe
+                .subscriptions
+                .into_iter()
+                .map(|sub| mqttv5pb::TopicSubscription {
+                    topic_filter: sub.topic_filter,
+                    qos: sub.qos as u32,
+                    no_local: sub.no_local,
+                    retain_as_published: sub.retain_as_published,
+                    retain_handling: sub.retain_handling as u32,
+                })
+                .collect(),
             properties: Vec::new(), // TODO: Convert properties
         }
     }

@@ -1,12 +1,10 @@
 use std::env;
 use std::net::SocketAddr;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
-use flowsdk::mqtt_serde::control_packet::{
-    MqttControlPacket, MqttPacket as InternalMqttPacket,
-};
 use flowsdk::mqtt_serde::control_packet::MqttPacket;
+use flowsdk::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket as InternalMqttPacket};
 use flowsdk::mqtt_serde::mqttv5;
 use flowsdk::mqtt_serde::mqttv5::connack::MqttConnAck;
 use flowsdk::mqtt_serde::mqttv5::connect::MqttConnect;
@@ -22,8 +20,8 @@ use tokio::spawn;
 use tokio::sync::mpsc;
 use tracing::info;
 
-use tonic::{Status, Request, Streaming};
-use tokio_stream::{StreamExt, wrappers::ReceiverStream};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tonic::{Request, Status, Streaming};
 
 use dashmap::DashMap;
 
@@ -84,11 +82,18 @@ async fn handle_new_streaming_conn(
 
     // Wait for MQTT Connect packet
     let connect = wait_for_mqtt_connect(&mut read_half, &mut parser).await?;
-    
+
     let client_id = connect.client_id.clone();
-    let session_id = format!("{}-{}", client_id, state.sequence_counter.fetch_add(1, Ordering::SeqCst));
-    
-    info!("New MQTT client connecting: {} (session: {})", client_id, session_id);
+    let session_id = format!(
+        "{}-{}",
+        client_id,
+        state.sequence_counter.fetch_add(1, Ordering::SeqCst)
+    );
+
+    info!(
+        "New MQTT client connecting: {} (session: {})",
+        client_id, session_id
+    );
 
     // Connect to s-proxy with streaming
     let mut grpc_client: MqttRelayServiceClient<tonic::transport::Channel> =
@@ -97,35 +102,41 @@ async fn handle_new_streaming_conn(
     // Create bidirectional streaming channels
     let (stream_sender, stream_receiver) = mpsc::channel(1000);
     let (_response_sender, response_receiver) = mpsc::channel(1000);
-    
+
     // Send session establishment message
     let session_control = mqttv5pb::SessionControl {
         control_type: mqttv5pb::session_control::ControlType::Establish as i32,
         client_id: client_id.clone(),
     };
-    
+
     let establish_msg = mqttv5pb::MqttStreamMessage {
         session_id: session_id.clone(),
         sequence_id: 0,
         direction: mqttv5pb::MessageDirection::ClientToBroker as i32,
-        payload: Some(mqttv5pb::mqtt_stream_message::Payload::SessionControl(session_control)),
+        payload: Some(mqttv5pb::mqtt_stream_message::Payload::SessionControl(
+            session_control,
+        )),
     };
-    
+
     stream_sender.send(establish_msg).await?;
 
     // Establish gRPC streaming connection
     let outbound_stream = ReceiverStream::new(stream_receiver);
     let request = Request::new(outbound_stream);
-    let mut inbound_stream = grpc_client.stream_mqtt_messages(request).await?.into_inner();
+    let mut inbound_stream = grpc_client
+        .stream_mqtt_messages(request)
+        .await?
+        .into_inner();
 
     // Wait for ConnAck from s-proxy
     if let Some(Ok(connack_msg)) = inbound_stream.next().await {
-        if let Some(mqttv5pb::mqtt_stream_message::Payload::Connack(connack)) = connack_msg.payload {
+        if let Some(mqttv5pb::mqtt_stream_message::Payload::Connack(connack)) = connack_msg.payload
+        {
             // Send ConnAck to MQTT client
             let mqtt_connack: MqttConnAck = connack.into();
             let connack_bytes = mqtt_connack.to_bytes()?;
             write_half.write_all(&connack_bytes).await?;
-            
+
             info!("ConnAck sent to client {}", client_id);
         } else {
             return Err("Expected ConnAck from s-proxy".into());
@@ -143,10 +154,10 @@ async fn handle_new_streaming_conn(
         grpc_stream_sender: stream_sender,
         grpc_stream_receiver: response_receiver,
     };
-    
+
     // Start the message handling loops
     start_streaming_client_loop(streaming_conn, inbound_stream, state).await?;
-    
+
     Ok(())
 }
 
@@ -157,7 +168,7 @@ async fn start_streaming_client_loop(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut parser = MqttParser::new();
     let sequence_counter = Arc::new(AtomicU64::new(1));
-    
+
     loop {
         tokio::select! {
             // Handle messages from MQTT client
@@ -172,7 +183,7 @@ async fn start_streaming_client_loop(
                                 direction: mqttv5pb::MessageDirection::ClientToBroker as i32,
                                 payload: Some(payload),
                             };
-                            
+
                             if let Err(e) = conn.grpc_stream_sender.send(stream_msg).await {
                                 eprintln!("Error sending to gRPC stream: {}", e);
                                 break;
@@ -188,7 +199,7 @@ async fn start_streaming_client_loop(
                     }
                 }
             }
-            
+
             // Handle messages from s-proxy
             msg = inbound_stream.next() => {
                 match msg {
@@ -214,53 +225,60 @@ async fn start_streaming_client_loop(
             }
         }
     }
-    
-    info!("Streaming client loop ended for session: {}", conn.session_id);
+
+    info!(
+        "Streaming client loop ended for session: {}",
+        conn.session_id
+    );
     Ok(())
 }
 
 // Helper function to convert MQTT packets to stream payloads
-fn convert_mqtt_to_stream_payload(packet: &MqttPacket) -> Option<mqttv5pb::mqtt_stream_message::Payload> {
+fn convert_mqtt_to_stream_payload(
+    packet: &MqttPacket,
+) -> Option<mqttv5pb::mqtt_stream_message::Payload> {
     match packet {
-        MqttPacket::Connect(connect) => {
-            Some(mqttv5pb::mqtt_stream_message::Payload::Connect(connect.clone().into()))
-        }
-        MqttPacket::Publish(publish) => {
-            Some(mqttv5pb::mqtt_stream_message::Payload::Publish(publish.clone().into()))
-        }
-        MqttPacket::Subscribe(subscribe) => {
-            Some(mqttv5pb::mqtt_stream_message::Payload::Subscribe(subscribe.clone().into()))
-        }
-        MqttPacket::Unsubscribe(unsubscribe) => {
-            Some(mqttv5pb::mqtt_stream_message::Payload::Unsubscribe(unsubscribe.clone().into()))
-        }
-        MqttPacket::PubAck(puback) => {
-            Some(mqttv5pb::mqtt_stream_message::Payload::Puback(puback.clone().into()))
-        }
-        MqttPacket::PubRec(pubrec) => {
-            Some(mqttv5pb::mqtt_stream_message::Payload::Pubrec(pubrec.clone().into()))
-        }
-        MqttPacket::PubRel(pubrel) => {
-            Some(mqttv5pb::mqtt_stream_message::Payload::Pubrel(pubrel.clone().into()))
-        }
-        MqttPacket::PubComp(pubcomp) => {
-            Some(mqttv5pb::mqtt_stream_message::Payload::Pubcomp(pubcomp.clone().into()))
-        }
-        MqttPacket::PingReq(_) => {
-            Some(mqttv5pb::mqtt_stream_message::Payload::Pingreq(mqttv5pb::Pingreq {}))
-        }
-        MqttPacket::Disconnect(disconnect) => {
-            Some(mqttv5pb::mqtt_stream_message::Payload::Disconnect(disconnect.clone().into()))
-        }
-        MqttPacket::Auth(auth) => {
-            Some(mqttv5pb::mqtt_stream_message::Payload::Auth(auth.clone().into()))
-        }
+        MqttPacket::Connect(connect) => Some(mqttv5pb::mqtt_stream_message::Payload::Connect(
+            connect.clone().into(),
+        )),
+        MqttPacket::Publish(publish) => Some(mqttv5pb::mqtt_stream_message::Payload::Publish(
+            publish.clone().into(),
+        )),
+        MqttPacket::Subscribe(subscribe) => Some(
+            mqttv5pb::mqtt_stream_message::Payload::Subscribe(subscribe.clone().into()),
+        ),
+        MqttPacket::Unsubscribe(unsubscribe) => Some(
+            mqttv5pb::mqtt_stream_message::Payload::Unsubscribe(unsubscribe.clone().into()),
+        ),
+        MqttPacket::PubAck(puback) => Some(mqttv5pb::mqtt_stream_message::Payload::Puback(
+            puback.clone().into(),
+        )),
+        MqttPacket::PubRec(pubrec) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubrec(
+            pubrec.clone().into(),
+        )),
+        MqttPacket::PubRel(pubrel) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubrel(
+            pubrel.clone().into(),
+        )),
+        MqttPacket::PubComp(pubcomp) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubcomp(
+            pubcomp.clone().into(),
+        )),
+        MqttPacket::PingReq(_) => Some(mqttv5pb::mqtt_stream_message::Payload::Pingreq(
+            mqttv5pb::Pingreq {},
+        )),
+        MqttPacket::Disconnect(disconnect) => Some(
+            mqttv5pb::mqtt_stream_message::Payload::Disconnect(disconnect.clone().into()),
+        ),
+        MqttPacket::Auth(auth) => Some(mqttv5pb::mqtt_stream_message::Payload::Auth(
+            auth.clone().into(),
+        )),
         _ => None,
     }
 }
 
 // Helper function to convert stream payloads to MQTT bytes
-fn convert_stream_payload_to_mqtt_bytes(payload: &mqttv5pb::mqtt_stream_message::Payload) -> Option<Vec<u8>> {
+fn convert_stream_payload_to_mqtt_bytes(
+    payload: &mqttv5pb::mqtt_stream_message::Payload,
+) -> Option<Vec<u8>> {
     match payload {
         mqttv5pb::mqtt_stream_message::Payload::Connack(connack) => {
             let mqtt_connack: MqttConnAck = connack.clone().into();

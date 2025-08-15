@@ -1,7 +1,5 @@
 use dashmap::DashMap;
-use flowsdk::mqtt_serde::control_packet::{
-    MqttControlPacket, MqttPacket as InternalMqttPacket,
-};
+use flowsdk::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket as InternalMqttPacket};
 use std::sync::Arc;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tonic::{
@@ -287,22 +285,25 @@ impl MqttRelayService for MyRelay {
     }
 
     // Streaming implementation for bidirectional communication
-    type StreamMqttMessagesStream = tokio_stream::wrappers::ReceiverStream<Result<mqttv5pb::MqttStreamMessage, Status>>;
+    type StreamMqttMessagesStream =
+        tokio_stream::wrappers::ReceiverStream<Result<mqttv5pb::MqttStreamMessage, Status>>;
 
     async fn stream_mqtt_messages(
         &self,
         _request: Request<tonic::Streaming<mqttv5pb::MqttStreamMessage>>,
     ) -> Result<Response<Self::StreamMqttMessagesStream>, Status> {
         println!("Got a streaming request: stream_mqtt_messages");
-        
+
         // For now, create a simple response stream
         // This would need to be enhanced based on your actual streaming requirements
         let (tx, rx) = tokio::sync::mpsc::channel(128);
-        
+
         // Close the channel immediately for now - this can be enhanced later
         drop(tx);
-        
-        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
+            rx,
+        )))
     }
 }
 
