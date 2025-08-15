@@ -30,16 +30,16 @@ cargo build --workspace
 cargo build
 
 # Proxy applications only  
-cd proxy && cargo build
+cd mqtt_grpc_duality && cargo build
 ```
 
 ### Run Proxy Applications
 ```bash
 # Start server-side proxy (connects to MQTT broker)
-cd proxy && cargo run --bin s-proxy
+cd mqtt_grpc_duality && cargo run --bin s-proxy
 
 # In another terminal, start client-facing proxy
-cd proxy && cargo run --bin r-proxy
+cd mqtt_grpc_duality && cargo run --bin r-proxy
 ```
 
 ## Architecture
@@ -103,18 +103,18 @@ The project uses minimal dependencies:
 cargo build --workspace
 
 # Build individual workspaces
-cargo build                    # Main library only
-cd proxy && cargo build        # Proxy workspace only
+cargo build                            # Main library only
+cd mqtt_grpc_duality && cargo build    # Proxy workspace only
 
 # Run tests
-cargo test --workspace         # All tests
-cargo test                     # Main library tests
-cd proxy && cargo test         # Proxy tests only
+cargo test --workspace                 # All tests
+cargo test                             # Main library tests
+cd mqtt_grpc_duality && cargo test     # Proxy tests only
 
 # Clean build artifacts
-cargo clean --workspace        # Everything
-cargo clean                    # Main library
-cd proxy && cargo clean        # Proxy workspace
+cargo clean --workspace                # Everything
+cargo clean                            # Main library
+cd mqtt_grpc_duality && cargo clean    # Proxy workspace
 ```
 
 ### Testing
@@ -123,8 +123,8 @@ cd proxy && cargo clean        # Proxy workspace
 cargo test --workspace
 
 # Or individually
-cargo test                     # Main library tests
-cd proxy && cargo test         # Proxy workspace tests
+cargo test                             # Main library tests
+cd mqtt_grpc_duality && cargo test     # Proxy workspace tests
 ```
 
 ## Usage Examples
@@ -152,10 +152,10 @@ mosquitto -p 1883
 
 # 2. Start the proxy stack
 # Terminal 1:
-cd proxy && cargo run --bin s-proxy
+cd mqtt_grpc_duality && cargo run --bin s-proxy
 
 # Terminal 2: 
-cd proxy && cargo run --bin r-proxy
+cd mqtt_grpc_duality && cargo run --bin r-proxy
 
 # 3. Run a client application
 cargo run --bin simple-client
