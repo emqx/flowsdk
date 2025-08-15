@@ -1,4 +1,6 @@
-use tonic::{transport::Server, Request, Response, Status};
+use tonic::{transport::Server, Request, Response, Status, Streaming};
+use tokio::sync::mpsc;
+use tokio_stream::wrappers::ReceiverStream;
 
 use mqttv5pb::mqtt_relay_service_server::{MqttRelayService, MqttRelayServiceServer};
 use mqttv5pb::{MqttPacket, RelayResponse};
@@ -204,6 +206,34 @@ impl MqttRelayService for MyRelay {
             error_message: String::new(),
         };
         Ok(Response::new(reply))
+    }
+
+    type StreamMqttMessagesStream = ReceiverStream<Result<mqttv5pb::MqttStreamMessage, Status>>;
+
+    async fn stream_mqtt_messages(
+        &self,
+        request: Request<Streaming<mqttv5pb::MqttStreamMessage>>,
+    ) -> Result<Response<Self::StreamMqttMessagesStream>, Status> {
+        println!("Got a streaming MQTT request: {:?}", request.metadata());
+
+        // Create a channel for responses
+        let (tx, rx) = mpsc::channel(100);
+        
+        // Simple echo server that just sends back an acknowledgment
+        let echo_msg = mqttv5pb::MqttStreamMessage {
+            session_id: "server-echo".to_string(),
+            sequence_id: 1,
+            direction: mqttv5pb::MessageDirection::BrokerToClient as i32,
+            payload: Some(mqttv5pb::mqtt_stream_message::Payload::Connack(mqttv5pb::Connack {
+                session_present: false,
+                reason_code: 0,
+                properties: Vec::new(),
+            })),
+        };
+        
+        let _ = tx.send(Ok(echo_msg)).await;
+
+        Ok(Response::new(ReceiverStream::new(rx)))
     }
 }
 

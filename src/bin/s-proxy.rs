@@ -9,21 +9,18 @@ use tonic::{
     Request, Response, Status,
 };
 
+// Import shared conversions and protobuf types
+use mqtt_grpc_duality::grpc_conversions::mqttv5pb;
 use mqttv5pb::mqtt_relay_service_client::MqttRelayServiceClient;
 use mqttv5pb::mqtt_relay_service_server::{MqttRelayService, MqttRelayServiceServer};
 use mqttv5pb::{MqttPacket, RelayResponse};
 
 use mqtt_grpc_duality::mqtt_serde;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::common::properties::Property;
 use mqtt_grpc_duality::mqtt_serde::parser::stream::MqttParser;
 
 use crate::mpsc::Sender;
 use tokio::net::TcpSocket;
 use tokio::sync::mpsc;
-
-pub mod mqttv5pb {
-    tonic::include_proto!("mqttv5"); // The string specified here must match the proto package name
-}
 
 #[derive(Debug, Default)]
 pub struct MyRelay {
@@ -283,6 +280,25 @@ impl MqttRelayService for MyRelay {
         };
         Ok(Response::new(reply))
     }
+
+    // Streaming implementation for bidirectional communication
+    type StreamMqttMessagesStream = tokio_stream::wrappers::ReceiverStream<Result<mqttv5pb::MqttStreamMessage, Status>>;
+
+    async fn stream_mqtt_messages(
+        &self,
+        _request: Request<tonic::Streaming<mqttv5pb::MqttStreamMessage>>,
+    ) -> Result<Response<Self::StreamMqttMessagesStream>, Status> {
+        println!("Got a streaming request: stream_mqtt_messages");
+        
+        // For now, create a simple response stream
+        // This would need to be enhanced based on your actual streaming requirements
+        let (tx, rx) = tokio::sync::mpsc::channel(128);
+        
+        // Close the channel immediately for now - this can be enhanced later
+        drop(tx);
+        
+        Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(rx)))
+    }
 }
 
 async fn mqtt_connect_to_broker(
@@ -468,364 +484,4 @@ async fn forward_mqtt_packet_to_grpc(
     Ok(())
 }
 
-impl From<mqtt_serde::mqttv5::connect::MqttConnect> for mqttv5pb::Connect {
-    fn from(connect: mqtt_serde::mqttv5::connect::MqttConnect) -> Self {
-        mqttv5pb::Connect {
-            client_id: connect.client_id.clone(),
-            protocol_name: "MQTT".into(),
-            protocol_version: connect.protocol_version as u32,
-            clean_start: connect.is_clean_start(),
-            keep_alive: connect.keep_alive as u32,
-            username: connect.username.unwrap_or_default(),
-            password: connect.password.unwrap_or_default(),
-            will: None,         // @TODO
-            properties: vec![], // @TODO
-        }
-    }
-}
 
-impl From<mqtt_serde::mqttv5::connack::MqttConnAck> for mqttv5pb::Connack {
-    fn from(connack: mqtt_serde::mqttv5::connack::MqttConnAck) -> Self {
-        mqttv5pb::Connack {
-            session_present: connack.session_present,
-            reason_code: connack.reason_code as u32,
-            properties: connack
-                .properties
-                .map(|props| {
-                    props
-                        .into_iter()
-                        .filter_map(|p| p.try_into().ok())
-                        .collect()
-                })
-                .unwrap_or_default(),
-        }
-    }
-}
-
-impl TryFrom<Property> for mqttv5pb::Property {
-    type Error = ();
-
-    fn try_from(p: Property) -> Result<Self, Self::Error> {
-        let property_type = match p {
-            Property::PayloadFormatIndicator(val) => Some(
-                mqttv5pb::property::PropertyType::PayloadFormatIndicator(val != 0),
-            ),
-            Property::MessageExpiryInterval(val) => {
-                Some(mqttv5pb::property::PropertyType::MessageExpiryInterval(val))
-            }
-            Property::ContentType(val) => Some(mqttv5pb::property::PropertyType::ContentType(val)),
-            Property::ResponseTopic(val) => {
-                Some(mqttv5pb::property::PropertyType::ResponseTopic(val))
-            }
-            Property::CorrelationData(val) => {
-                Some(mqttv5pb::property::PropertyType::CorrelationData(val))
-            }
-            Property::SubscriptionIdentifier(val) => Some(
-                mqttv5pb::property::PropertyType::SubscriptionIdentifier(val),
-            ),
-            Property::SessionExpiryInterval(val) => {
-                Some(mqttv5pb::property::PropertyType::SessionExpiryInterval(val))
-            }
-            Property::AssignedClientIdentifier(val) => Some(
-                mqttv5pb::property::PropertyType::AssignedClientIdentifier(val),
-            ),
-            Property::ServerKeepAlive(val) => Some(
-                mqttv5pb::property::PropertyType::ServerKeepAlive(val as u32),
-            ),
-            Property::AuthenticationMethod(val) => {
-                Some(mqttv5pb::property::PropertyType::AuthenticationMethod(val))
-            }
-            Property::AuthenticationData(val) => {
-                Some(mqttv5pb::property::PropertyType::AuthenticationData(val))
-            }
-            Property::RequestProblemInformation(val) => Some(
-                mqttv5pb::property::PropertyType::RequestProblemInformation(val != 0),
-            ),
-            Property::WillDelayInterval(val) => {
-                Some(mqttv5pb::property::PropertyType::WillDelayInterval(val))
-            }
-            Property::RequestResponseInformation(val) => {
-                Some(mqttv5pb::property::PropertyType::RequestResponseInformation(val != 0))
-            }
-            Property::ResponseInformation(val) => {
-                Some(mqttv5pb::property::PropertyType::ResponseInformation(val))
-            }
-            Property::ServerReference(val) => {
-                Some(mqttv5pb::property::PropertyType::ServerReference(val))
-            }
-            Property::ReasonString(val) => {
-                Some(mqttv5pb::property::PropertyType::ReasonString(val))
-            }
-            Property::ReceiveMaximum(val) => {
-                Some(mqttv5pb::property::PropertyType::ReceiveMaximum(val as u32))
-            }
-            Property::TopicAliasMaximum(val) => Some(
-                mqttv5pb::property::PropertyType::TopicAliasMaximum(val as u32),
-            ),
-            Property::TopicAlias(val) => {
-                Some(mqttv5pb::property::PropertyType::TopicAlias(val as u32))
-            }
-            Property::MaximumQoS(val) => {
-                Some(mqttv5pb::property::PropertyType::MaximumQos(val as u32))
-            }
-            Property::RetainAvailable(val) => {
-                Some(mqttv5pb::property::PropertyType::RetainAvailable(val != 0))
-            }
-            Property::UserProperty(key, value) => {
-                Some(mqttv5pb::property::PropertyType::UserProperty(
-                    mqttv5pb::UserProperty { key, value },
-                ))
-            }
-            Property::MaximumPacketSize(val) => {
-                Some(mqttv5pb::property::PropertyType::MaximumPacketSize(val))
-            }
-            Property::WildcardSubscriptionAvailable(val) => {
-                Some(mqttv5pb::property::PropertyType::WildcardSubscriptionAvailable(val != 0))
-            }
-            Property::SubscriptionIdentifierAvailable(val) => {
-                Some(mqttv5pb::property::PropertyType::SubscriptionIdentifiersAvailable(val != 0))
-            }
-            Property::SharedSubscriptionAvailable(val) => {
-                Some(mqttv5pb::property::PropertyType::SharedSubscriptionAvailable(val != 0))
-            }
-        };
-        Ok(mqttv5pb::Property { property_type })
-    }
-}
-
-impl From<mqttv5pb::Publish> for mqtt_serde::mqttv5::publish::MqttPublish {
-    fn from(publish: mqttv5pb::Publish) -> Self {
-        mqtt_serde::mqttv5::publish::MqttPublish::new(
-            publish.qos as u8,
-            publish.topic,
-            Some(publish.message_id as u16),
-            publish.payload,
-            publish.retain,
-            publish.dup,
-        )
-    }
-}
-
-impl TryFrom<mqttv5pb::Property> for Property {
-    type Error = ();
-
-    fn try_from(p: mqttv5pb::Property) -> Result<Self, Self::Error> {
-        match p.property_type {
-            Some(mqttv5pb::property::PropertyType::PayloadFormatIndicator(val)) => {
-                Ok(Property::PayloadFormatIndicator(if val { 1 } else { 0 }))
-            }
-            Some(mqttv5pb::property::PropertyType::MessageExpiryInterval(val)) => {
-                Ok(Property::MessageExpiryInterval(val))
-            }
-            Some(mqttv5pb::property::PropertyType::ContentType(val)) => {
-                Ok(Property::ContentType(val))
-            }
-            Some(mqttv5pb::property::PropertyType::ResponseTopic(val)) => {
-                Ok(Property::ResponseTopic(val))
-            }
-            Some(mqttv5pb::property::PropertyType::CorrelationData(val)) => {
-                Ok(Property::CorrelationData(val))
-            }
-            Some(mqttv5pb::property::PropertyType::SubscriptionIdentifier(val)) => {
-                Ok(Property::SubscriptionIdentifier(val))
-            }
-            Some(mqttv5pb::property::PropertyType::SessionExpiryInterval(val)) => {
-                Ok(Property::SessionExpiryInterval(val))
-            }
-            Some(mqttv5pb::property::PropertyType::AssignedClientIdentifier(val)) => {
-                Ok(Property::AssignedClientIdentifier(val))
-            }
-            Some(mqttv5pb::property::PropertyType::ServerKeepAlive(val)) => {
-                Ok(Property::ServerKeepAlive(val as u16))
-            }
-            Some(mqttv5pb::property::PropertyType::AuthenticationMethod(val)) => {
-                Ok(Property::AuthenticationMethod(val))
-            }
-            Some(mqttv5pb::property::PropertyType::AuthenticationData(val)) => {
-                Ok(Property::AuthenticationData(val))
-            }
-            Some(mqttv5pb::property::PropertyType::RequestProblemInformation(val)) => {
-                Ok(Property::RequestProblemInformation(if val { 1 } else { 0 }))
-            }
-            Some(mqttv5pb::property::PropertyType::WillDelayInterval(val)) => {
-                Ok(Property::WillDelayInterval(val))
-            }
-            Some(mqttv5pb::property::PropertyType::RequestResponseInformation(val)) => {
-                Ok(Property::RequestResponseInformation(if val {
-                    1
-                } else {
-                    0
-                }))
-            }
-            Some(mqttv5pb::property::PropertyType::ResponseInformation(val)) => {
-                Ok(Property::ResponseInformation(val))
-            }
-            Some(mqttv5pb::property::PropertyType::ServerReference(val)) => {
-                Ok(Property::ServerReference(val))
-            }
-            Some(mqttv5pb::property::PropertyType::ReasonString(val)) => {
-                Ok(Property::ReasonString(val))
-            }
-            Some(mqttv5pb::property::PropertyType::ReceiveMaximum(val)) => {
-                Ok(Property::ReceiveMaximum(val as u16))
-            }
-            Some(mqttv5pb::property::PropertyType::TopicAliasMaximum(val)) => {
-                Ok(Property::TopicAliasMaximum(val as u16))
-            }
-            Some(mqttv5pb::property::PropertyType::TopicAlias(val)) => {
-                Ok(Property::TopicAlias(val as u16))
-            }
-            Some(mqttv5pb::property::PropertyType::MaximumQos(val)) => {
-                Ok(Property::MaximumQoS(val as u8))
-            }
-            Some(mqttv5pb::property::PropertyType::RetainAvailable(val)) => {
-                Ok(Property::RetainAvailable(if val { 1 } else { 0 }))
-            }
-            Some(mqttv5pb::property::PropertyType::UserProperty(user_prop)) => {
-                Ok(Property::UserProperty(user_prop.key, user_prop.value))
-            }
-            Some(mqttv5pb::property::PropertyType::MaximumPacketSize(val)) => {
-                Ok(Property::MaximumPacketSize(val))
-            }
-            Some(mqttv5pb::property::PropertyType::WildcardSubscriptionAvailable(val)) => {
-                Ok(Property::WildcardSubscriptionAvailable(if val {
-                    1
-                } else {
-                    0
-                }))
-            }
-            Some(mqttv5pb::property::PropertyType::SubscriptionIdentifiersAvailable(val)) => {
-                Ok(Property::SubscriptionIdentifierAvailable(if val {
-                    1
-                } else {
-                    0
-                }))
-            }
-            Some(mqttv5pb::property::PropertyType::SharedSubscriptionAvailable(val)) => {
-                Ok(Property::SharedSubscriptionAvailable(if val {
-                    1
-                } else {
-                    0
-                }))
-            }
-            None => Err(()),
-        }
-    }
-}
-
-impl From<mqttv5pb::Connect> for mqtt_serde::mqttv5::connect::MqttConnect {
-    fn from(connect: mqttv5pb::Connect) -> Self {
-        let properties: Vec<Property> = connect
-            .properties
-            .into_iter()
-            .filter_map(|p| p.try_into().ok())
-            .collect();
-
-        mqtt_serde::mqttv5::connect::MqttConnect::new(
-            connect.client_id,
-            Some(connect.username),
-            Some(connect.password),
-            None,
-            0,
-            connect.clean_start,
-            properties,
-        )
-    }
-}
-
-// Conversion implementations from internal MQTT types to protobuf types
-impl From<mqtt_serde::mqttv5::publish::MqttPublish> for mqttv5pb::Publish {
-    fn from(publish: mqtt_serde::mqttv5::publish::MqttPublish) -> Self {
-        mqttv5pb::Publish {
-            topic: publish.topic_name,
-            payload: publish.payload,
-            qos: publish.qos as i32,
-            retain: publish.retain,
-            dup: publish.dup,
-            message_id: publish.packet_id.unwrap_or(0) as u32,
-            properties: Vec::new(), // TODO: Convert properties
-        }
-    }
-}
-
-impl From<mqtt_serde::mqttv5::puback::MqttPubAck> for mqttv5pb::Puback {
-    fn from(puback: mqtt_serde::mqttv5::puback::MqttPubAck) -> Self {
-        mqttv5pb::Puback {
-            message_id: puback.packet_id as u32,
-            reason_code: puback.reason_code as u32,
-            properties: Vec::new(), // TODO: Convert properties
-        }
-    }
-}
-
-impl From<mqtt_serde::mqttv5::pubrec::MqttPubRec> for mqttv5pb::Pubrec {
-    fn from(pubrec: mqtt_serde::mqttv5::pubrec::MqttPubRec) -> Self {
-        mqttv5pb::Pubrec {
-            message_id: pubrec.packet_id as u32,
-            reason_code: pubrec.reason_code as u32,
-            properties: Vec::new(), // TODO: Convert properties
-        }
-    }
-}
-
-impl From<mqtt_serde::mqttv5::pubrel::MqttPubRel> for mqttv5pb::Pubrel {
-    fn from(pubrel: mqtt_serde::mqttv5::pubrel::MqttPubRel) -> Self {
-        mqttv5pb::Pubrel {
-            message_id: pubrel.packet_id as u32,
-            reason_code: pubrel.reason_code as u32,
-            properties: Vec::new(), // TODO: Convert properties
-        }
-    }
-}
-
-impl From<mqtt_serde::mqttv5::pubcomp::MqttPubComp> for mqttv5pb::Pubcomp {
-    fn from(pubcomp: mqtt_serde::mqttv5::pubcomp::MqttPubComp) -> Self {
-        mqttv5pb::Pubcomp {
-            message_id: pubcomp.packet_id as u32,
-            reason_code: pubcomp.reason_code as u32,
-            properties: Vec::new(), // TODO: Convert properties
-        }
-    }
-}
-
-impl From<mqtt_serde::mqttv5::suback::MqttSubAck> for mqttv5pb::Suback {
-    fn from(suback: mqtt_serde::mqttv5::suback::MqttSubAck) -> Self {
-        mqttv5pb::Suback {
-            message_id: suback.packet_id as u32,
-            reason_codes: suback.reason_codes.into_iter().map(|c| c as u32).collect(),
-            properties: Vec::new(), // TODO: Convert properties
-        }
-    }
-}
-
-impl From<mqtt_serde::mqttv5::unsuback::MqttUnsubAck> for mqttv5pb::Unsuback {
-    fn from(unsuback: mqtt_serde::mqttv5::unsuback::MqttUnsubAck) -> Self {
-        mqttv5pb::Unsuback {
-            message_id: unsuback.packet_id as u32,
-            reason_codes: unsuback
-                .reason_codes
-                .into_iter()
-                .map(|c| c as u32)
-                .collect(),
-            properties: Vec::new(), // TODO: Convert properties
-        }
-    }
-}
-
-impl From<mqtt_serde::mqttv5::disconnect::MqttDisconnect> for mqttv5pb::Disconnect {
-    fn from(disconnect: mqtt_serde::mqttv5::disconnect::MqttDisconnect) -> Self {
-        mqttv5pb::Disconnect {
-            reason_code: disconnect.reason_code as u32,
-            properties: Vec::new(), // TODO: Convert properties
-        }
-    }
-}
-
-impl From<mqtt_serde::mqttv5::auth::MqttAuth> for mqttv5pb::Auth {
-    fn from(auth: mqtt_serde::mqttv5::auth::MqttAuth) -> Self {
-        mqttv5pb::Auth {
-            reason_code: auth.reason_code as u32,
-            properties: Vec::new(), // TODO: Convert properties
-        }
-    }
-}

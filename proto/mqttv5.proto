@@ -244,18 +244,53 @@ enum QoS {
   EXACTLY_ONCE = 2;  // QoS 2
 }
 
+// New streaming message wrapper
+message MqttStreamMessage {
+  string session_id = 1;      // Unique identifier for this MQTT session
+  uint64 sequence_id = 2;     // For message ordering within session
+  MessageDirection direction = 3;
+  oneof payload {
+    mqttv5.Connect connect = 10;
+    mqttv5.Connack connack = 11;
+    mqttv5.Publish publish = 12;
+    mqttv5.Puback puback = 13;
+    mqttv5.Pubrec pubrec = 14;
+    mqttv5.Pubrel pubrel = 15;
+    mqttv5.Pubcomp pubcomp = 16;
+    mqttv5.Subscribe subscribe = 17;
+    mqttv5.Suback suback = 18;
+    mqttv5.Unsubscribe unsubscribe = 19;
+    mqttv5.Unsuback unsuback = 20;
+    mqttv5.Pingreq pingreq = 21;
+    mqttv5.Pingresp pingresp = 22;
+    mqttv5.Disconnect disconnect = 23;
+    mqttv5.Auth auth = 24;
+    SessionControl session_control = 50;
+  }
+}
+
+message SessionControl {
+  enum ControlType {
+    ESTABLISH = 0;
+    TERMINATE = 1;
+    HEARTBEAT = 2;
+  }
+  ControlType control_type = 1;
+  string client_id = 2;
+}
+
+enum MessageDirection {
+  CLIENT_TO_BROKER = 0;
+  BROKER_TO_CLIENT = 1;
+}
+
 // gRPC service for relaying MQTT packets.
 service MqttRelayService {
-  // Relay an MQTT packet (unary RPC).
+  // Bidirectional streaming - one stream per MQTT connection
+  rpc StreamMqttMessages(stream MqttStreamMessage) returns (stream MqttStreamMessage);
+
+  // Legacy unary RPCs (for backward compatibility)
   rpc RelayPacket(MqttPacket) returns (RelayResponse);
-
-  // Relay a batch of MQTT packets (server streaming RPC).
-  // rpc BatchRelayPackets(stream MqttPacket) returns (stream RelayResponse);
-
-  // Bidirectional streaming RPC for continuous packet relay.
-  // rpc StreamPackets(stream MqttPacket) returns (stream MqttPacket);
-
-  // mqtt connect RPC.
   rpc MQTTConnect(mqttv5.Connect) returns (mqttv5.Connack);
 
   // mqtt publish RPC.
