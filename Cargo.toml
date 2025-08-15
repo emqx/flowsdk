@@ -1,22 +1,10 @@
 [package]
-name = "mqtt-grpc-duality"
+name = "flowsdk"
 version = "0.1.0"
 edition = "2021"
 
 [workspace]
 members = [".", "proxy"]
-
-[[bin]] # Bin to run the simple server
-name = "simple-server"
-path = "src/bin/server.rs"
-
-[[bin]] # Bin to run the simple client
-name = "simple-client"
-path = "src/bin/client.rs"
-
-[[bin]] # Bin to run the S-Client
-name = "s-client"
-path = "src/bin/s-client.rs"
 
 [dependencies]
 tonic = "*"
@@ -33,8 +21,3 @@ serde_json = "1.0"
 [features]
 default = ["strict-protocol-compliance"]
 strict-protocol-compliance = []
-
-
-[build-dependencies]
-tonic-build = "*"
-tonic-prost-build = "*"

@@ -2,20 +2,20 @@
 // This module provides shared conversion implementations between MQTT and protobuf types
 // Used by both r-proxy and s-proxy to eliminate code duplication
 
-use mqtt_grpc_duality::mqtt_serde::mqttv5::common::properties::Property;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::connect::MqttConnect;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::connack::MqttConnAck;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::publish::MqttPublish;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::puback::MqttPubAck;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::pubrec::MqttPubRec;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::pubrel::MqttPubRel;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::pubcomp::MqttPubComp;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::subscribe::MqttSubscribe;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::suback::MqttSubAck;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::unsubscribe::MqttUnsubscribe;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::unsuback::MqttUnsubAck;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::disconnect::MqttDisconnect;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::auth::MqttAuth;
+use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
+use flowsdk::mqtt_serde::mqttv5::connect::MqttConnect;
+use flowsdk::mqtt_serde::mqttv5::connack::MqttConnAck;
+use flowsdk::mqtt_serde::mqttv5::publish::MqttPublish;
+use flowsdk::mqtt_serde::mqttv5::puback::MqttPubAck;
+use flowsdk::mqtt_serde::mqttv5::pubrec::MqttPubRec;
+use flowsdk::mqtt_serde::mqttv5::pubrel::MqttPubRel;
+use flowsdk::mqtt_serde::mqttv5::pubcomp::MqttPubComp;
+use flowsdk::mqtt_serde::mqttv5::subscribe::MqttSubscribe;
+use flowsdk::mqtt_serde::mqttv5::suback::MqttSubAck;
+use flowsdk::mqtt_serde::mqttv5::unsubscribe::MqttUnsubscribe;
+use flowsdk::mqtt_serde::mqttv5::unsuback::MqttUnsubAck;
+use flowsdk::mqtt_serde::mqttv5::disconnect::MqttDisconnect;
+use flowsdk::mqtt_serde::mqttv5::auth::MqttAuth;
 
 // Generate protobuf types at compile time
 pub mod mqttv5pb {
@@ -371,7 +371,7 @@ impl From<mqttv5pb::Subscribe> for MqttSubscribe {
         MqttSubscribe {
             packet_id: subscribe.message_id as u16,
             properties: Vec::new(), // TODO: Convert properties
-            subscriptions: subscribe.subscriptions.into_iter().map(|s| mqtt_grpc_duality::mqtt_serde::mqttv5::subscribe::TopicSubscription {
+            subscriptions: subscribe.subscriptions.into_iter().map(|s| flowsdk::mqtt_serde::mqttv5::subscribe::TopicSubscription {
                 topic_filter: s.topic_filter,
                 qos: s.qos as u8,
                 no_local: false,

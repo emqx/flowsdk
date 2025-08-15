@@ -44,7 +44,7 @@ Start both proxies:
 
 ## Dependencies
 
-- **mqtt-grpc-duality**: Parent crate providing MQTT v5.0 serialization/parsing
+- **flowsdk**: Parent crate providing MQTT v5.0 serialization/parsing
 - **tonic**: gRPC framework
 - **tokio**: Async runtime
 - **dashmap**: Concurrent hashmap for session management

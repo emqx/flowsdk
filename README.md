@@ -6,7 +6,7 @@ A high-performance MQTT v5.0 protocol implementation with bidirectional gRPC str
 
 This project is organized as a Cargo workspace with two main components:
 
-### 📚 Core Library (`mqtt-grpc-duality`)
+### 📚 Core Library (`flowsdk`)
 - **MQTT v5.0 Protocol**: Complete serialization/deserialization implementation
 - **Shared Conversions**: gRPC ↔ MQTT conversion utilities
 - **Example Applications**: Simple client/server demos

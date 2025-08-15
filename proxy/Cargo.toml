@@ -24,7 +24,7 @@ tracing = "0.1"
 tracing-subscriber = "0.3"
 
 # Local dependencies - reference the parent workspace mqtt-serde
-mqtt-grpc-duality = { path = "..", features = [] }
+flowsdk = { path = "..", features = [] }
 
 [build-dependencies]
 tonic-build = "0.12"

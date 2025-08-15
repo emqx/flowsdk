@@ -3,13 +3,15 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use mqtt_grpc_duality::mqtt_serde::control_packet::MqttControlPacket;
-use mqtt_grpc_duality::mqtt_serde::control_packet::MqttPacket;
-use mqtt_grpc_duality::mqtt_serde::mqttv5;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::connack::MqttConnAck;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::connect::MqttConnect;
-use mqtt_grpc_duality::mqtt_serde::mqttv5::suback::MqttSubAck;
-use mqtt_grpc_duality::mqtt_serde::parser::stream::MqttParser;
+use flowsdk::mqtt_serde::control_packet::{
+    MqttControlPacket, MqttPacket as InternalMqttPacket,
+};
+use flowsdk::mqtt_serde::control_packet::MqttPacket;
+use flowsdk::mqtt_serde::mqttv5;
+use flowsdk::mqtt_serde::mqttv5::connack::MqttConnAck;
+use flowsdk::mqtt_serde::mqttv5::connect::MqttConnect;
+use flowsdk::mqtt_serde::mqttv5::suback::MqttSubAck;
+use flowsdk::mqtt_serde::parser::stream::MqttParser;
 // Import shared conversions and protobuf types
 use mqtt_grpc_proxy::mqttv5pb;
 use mqtt_grpc_proxy::mqttv5pb::mqtt_relay_service_client::MqttRelayServiceClient;

@@ -274,7 +274,7 @@ When `strict-protocol-compliance` is **enabled** (default), the library provides
 ## Examples
 
 ```rust
-use mqtt_grpc_duality::mqtt_serde::encode_utf8_string;
+use flowsdk::mqtt_serde::encode_utf8_string;
 
 // With strict-protocol-compliance enabled (default):
 let result = encode_utf8_string("hello\u{0000}world");
@@ -285,7 +285,7 @@ assert!(result.is_err()); // Rejected due to null character
 ```
 
 ```rust
-use mqtt_grpc_duality::mqtt_serde::mqttv5::subscribe::TopicSubscription;
+use flowsdk::mqtt_serde::mqttv5::subscribe::TopicSubscription;
 
 // With strict-protocol-compliance enabled:
 let result = TopicSubscription::from_bytes(b"$share/group/topic\x80"); // Invalid subscription options

@@ -1,5 +1,5 @@
 use dashmap::DashMap;
-use mqtt_grpc_duality::mqtt_serde::control_packet::{
+use flowsdk::mqtt_serde::control_packet::{
     MqttControlPacket, MqttPacket as InternalMqttPacket,
 };
 use std::sync::Arc;
@@ -15,8 +15,8 @@ use mqttv5pb::mqtt_relay_service_client::MqttRelayServiceClient;
 use mqttv5pb::mqtt_relay_service_server::{MqttRelayService, MqttRelayServiceServer};
 use mqttv5pb::{MqttPacket, RelayResponse};
 
-use mqtt_grpc_duality::mqtt_serde;
-use mqtt_grpc_duality::mqtt_serde::parser::stream::MqttParser;
+use flowsdk::mqtt_serde;
+use flowsdk::mqtt_serde::parser::stream::MqttParser;
 
 use crate::mpsc::Sender;
 use tokio::net::TcpSocket;

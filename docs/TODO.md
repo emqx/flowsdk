@@ -1,6 +1,6 @@
 # Project Improvement TODO List
 
-This document tracks the tasks for improving the `mqtt-grpc-duality` project.
+This document tracks the tasks for improving the `flowsdk` project.
 
 ## Code Quality 
 
