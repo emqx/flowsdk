@@ -9,6 +9,12 @@ pub struct MqttParser {
     buffer: BytesMut,
 }
 
+impl Default for MqttParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MqttParser {
     /// Creates a new, empty parser.
     pub fn new() -> Self {

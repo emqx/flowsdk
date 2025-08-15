@@ -266,7 +266,7 @@ mod tests {
         };
         assert_eq!(
             parsed,
-            MqttPacket::PubRec(MqttPubRec::new(2 as u16, 0x10, vec![]))
+            MqttPacket::PubRec(MqttPubRec::new(2_u16, 0x10, vec![]))
         );
     }
 }

@@ -61,7 +61,7 @@ impl MqttControlPacket for MqttPublish {
         if self.retain {
             val |= 0x01;
         }
-        return val;
+        val
     }
 
     fn variable_header(&self) -> Result<Vec<u8>, parser::ParseError> {
@@ -91,7 +91,7 @@ impl MqttControlPacket for MqttPublish {
     }
 
     fn from_bytes(buffer: &[u8]) -> Result<ParseOk, ParseError> {
-        let first_byte = *buffer.get(0).ok_or(ParseError::BufferTooShort)?;
+        let first_byte = *buffer.first().ok_or(ParseError::BufferTooShort)?;
         let packet_type = packet_type(buffer)?;
 
         // MQTT 5.0: 3.3.1 PUBLISH Fixed Header
@@ -182,9 +182,9 @@ impl MqttControlPacket for MqttPublish {
 
         let publish = MqttPublish {
             topic_name,
-            qos: qos,
-            dup: dup,
-            retain: retain,
+            qos,
+            dup,
+            retain,
             packet_id: packet_id_opt,
             payload,
             properties,

@@ -61,6 +61,7 @@ impl Error for ParseError {
 }
 
 #[derive(Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum ParseOk {
     Continue(usize, usize),    // (hint, consumed)
     Packet(MqttPacket, usize), // (packet, consumed)
@@ -107,7 +108,7 @@ pub fn parse_vbi(buffer: &[u8]) -> Result<(usize, usize), ParseError> {
 // Variable Byte Integer
 fn vbi(buffer: &[u8]) -> Result<(usize, usize), ParseError> {
     let (value, consumed) = VariableByteInteger::decode(buffer)?;
-    Ok((value as usize, consumed))
+    Ok((value, consumed))
 }
 
 pub mod stream;

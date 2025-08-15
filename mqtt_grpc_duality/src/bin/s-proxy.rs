@@ -20,10 +20,12 @@ use crate::mpsc::Sender;
 use tokio::net::TcpSocket;
 use tokio::sync::mpsc;
 
+type ConnectionInfo = (Sender<mqttv5pb::Publish>, MqttRelayServiceClient<Channel>);
+
 #[derive(Debug, Default)]
 pub struct MyRelay {
     // Shared state for managing connections - store both publish sender and gRPC client
-    connections: Arc<DashMap<String, (Sender<mqttv5pb::Publish>, MqttRelayServiceClient<Channel>)>>,
+    connections: Arc<DashMap<String, ConnectionInfo>>,
 }
 
 #[tonic::async_trait]

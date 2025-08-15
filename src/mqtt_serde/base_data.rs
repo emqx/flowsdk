@@ -193,64 +193,61 @@ mod tests {
             assert_eq!(encoded.len(), len);
         }
 
-        assert_eq!((0, 1), VariableByteInteger::decode(&vec![0x00]).unwrap());
-        assert_eq!(
-            (0, 1),
-            VariableByteInteger::decode(&vec![0x00, 0x00]).unwrap()
-        );
+        assert_eq!((0, 1), VariableByteInteger::decode(&[0x00]).unwrap());
+        assert_eq!((0, 1), VariableByteInteger::decode(&[0x00, 0x00]).unwrap());
         assert_eq!(
             (128, 2),
-            VariableByteInteger::decode(&vec![0x80, 0x01]).unwrap()
+            VariableByteInteger::decode(&[0x80, 0x01]).unwrap()
         );
         assert_eq!(
             (129, 2),
-            VariableByteInteger::decode(&vec![0x81, 0x01]).unwrap()
+            VariableByteInteger::decode(&[0x81, 0x01]).unwrap()
         );
         assert_eq!(
             (16383, 2),
-            VariableByteInteger::decode(&vec![0xff, 0x7f]).unwrap()
+            VariableByteInteger::decode(&[0xff, 0x7f]).unwrap()
         );
         assert_eq!(
             (16384, 3),
-            VariableByteInteger::decode(&vec![0x80, 0x80, 0x01]).unwrap()
+            VariableByteInteger::decode(&[0x80, 0x80, 0x01]).unwrap()
         );
         assert_eq!(
             (2097151, 3),
-            VariableByteInteger::decode(&vec![0xff, 0xff, 0x7f]).unwrap()
+            VariableByteInteger::decode(&[0xff, 0xff, 0x7f]).unwrap()
         );
         assert_eq!(
             (2097152, 4),
-            VariableByteInteger::decode(&vec![0x80, 0x80, 0x80, 0x01]).unwrap()
+            VariableByteInteger::decode(&[0x80, 0x80, 0x80, 0x01]).unwrap()
         );
         assert_eq!(
             (268435455, 4),
-            VariableByteInteger::decode(&vec![0xff, 0xff, 0xff, 0x7f]).unwrap()
+            VariableByteInteger::decode(&[0xff, 0xff, 0xff, 0x7f]).unwrap()
         );
 
         // test invalid
         assert!(matches!(
-            VariableByteInteger::decode(&vec![0xff, 0xff, 0xff, 0x81]),
+            VariableByteInteger::decode(&[0xff, 0xff, 0xff, 0x81]),
             Err(ParseError::ParseError(_))
         ));
         assert!(matches!(
-            VariableByteInteger::decode(&vec![0x80, 0x80, 0x80, 0x80]),
+            VariableByteInteger::decode(&[0x80, 0x80, 0x80, 0x80]),
             Err(ParseError::ParseError(_))
         ));
         assert!(matches!(
-            VariableByteInteger::decode(&vec![0xff, 0xff, 0xff, 0xff]),
+            VariableByteInteger::decode(&[0xff, 0xff, 0xff, 0xff]),
             Err(ParseError::ParseError(_))
         ));
 
         assert!(matches!(
-            VariableByteInteger::decode(&vec![0xff]),
+            VariableByteInteger::decode(&[0xff]),
             Err(ParseError::More(1, _))
         ));
         assert!(matches!(
-            VariableByteInteger::decode(&vec![0xff, 0xff]),
+            VariableByteInteger::decode(&[0xff, 0xff]),
             Err(ParseError::More(1, _))
         ));
         assert!(matches!(
-            VariableByteInteger::decode(&vec![0xff, 0x80, 0x80]),
+            VariableByteInteger::decode(&[0xff, 0x80, 0x80]),
             Err(ParseError::More(1, _))
         ));
     }

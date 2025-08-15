@@ -17,9 +17,9 @@ pub struct MqttConnAck {
 impl MqttConnAck {
     pub fn new(session_present: bool, reason_code: u8, properties: Option<Vec<Property>>) -> Self {
         MqttConnAck {
-            session_present: session_present,
-            reason_code: reason_code,
-            properties: properties,
+            session_present,
+            reason_code,
+            properties,
         }
     }
 }
@@ -38,7 +38,7 @@ impl MqttControlPacket for MqttConnAck {
         bytes.push(self.reason_code);
         // MQTT 5.0: 3.2.2.3, CONNACK Properties
         if let Some(properties) = &self.properties {
-            bytes.extend(encode_properities_hdr(&properties)?);
+            bytes.extend(encode_properities_hdr(properties)?);
         }
         Ok(bytes)
     }
@@ -55,7 +55,7 @@ impl MqttControlPacket for MqttConnAck {
 }
 
 pub fn parse_connack(buffer: &[u8]) -> Result<ParseOk, ParseError> {
-    let packet_type = packet_type(&buffer)?;
+    let packet_type = packet_type(buffer)?;
     if packet_type != ControlPacketType::CONNACK as u8 {
         return Err(ParseError::InvalidPacketType);
     }
@@ -125,7 +125,7 @@ mod tests {
                 assert_eq!(consumed, 24);
                 match packet {
                     MqttPacket::ConnAck(connack) => {
-                        assert_eq!(connack.session_present, false);
+                        assert!(!connack.session_present);
                         assert_eq!(connack.reason_code, 0);
                     }
                     _ => panic!("Invalid packet"),

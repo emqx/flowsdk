@@ -86,7 +86,7 @@ impl MqttControlPacket for MqttPubRel {
     }
 
     fn from_bytes(buffer: &[u8]) -> Result<ParseOk, ParseError> {
-        let first_byte = *buffer.get(0).ok_or(ParseError::BufferTooShort)?;
+        let first_byte = *buffer.first().ok_or(ParseError::BufferTooShort)?;
         let packet_type = packet_type(buffer)?;
 
         if packet_type != ControlPacketType::PUBREL as u8 {

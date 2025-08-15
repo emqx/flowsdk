@@ -38,7 +38,6 @@ enum PropertyID {
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-
 pub enum Property {
     PayloadFormatIndicator(u8),
     MessageExpiryInterval(u32),
@@ -476,10 +475,7 @@ mod tests {
 
     #[test]
     fn test_encode_zero_len_properties_hdrs() {
-        assert_eq!(
-            vec![0x00 as u8],
-            encode_properities_hdr(&Vec::new()).unwrap()
-        );
+        assert_eq!(vec![0x00_u8], encode_properities_hdr(&Vec::new()).unwrap());
     }
 
     #[test]
