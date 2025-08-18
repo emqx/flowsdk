@@ -1,6 +1,10 @@
-# MQTT-gRPC Duality
+# flowSDK
 
-A high-performance MQTT v5.0 protocol implementation with bidirectional gRPC streaming support for modern distributed systems.
+The developer toolkit for modern 
+
+## Current Status
+
+Developing in private REPO.
 
 ## Project Structure
 
@@ -54,13 +58,11 @@ gRPC Clients → r-proxy → gRPC → s-proxy → MQTT Broker
 ### Component Details
 
 #### Core Library Components
-- **`simple-server`**: Basic gRPC server implementation
-- **`simple-client`**: Basic gRPC client example  
-- **`s-client`**: Streaming client example
+- **`mqtt_serde`**: "Encoder and Decoder, serialization and deserialization of MQTT packets"
+
 
 #### Proxy Components (in `mqtt_grpc_duality/` workspace)
-- **`r-proxy`**: Client-facing proxy - receives gRPC calls and forwards to s-proxy
-- **`s-proxy`**: Server-side proxy - connects to MQTT broker and handles bidirectional communication
+see [mqtt_grpc_duality README.md](mqtt_grpc_duality/README.md)
 
 ## Features
 
@@ -71,11 +73,6 @@ gRPC Clients → r-proxy → gRPC → s-proxy → MQTT Broker
 - ✅ Authentication and session management
 - ✅ Protocol compliance validation
 
-### gRPC Integration
-- ✅ Bidirectional streaming for real-time communication
-- ✅ Efficient protobuf serialization
-- ✅ Connection pooling and session management
-- ✅ Error handling and status reporting
 
 ### Performance & Reliability
 - ✅ Zero-copy deserialization where possible
@@ -129,37 +126,6 @@ cd mqtt_grpc_duality && cargo test     # Proxy workspace tests
 
 ## Usage Examples
 
-### Basic gRPC Client
-```rust
-use mqttv5pb::mqtt_relay_service_client::MqttRelayServiceClient;
-use mqttv5pb::Connect;
-
-let mut client = MqttRelayServiceClient::connect("http://[::1]:50516").await?;
-
-let connect = Connect {
-    client_id: "test-client".to_string(),
-    username: "user".to_string(), 
-    // ... other fields
-};
-
-let response = client.mqtt_connect(connect).await?;
-```
-
-### Running the Full Stack
-```bash
-# 1. Start MQTT broker (e.g., mosquitto on port 1883)
-mosquitto -p 1883
-
-# 2. Start the proxy stack
-# Terminal 1:
-cd mqtt_grpc_duality && cargo run --bin s-proxy
-
-# Terminal 2: 
-cd mqtt_grpc_duality && cargo run --bin r-proxy
-
-# 3. Run a client application
-cargo run --bin simple-client
-```
 
 ## Protocol Compliance
 
