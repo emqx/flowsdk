@@ -57,3 +57,6 @@ This document tracks the tasks for improving the `flowsdk` project.
 - MaximumPacketSize enforcement needs integration with buffer size management
 - Boolean property validation can be added as feature-gated checks in property decoding
 - Property context validation requires cross-referencing with packet flags during validation
+
+## Session Management
+- [ ] Implement MQTT topic matching with wildcards (+ and #) for message routing in the server session.
