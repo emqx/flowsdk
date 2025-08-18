@@ -1,0 +1,7 @@
+name  old req compatible latest  new req
+====  ======= ========== ======  =======
+tokio 1.0     1.47.1     1.47.1  1.47   
+serde 1.0.218 1.0.219    1.0.219 1.0.219
+name  old req compatible latest new req
+====  ======= ========== ====== =======
+tokio 1.40    1.47.1     1.47.1 1.47   
