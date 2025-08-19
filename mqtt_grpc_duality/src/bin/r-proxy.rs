@@ -77,7 +77,7 @@ async fn handle_new_streaming_conn(
     state: Arc<RProxyState>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Split stream to read and write halves
-    let (mut read_half, mut write_half) = incoming.into_split();
+    let (mut read_half, write_half) = incoming.into_split();
     let mut parser: MqttParser = MqttParser::new();
 
     // Wait for MQTT Connect packet
@@ -123,27 +123,10 @@ async fn handle_new_streaming_conn(
     // Establish gRPC streaming connection
     let outbound_stream = ReceiverStream::new(stream_receiver);
     let request = Request::new(outbound_stream);
-    let mut inbound_stream = grpc_client
+    let inbound_stream = grpc_client
         .stream_mqtt_messages(request)
         .await?
         .into_inner();
-
-    // Wait for ConnAck from s-proxy
-    if let Some(Ok(connack_msg)) = inbound_stream.next().await {
-        if let Some(mqttv5pb::mqtt_stream_message::Payload::Connack(connack)) = connack_msg.payload
-        {
-            // Send ConnAck to MQTT client
-            let mqtt_connack: MqttConnAck = connack.into();
-            let connack_bytes = mqtt_connack.to_bytes()?;
-            write_half.write_all(&connack_bytes).await?;
-
-            info!("ConnAck sent to client {}", client_id);
-        } else {
-            return Err("Expected ConnAck from s-proxy".into());
-        }
-    } else {
-        return Err("Failed to receive ConnAck from s-proxy".into());
-    }
 
     // Store connection for management
     let streaming_conn = StreamingClientConnection {
@@ -155,7 +138,7 @@ async fn handle_new_streaming_conn(
         grpc_stream_receiver: response_receiver,
     };
 
-    // Start the message handling loops
+    // Start the message handling loops (ConnAck will be handled in the loop)
     start_streaming_client_loop(streaming_conn, inbound_stream, state).await?;
 
     Ok(())
@@ -204,12 +187,49 @@ async fn start_streaming_client_loop(
             msg = inbound_stream.next() => {
                 match msg {
                     Some(Ok(stream_msg)) => {
-                        if let Some(payload) = stream_msg.payload {
-                            if let Some(mqtt_bytes) = convert_stream_payload_to_mqtt_bytes(&payload) {
+                        if let Some(payload) = &stream_msg.payload {
+                            // Convert all payloads (including ConnAck) to MQTT bytes and forward
+                            if let Some(mqtt_bytes) = convert_stream_payload_to_mqtt_bytes(payload) {
                                 if let Err(e) = conn.write_h.write_all(&mqtt_bytes).await {
                                     eprintln!("Error writing to MQTT client: {}", e);
                                     break;
                                 }
+
+                                // Log specific message types for debugging
+                                match payload {
+                                    mqttv5pb::mqtt_stream_message::Payload::Connack(_) => {
+                                        info!("ConnAck forwarded to client {}", conn.client_id);
+                                    }
+                                    mqttv5pb::mqtt_stream_message::Payload::Publish(_) => {
+                                        info!("Publish message forwarded to client {}", conn.client_id);
+                                    }
+                                    mqttv5pb::mqtt_stream_message::Payload::Suback(_) => {
+                                        info!("SubAck forwarded to client {}", conn.client_id);
+                                    }
+                                    mqttv5pb::mqtt_stream_message::Payload::Unsuback(_) => {
+                                        info!("UnsubAck forwarded to client {}", conn.client_id);
+                                    }
+                                    mqttv5pb::mqtt_stream_message::Payload::Puback(_) => {
+                                        info!("PubAck forwarded to client {}", conn.client_id);
+                                    }
+                                    mqttv5pb::mqtt_stream_message::Payload::Pubrec(_) => {
+                                        info!("PubRec forwarded to client {}", conn.client_id);
+                                    }
+                                    mqttv5pb::mqtt_stream_message::Payload::Pubrel(_) => {
+                                        info!("PubRel forwarded to client {}", conn.client_id);
+                                    }
+                                    mqttv5pb::mqtt_stream_message::Payload::Pubcomp(_) => {
+                                        info!("PubComp forwarded to client {}", conn.client_id);
+                                    }
+                                    mqttv5pb::mqtt_stream_message::Payload::Pingresp(_) => {
+                                        info!("PingResp forwarded to client {}", conn.client_id);
+                                    }
+                                    _ => {
+                                        info!("Message forwarded to client {}", conn.client_id);
+                                    }
+                                }
+                            } else {
+                                eprintln!("Failed to convert payload to MQTT bytes: {:?}", payload);
                             }
                         }
                     }
