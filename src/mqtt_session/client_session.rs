@@ -32,20 +32,31 @@ impl ClientSession {
 
     pub fn handle_outgoing_publish(&mut self, publish: MqttPublish) {
         let packet_id = publish.packet_id.unwrap();
-        // Store the publish message in unacknowledged_publishes if QoS > 0
-        // This allows us to track messages that need acknowledgment.
-        // QoS 0 messages do not require acknowledgment and are not stored.
-        // QoS 1 messages will be acknowledged with a PUBACK.
-        // QoS 2 messages will go through PUBREC, PUBREL, and PUBCOMP.
         if publish.qos > 0 && !self.unacknowledged_publishes.contains_key(&packet_id) {
             self.unacknowledged_publishes.insert(packet_id, publish);
         }
     }
 
-    pub fn handle_incoming_publish(&mut self, publish: MqttPublish) {
-        if publish.qos == 2 {
-            // The client should respond with a PUBREC packet.
-            // This logic will be handled by the caller.
+    pub fn handle_outgoing_pubrel(&mut self, pubrel: MqttPubRel) {
+        self.unacknowledged_pubrels.insert(pubrel.packet_id, pubrel);
+    }
+
+    pub fn handle_incoming_publish(&mut self, publish: MqttPublish) -> Option<MqttPacket> {
+        match publish.qos {
+            1 => Some(MqttPacket::PubAck(MqttPubAck {
+                packet_id: publish.packet_id.unwrap(),
+                reason_code: 0,
+                properties: Vec::new(),
+            })),
+            2 => {
+                let pubrec = MqttPubRec {
+                    packet_id: publish.packet_id.unwrap(),
+                    reason_code: 0,
+                    properties: Vec::new(),
+                };
+                Some(MqttPacket::PubRec(pubrec))
+            }
+            _ => None,
         }
     }
 
@@ -60,7 +71,6 @@ impl ClientSession {
                 reason_code: 0,
                 properties: Vec::new(),
             };
-            self.unacknowledged_pubrels.insert(pubrec.packet_id, pubrel.clone());
             self.unacknowledged_publishes.remove(&pubrec.packet_id);
             Some(pubrel)
         } else {
@@ -69,8 +79,12 @@ impl ClientSession {
         }
     }
 
-    pub fn handle_incoming_pubrel(&mut self, _pubrel: MqttPubRel) {
-        // This is not expected on the client side in a simple implementation
+    pub fn handle_incoming_pubrel(&mut self, pubrel: MqttPubRel) -> MqttPubComp {
+        MqttPubComp {
+            packet_id: pubrel.packet_id,
+            reason_code: 0,
+            properties: Vec::new(),
+        }
     }
 
     pub fn handle_incoming_pubcomp(&mut self, pubcomp: MqttPubComp) {
