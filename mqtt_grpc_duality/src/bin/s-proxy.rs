@@ -4,6 +4,7 @@ use std::sync::Arc;
 use std::{env, net::SocketAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tonic::{transport::Server, Request, Response, Status};
+use tracing::{debug, error, info};
 
 // Import shared conversions and protobuf types from the proxy workspace
 use mqtt_grpc_proxy::mqttv5pb;
@@ -59,7 +60,7 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<MqttPacket>,
     ) -> Result<Response<RelayResponse>, Status> {
-        println!("Got a request: {:?}", request);
+        debug!("Received relay packet request: {:?}", request);
 
         let reply = RelayResponse {
             status_code: 0,
@@ -73,7 +74,9 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<mqttv5pb::Connect>,
     ) -> Result<Response<mqttv5pb::Connack>, Status> {
-        println!("Got a connect request: {:?}", request);
+        let client_id = &request.get_ref().client_id;
+        info!("MQTT Connect request from client: {}", client_id);
+        debug!("Connect request details: {:?}", request);
 
         let clientid = request.get_ref().client_id.clone();
         let (tx, rx) = mpsc::channel::<BrokerControlMessage>(32);
@@ -113,8 +116,8 @@ impl MqttRelayService for MyRelay {
                 attempts += 1;
                 if attempts > 100 {
                     // 10 seconds timeout
-                    eprintln!(
-                        "Timeout waiting for stream connection for client {}",
+                    error!(
+                        "Timeout waiting for stream connection for client: {}",
                         client_id_for_task
                     );
                     return;
@@ -140,24 +143,29 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<mqttv5pb::Publish>,
     ) -> Result<Response<mqttv5pb::Puback>, Status> {
-        println!("Got a publish request: {:?}", request);
         let msg_id = request.get_ref().message_id;
+        debug!("MQTT Publish QoS1 request, message_id: {}", msg_id);
 
         let req_meta = request.metadata().get("x-client-id");
         if let Some(client_id) = req_meta.and_then(|v| v.to_str().ok()) {
-            println!("Client ID: {}", client_id);
+            debug!("Processing publish for client: {}", client_id);
 
             if let Some(connection) = self.connections.get(client_id) {
                 let (tx, _, _) = connection.value();
+                let publish_msg = request.get_ref().clone();
                 if tx
-                    .send(BrokerControlMessage::Publish(request.into_inner().clone()))
+                    .send(BrokerControlMessage::Publish(publish_msg))
                     .await
                     .is_ok()
                 {
-                    println!("Publish message sent successfully to broker channel.");
+                    debug!(
+                        "Publish message forwarded to broker for client: {}",
+                        client_id
+                    );
                 } else {
-                    eprintln!(
-                        "Failed to send publish message to broker channel, receiver dropped."
+                    error!(
+                        "Failed to forward publish message for client: {}, broker channel closed",
+                        client_id
                     );
                     return Err(Status::internal(
                         "Failed to send publish message, client task may have died.",
@@ -186,7 +194,8 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<mqttv5pb::Subscribe>,
     ) -> Result<Response<mqttv5pb::Suback>, Status> {
-        println!("Got a request: {:?}", request);
+        let message_id = request.get_ref().message_id;
+        debug!("MQTT Subscribe request, message_id: {}", message_id);
 
         let m = mqttv5pb::Suback {
             message_id: request.get_ref().message_id,
@@ -200,7 +209,8 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<mqttv5pb::Puback>,
     ) -> Result<Response<RelayResponse>, Status> {
-        println!("Got a PubAck request: {:?}", request);
+        let message_id = request.get_ref().message_id;
+        debug!("MQTT PubAck request, message_id: {}", message_id);
 
         // In s-proxy, PubAck typically doesn't need to be forwarded to broker
         // as it's an acknowledgment from client to server
@@ -215,7 +225,11 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<mqttv5pb::Pubrec>,
     ) -> Result<Response<mqttv5pb::Pubrel>, Status> {
-        println!("Got a PubRec request: {:?}", request);
+        let message_id = request.get_ref().message_id;
+        debug!(
+            "MQTT PubRec request, message_id: {} - responding with PubRel",
+            message_id
+        );
 
         // For QoS 2 flow, respond with PubRel
         let pubrel = mqttv5pb::Pubrel {
@@ -230,7 +244,11 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<mqttv5pb::Pubrel>,
     ) -> Result<Response<mqttv5pb::Pubcomp>, Status> {
-        println!("Got a PubRel request: {:?}", request);
+        let message_id = request.get_ref().message_id;
+        debug!(
+            "MQTT PubRel request, message_id: {} - completing QoS 2 flow with PubComp",
+            message_id
+        );
 
         // Complete QoS 2 flow with PubComp
         let pubcomp = mqttv5pb::Pubcomp {
@@ -245,7 +263,8 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<mqttv5pb::Pubcomp>,
     ) -> Result<Response<RelayResponse>, Status> {
-        println!("Got a PubComp request: {:?}", request);
+        let message_id = request.get_ref().message_id;
+        debug!("MQTT PubComp request, message_id: {}", message_id);
 
         let reply = RelayResponse {
             status_code: 0,
@@ -258,7 +277,12 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<mqttv5pb::Unsubscribe>,
     ) -> Result<Response<mqttv5pb::Unsuback>, Status> {
-        println!("Got an Unsubscribe request: {:?}", request);
+        let message_id = request.get_ref().message_id;
+        let topic_count = request.get_ref().topic_filters.len();
+        debug!(
+            "MQTT Unsubscribe request, message_id: {}, topics: {}",
+            message_id, topic_count
+        );
 
         // TODO: Forward unsubscribe to broker if needed
         let topic_count = request.get_ref().topic_filters.len();
@@ -272,9 +296,9 @@ impl MqttRelayService for MyRelay {
 
     async fn mqtt_pingreq(
         &self,
-        request: Request<mqttv5pb::Pingreq>,
+        _request: Request<mqttv5pb::Pingreq>,
     ) -> Result<Response<mqttv5pb::Pingresp>, Status> {
-        println!("Got a PingReq request: {:?}", request);
+        debug!("MQTT PingReq request - responding with PingResp");
 
         // Respond immediately with PingResp
         let pingresp = mqttv5pb::Pingresp {};
@@ -285,12 +309,12 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<mqttv5pb::Disconnect>,
     ) -> Result<Response<RelayResponse>, Status> {
-        println!("Got a Disconnect request: {:?}", request);
+        debug!("MQTT Disconnect request");
 
         // TODO: Clean up client connection
         let req_meta = request.metadata().get("x-client-id");
         if let Some(client_id) = req_meta.and_then(|v| v.to_str().ok()) {
-            println!("Disconnecting client: {}", client_id);
+            info!("Disconnecting client: {}", client_id);
             self.connections.remove(client_id);
         }
 
@@ -305,7 +329,8 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<mqttv5pb::Auth>,
     ) -> Result<Response<mqttv5pb::Auth>, Status> {
-        println!("Got an Auth request: {:?}", request);
+        let reason_code = request.get_ref().reason_code;
+        debug!("MQTT Auth request, reason_code: {}", reason_code);
 
         // TODO: Handle authentication logic
         let auth_response = mqttv5pb::Auth {
@@ -319,7 +344,8 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<mqttv5pb::Suback>,
     ) -> Result<Response<RelayResponse>, Status> {
-        println!("Got a SubAck request: {:?}", request);
+        let message_id = request.get_ref().message_id;
+        debug!("MQTT SubAck request, message_id: {}", message_id);
 
         let reply = RelayResponse {
             status_code: 0,
@@ -332,7 +358,8 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<mqttv5pb::Unsuback>,
     ) -> Result<Response<RelayResponse>, Status> {
-        println!("Got an UnsubAck request: {:?}", request);
+        let message_id = request.get_ref().message_id;
+        debug!("MQTT UnsubAck request, message_id: {}", message_id);
 
         let reply = RelayResponse {
             status_code: 0,
@@ -349,7 +376,7 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<tonic::Streaming<mqttv5pb::MqttStreamMessage>>,
     ) -> Result<Response<Self::StreamMqttMessagesStream>, Status> {
-        println!("Got a streaming request: stream_mqtt_messages");
+        info!("Initiating bidirectional MQTT stream");
 
         let mut incoming_stream = request.into_inner();
         let (response_tx, response_rx) = tokio::sync::mpsc::channel(128);
@@ -359,7 +386,10 @@ impl MqttRelayService for MyRelay {
         // Handle the bidirectional stream
         tokio::spawn(async move {
             while let Some(Ok(stream_msg)) = incoming_stream.next().await {
-                println!("Received stream message: {:?}", stream_msg);
+                debug!(
+                    "Received stream message for session: {}",
+                    stream_msg.session_id
+                );
 
                 match stream_msg.payload {
                     Some(mqttv5pb::mqtt_stream_message::Payload::SessionControl(
@@ -698,15 +728,16 @@ async fn mqtt_connect_to_broker(
     socket.set_reuseaddr(true)?;
     let mut stream = socket.connect(broker_addr).await?;
     let data = msg.to_bytes().unwrap(); //@FIXME unwrap
-    println!(
-        "Connecting to MQTT broker at {} with data {:?}",
-        broker_addr, data
+    debug!(
+        "Connecting to MQTT broker at {} with {} bytes",
+        broker_addr,
+        data.len()
     );
     stream
         .write_all(&data)
         .await
         .map_err(|e| Status::internal(e.to_string()))?;
-    println!("CONNECT packet sent to MQTT broker at {}", broker_addr);
+    info!("CONNECT packet sent to MQTT broker at {}", broker_addr);
     Ok(stream)
 }
 
@@ -715,11 +746,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 3 {
-        eprintln!(
+        error!(
             "Usage: {} <grpc_listen_port> <broker_host>:<broker_port>",
             args[0]
         );
-        eprintln!("Example: {} 50515 127.0.0.1:1883", args[0]);
+        error!("Example: {} 50515 127.0.0.1:1883", args[0]);
         return Err("Invalid number of arguments".into());
     }
 
@@ -729,9 +760,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let grpc_addr = format!("127.0.0.1:{}", grpc_listen_port).parse()?;
     let relay = MyRelay::new(broker_addr);
 
-    println!("s-proxy starting:");
-    println!("  gRPC server listening on: {}", grpc_addr);
-    println!("  MQTT broker address: {}", broker_addr);
+    info!("s-proxy starting:");
+    info!("  gRPC server listening on: {}", grpc_addr);
+    info!("  MQTT broker address: {}", broker_addr);
 
     Server::builder()
         .add_service(MqttRelayServiceServer::new(relay))
@@ -753,7 +784,7 @@ async fn mqtt_client_loop_simple(
     loop {
         tokio::select! {
             Some(control_msg) = rx.recv() => {
-                println!("Received control message: {:?}", control_msg);
+                debug!("Processing control message for broker");
 
                 // Convert control message to MQTT bytes and send to broker
                 let mqtt_bytes = match control_msg {
@@ -796,20 +827,20 @@ async fn mqtt_client_loop_simple(
                 };
 
                 if let Err(e) = stream.write_all(&mqtt_bytes).await {
-                    eprintln!("Failed to write to broker: {}", e);
+                    error!("Failed to write to broker: {}", e);
                     break;
                 }
             }
             result = stream.read_buf(parser.buffer_mut()) => {
                 match result {
                     Ok(0) => {
-                        println!("Connection closed by the broker");
+                        info!("Connection closed by the broker");
                         break;
                     }
                     Ok(n) => {
-                        println!("Read {} bytes from broker", n);
+                        debug!("Read {} bytes from broker", n);
                         while let Ok(Some(packet)) = parser.next_packet() {
-                            println!("Received packet from broker: {:?}", packet);
+                            debug!("Received packet from broker: {:?}", packet);
 
                             // Convert MQTT packet to gRPC stream message and forward to r-proxy
                             if let Some(payload) = convert_mqtt_to_stream_payload(&packet) {
@@ -823,14 +854,14 @@ async fn mqtt_client_loop_simple(
                                 sequence_counter += 1;
 
                                 if let Err(e) = response_tx.send(Ok(stream_msg)).await {
-                                    eprintln!("Failed to send message to r-proxy via stream: {}", e);
+                                    error!("Failed to send message to r-proxy via stream: {}", e);
                                     break;
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        eprintln!("Error reading from stream: {}", e);
+                        error!("Error reading from stream: {}", e);
                         break;
                     }
                 }
@@ -897,7 +928,7 @@ fn convert_mqtt_to_stream_payload(
             auth.clone().into(),
         )),
         _ => {
-            println!("Unhandled packet type from broker: {:?}", packet);
+            debug!("Unhandled packet type from broker: {:?}", packet);
             None
         }
     }
