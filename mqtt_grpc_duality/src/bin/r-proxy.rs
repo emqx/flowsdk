@@ -10,6 +10,7 @@ use flowsdk::mqtt_serde::mqttv5::connack::MqttConnAck;
 use flowsdk::mqtt_serde::mqttv5::connect::MqttConnect;
 use flowsdk::mqtt_serde::mqttv5::suback::MqttSubAck;
 use flowsdk::mqtt_serde::parser::stream::MqttParser;
+use flowsdk::mqtt_serde::parser::ParseError;
 // Import shared conversions and protobuf types
 use mqtt_grpc_proxy::mqttv5pb;
 use mqtt_grpc_proxy::mqttv5pb::mqtt_relay_service_client::MqttRelayServiceClient;
@@ -96,29 +97,31 @@ async fn handle_new_streaming_conn(
     );
 
     // Connect to s-proxy with streaming
+    let channel = tonic::transport::Channel::from_shared(format!("http://{}", destination))?
+        .keep_alive_while_idle(true)
+        .keep_alive_timeout(std::time::Duration::from_secs(30))
+        .keep_alive_while_idle(true)
+        .connect()
+        .await?;
+
     let mut grpc_client: MqttRelayServiceClient<tonic::transport::Channel> =
-        MqttRelayServiceClient::connect(format!("http://{}", destination)).await?;
+        MqttRelayServiceClient::new(channel);
 
     // Create bidirectional streaming channels
     let (stream_sender, stream_receiver) = mpsc::channel(1000);
     let (_response_sender, response_receiver) = mpsc::channel(1000);
 
-    // Send session establishment message
-    let session_control = mqttv5pb::SessionControl {
-        control_type: mqttv5pb::session_control::ControlType::Establish as i32,
-        client_id: client_id.clone(),
-    };
-
-    let establish_msg = mqttv5pb::MqttStreamMessage {
+    // Convert MQTT Connect to protobuf Connect and send directly
+    let connect_msg: mqttv5pb::MqttStreamMessage = mqttv5pb::MqttStreamMessage {
         session_id: session_id.clone(),
         sequence_id: 0,
         direction: mqttv5pb::MessageDirection::ClientToBroker as i32,
-        payload: Some(mqttv5pb::mqtt_stream_message::Payload::SessionControl(
-            session_control,
+        payload: Some(mqttv5pb::mqtt_stream_message::Payload::Connect(
+            connect.into(), // Direct conversion from MQTT Connect to protobuf Connect
         )),
     };
 
-    stream_sender.send(establish_msg).await?;
+    stream_sender.send(connect_msg).await?;
 
     // Establish gRPC streaming connection
     let outbound_stream = ReceiverStream::new(stream_receiver);
@@ -157,7 +160,7 @@ async fn start_streaming_client_loop(
             // Handle messages from MQTT client
             _ = conn.read_h.read_buf(parser.buffer_mut()) => {
                 match parser.next_packet() {
-                    Ok(Some(packet)) => {
+                    Ok(Some(packet))=> {
                         debug!("Parsed MQTT packet from client {}: {:?}", conn.client_id, packet);
                         // Convert MQTT packet to gRPC stream message
                         if let Some(payload) = convert_mqtt_to_stream_payload(&packet) {
@@ -178,6 +181,11 @@ async fn start_streaming_client_loop(
                     }
                     Ok(None) => {
                         // Incomplete packet, continue
+                        // @TODO: handle ParseOK::Continue and use the hint to read more data
+                    }
+                    Err(ParseError::BufferEmpty) => {
+                        // No data to read, continue waiting
+                        break;
                     }
                     Err(e) => {
                         error!("Error parsing MQTT packet from client {}: {}", conn.client_id, e);
@@ -201,34 +209,34 @@ async fn start_streaming_client_loop(
                                 // Log specific message types for debugging
                                 match payload {
                                     mqttv5pb::mqtt_stream_message::Payload::Connack(_) => {
-                                        info!("ConnAck forwarded to client {}", conn.client_id);
+                                        debug!("ConnAck forwarded to client {}", conn.client_id);
                                     }
                                     mqttv5pb::mqtt_stream_message::Payload::Publish(_) => {
-                                        info!("Publish message forwarded to client {}", conn.client_id);
+                                        debug!("Publish message forwarded to client {}", conn.client_id);
                                     }
                                     mqttv5pb::mqtt_stream_message::Payload::Suback(_) => {
-                                        info!("SubAck forwarded to client {}", conn.client_id);
+                                        debug!("SubAck forwarded to client {}", conn.client_id);
                                     }
                                     mqttv5pb::mqtt_stream_message::Payload::Unsuback(_) => {
-                                        info!("UnsubAck forwarded to client {}", conn.client_id);
+                                        debug!("UnsubAck forwarded to client {}", conn.client_id);
                                     }
                                     mqttv5pb::mqtt_stream_message::Payload::Puback(_) => {
-                                        info!("PubAck forwarded to client {}", conn.client_id);
+                                        debug!("PubAck forwarded to client {}", conn.client_id);
                                     }
                                     mqttv5pb::mqtt_stream_message::Payload::Pubrec(_) => {
-                                        info!("PubRec forwarded to client {}", conn.client_id);
+                                        debug!("PubRec forwarded to client {}", conn.client_id);
                                     }
                                     mqttv5pb::mqtt_stream_message::Payload::Pubrel(_) => {
-                                        info!("PubRel forwarded to client {}", conn.client_id);
+                                        debug!("PubRel forwarded to client {}", conn.client_id);
                                     }
                                     mqttv5pb::mqtt_stream_message::Payload::Pubcomp(_) => {
-                                        info!("PubComp forwarded to client {}", conn.client_id);
+                                        debug!("PubComp forwarded to client {}", conn.client_id);
                                     }
                                     mqttv5pb::mqtt_stream_message::Payload::Pingresp(_) => {
-                                        info!("PingResp forwarded to client {}", conn.client_id);
+                                        debug!("PingResp forwarded to client {}", conn.client_id);
                                     }
                                     _ => {
-                                        info!("Message forwarded to client {}", conn.client_id);
+                                        debug!("Message forwarded to client {}", conn.client_id);
                                     }
                                 }
                             } else {

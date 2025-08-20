@@ -392,104 +392,59 @@ impl MqttRelayService for MyRelay {
                 );
 
                 match stream_msg.payload {
-                    Some(mqttv5pb::mqtt_stream_message::Payload::SessionControl(
-                        session_control,
-                    )) => {
-                        // Handle session establishment
-                        if session_control.control_type
-                            == mqttv5pb::session_control::ControlType::Establish as i32
-                        {
-                            println!(
-                                "Establishing session for client: {}",
-                                session_control.client_id
-                            );
+                    Some(mqttv5pb::mqtt_stream_message::Payload::Connect(connect)) => {
+                        // Handle MQTT Connect message directly
+                        let client_id = connect.client_id.clone();
+                        info!("Received Connect from client: {}", client_id);
 
-                            // Update or create connection with response stream sender
-                            if let Some(mut conn) = connections.get_mut(&session_control.client_id)
-                            {
-                                conn.1 = response_tx.clone();
-                                conn.2 = stream_msg.session_id.clone(); // Update with the actual session_id from r-proxy
-                            } else {
-                                // Create new connection info for streaming-only clients
-                                println!(
-                                    "Creating new connection for streaming client: {}",
-                                    session_control.client_id
-                                );
+                        // Create broker connection for this client
+                        let connections = connections.clone();
+                        let response_tx_for_spawn = response_tx.clone();
+                        let session_id = stream_msg.session_id.clone();
 
-                                // Create broker TCP connection for this client
-                                let connect_pb = mqttv5pb::Connect {
-                                    protocol_name: "MQTT".to_string(),
-                                    protocol_version: 5,
-                                    client_id: session_control.client_id.clone(),
-                                    clean_start: true,
-                                    keep_alive: 60,
-                                    properties: vec![],
-                                    will: None,
-                                    username: String::new(),
-                                    password: vec![],
-                                };
+                        tokio::spawn(async move {
+                            let connect_request = tonic::Request::new(connect);
+                            match mqtt_connect_to_broker(connect_request, broker_addr).await {
+                                Ok(stream) => {
+                                    let (broker_tx, broker_rx) =
+                                        tokio::sync::mpsc::channel::<BrokerControlMessage>(32);
 
-                                let connect_request = tonic::Request::new(connect_pb);
-                                match mqtt_connect_to_broker(connect_request, broker_addr).await {
-                                    Ok(stream) => {
-                                        let (broker_tx, broker_rx) =
-                                            tokio::sync::mpsc::channel::<BrokerControlMessage>(32);
+                                    // Store connection info
+                                    connections.insert(
+                                        client_id.clone(),
+                                        (
+                                            broker_tx,
+                                            response_tx_for_spawn.clone(),
+                                            session_id.clone(),
+                                        ),
+                                    );
 
-                                        // Store connection info
-                                        connections.insert(
-                                            session_control.client_id.clone(),
-                                            (
-                                                broker_tx,
-                                                response_tx.clone(),
-                                                stream_msg.session_id.clone(),
-                                            ),
-                                        );
+                                    info!(
+                                        "Broker connection established for client: {}",
+                                        client_id
+                                    );
 
-                                        // Start broker message loop
-                                        let response_tx_clone = response_tx.clone();
-                                        let session_id_clone = stream_msg.session_id.clone();
-                                        tokio::spawn(async move {
-                                            mqtt_client_loop_simple(
-                                                broker_rx,
-                                                stream,
-                                                response_tx_clone,
-                                                session_id_clone,
-                                            )
-                                            .await;
-                                        });
-
-                                        println!("Broker connection established for streaming client: {}", session_control.client_id);
-                                    }
-                                    Err(e) => {
-                                        eprintln!(
-                                            "Failed to connect to broker for client {}: {}",
-                                            session_control.client_id, e
-                                        );
-                                        // Create dummy connection to prevent errors
-                                        let (dummy_tx, _) =
-                                            tokio::sync::mpsc::channel::<BrokerControlMessage>(1);
-                                        connections.insert(
-                                            session_control.client_id.clone(),
-                                            (
-                                                dummy_tx,
-                                                response_tx.clone(),
-                                                stream_msg.session_id.clone(),
-                                            ),
-                                        );
-                                    }
+                                    // Start the MQTT client loop to handle broker communication
+                                    mqtt_client_loop_simple(
+                                        broker_rx,
+                                        stream,
+                                        response_tx_for_spawn,
+                                        session_id,
+                                    )
+                                    .await;
+                                }
+                                Err(e) => {
+                                    error!(
+                                        "Failed to connect to broker for client {}: {}",
+                                        client_id, e
+                                    );
                                 }
                             }
-
-                            // ConnAck will be sent by the broker and forwarded via mqtt_client_loop_simple
-                            println!(
-                                "Session established for client: {}, awaiting broker ConnAck",
-                                session_control.client_id
-                            );
-                        }
+                        });
                     }
                     Some(mqttv5pb::mqtt_stream_message::Payload::Publish(publish)) => {
                         // Forward publish messages to broker via the publish channel
-                        println!("Received publish from stream: {:?}", publish);
+                        debug!("Received publish from stream: {:?}", publish);
 
                         // Extract client ID from session or use a default lookup mechanism
                         if let Some(client_id) =
@@ -501,19 +456,19 @@ impl MqttRelayService for MyRelay {
                                     .send(BrokerControlMessage::Publish(publish))
                                     .await
                                 {
-                                    eprintln!(
+                                    error!(
                                         "Failed to forward publish to broker for client {}: {}",
                                         client_id, e
                                     );
                                 }
                             }
                         } else {
-                            eprintln!("No client found for session: {}", stream_msg.session_id);
+                            error!("No client found for session: {}", stream_msg.session_id);
                         }
                     }
                     Some(mqttv5pb::mqtt_stream_message::Payload::Subscribe(subscribe)) => {
                         // Forward subscribe messages to broker
-                        println!("Received subscribe from stream: {:?}", subscribe);
+                        debug!("Received subscribe from stream: {:?}", subscribe);
 
                         // Find the connection and forward Subscribe to broker
                         if let Some(client_id) =
@@ -527,28 +482,28 @@ impl MqttRelayService for MyRelay {
                                     .send(BrokerControlMessage::Subscribe(subscribe.clone()))
                                     .await
                                 {
-                                    eprintln!("Failed to send Subscribe to broker: {}", e);
+                                    error!("Failed to send Subscribe to broker: {}", e);
                                 } else {
-                                    println!("Subscribe forwarded to broker for client: {} with topics: {:?}", 
+                                    debug!("Subscribe forwarded to broker for client: {} with topics: {:?}",
                                         client_id, subscribe.subscriptions);
                                 }
 
                                 // Note: SubAck will be generated by broker and forwarded via mqtt_client_loop_simple
                             } else {
-                                eprintln!("Connection info not found for client: {}", client_id);
+                                error!("Connection info not found for client: {}", client_id);
                             }
                         } else {
-                            eprintln!("Client not found for session: {}", stream_msg.session_id);
+                            error!("Client not found for session: {}", stream_msg.session_id);
                         }
                     }
                     Some(mqttv5pb::mqtt_stream_message::Payload::Unsubscribe(unsubscribe)) => {
                         // Forward unsubscribe messages to broker
-                        println!("Received unsubscribe from stream: {:?}", unsubscribe);
+                        debug!("Received unsubscribe from stream: {:?}", unsubscribe);
 
                         if let Some(client_id) =
                             find_client_by_session(&connections, &stream_msg.session_id)
                         {
-                            println!("Unsubscribe forwarded for client: {}", client_id);
+                            debug!("Unsubscribe forwarded for client: {}", client_id);
 
                             // Send UnsubAck response back via stream
                             let unsuback_response = mqttv5pb::MqttStreamMessage {
@@ -565,13 +520,13 @@ impl MqttRelayService for MyRelay {
                             };
 
                             if let Err(e) = response_tx.send(Ok(unsuback_response)).await {
-                                eprintln!("Failed to send UnsubAck response: {}", e);
+                                error!("Failed to send UnsubAck response: {}", e);
                             }
                         }
                     }
                     Some(mqttv5pb::mqtt_stream_message::Payload::Puback(puback)) => {
                         // Handle PubAck from client (QoS 1 acknowledgment) - forward to broker
-                        println!("Received PubAck from stream: {:?}", puback);
+                        debug!("Received PubAck from stream: {:?}", puback);
 
                         if let Some(client_id) =
                             find_client_by_session(&connections, &stream_msg.session_id)
@@ -581,24 +536,21 @@ impl MqttRelayService for MyRelay {
                                 if let Err(e) =
                                     broker_tx.send(BrokerControlMessage::PubAck(puback)).await
                                 {
-                                    eprintln!(
+                                    error!(
                                         "Failed to forward PubAck to broker for client {}: {}",
                                         client_id, e
                                     );
                                 } else {
-                                    println!(
-                                        "PubAck forwarded to broker for client: {}",
-                                        client_id
-                                    );
+                                    debug!("PubAck forwarded to broker for client: {}", client_id);
                                 }
                             }
                         } else {
-                            eprintln!("No client found for session: {}", stream_msg.session_id);
+                            error!("No client found for session: {}", stream_msg.session_id);
                         }
                     }
                     Some(mqttv5pb::mqtt_stream_message::Payload::Pubrec(pubrec)) => {
                         // Handle PubRec from client (QoS 2 flow) - forward to broker
-                        println!("Received PubRec from stream: {:?}", pubrec);
+                        debug!("Received PubRec from stream: {:?}", pubrec);
 
                         if let Some(client_id) =
                             find_client_by_session(&connections, &stream_msg.session_id)
@@ -608,24 +560,21 @@ impl MqttRelayService for MyRelay {
                                 if let Err(e) =
                                     broker_tx.send(BrokerControlMessage::PubRec(pubrec)).await
                                 {
-                                    eprintln!(
+                                    error!(
                                         "Failed to forward PubRec to broker for client {}: {}",
                                         client_id, e
                                     );
                                 } else {
-                                    println!(
-                                        "PubRec forwarded to broker for client: {}",
-                                        client_id
-                                    );
+                                    debug!("PubRec forwarded to broker for client: {}", client_id);
                                 }
                             }
                         } else {
-                            eprintln!("No client found for session: {}", stream_msg.session_id);
+                            error!("No client found for session: {}", stream_msg.session_id);
                         }
                     }
                     Some(mqttv5pb::mqtt_stream_message::Payload::Pubrel(pubrel)) => {
                         // Handle PubRel from client (QoS 2 flow) - forward to broker
-                        println!("Received PubRel from stream: {:?}", pubrel);
+                        debug!("Received PubRel from stream: {:?}", pubrel);
 
                         if let Some(client_id) =
                             find_client_by_session(&connections, &stream_msg.session_id)
@@ -635,24 +584,21 @@ impl MqttRelayService for MyRelay {
                                 if let Err(e) =
                                     broker_tx.send(BrokerControlMessage::PubRel(pubrel)).await
                                 {
-                                    eprintln!(
+                                    error!(
                                         "Failed to forward PubRel to broker for client {}: {}",
                                         client_id, e
                                     );
                                 } else {
-                                    println!(
-                                        "PubRel forwarded to broker for client: {}",
-                                        client_id
-                                    );
+                                    debug!("PubRel forwarded to broker for client: {}", client_id);
                                 }
                             }
                         } else {
-                            eprintln!("No client found for session: {}", stream_msg.session_id);
+                            error!("No client found for session: {}", stream_msg.session_id);
                         }
                     }
                     Some(mqttv5pb::mqtt_stream_message::Payload::Pingreq(_)) => {
                         // Handle ping from client
-                        println!("Received PingReq from stream");
+                        debug!("Received PingReq from stream");
 
                         // Send PingResp response
                         let pingresp_response = mqttv5pb::MqttStreamMessage {
@@ -665,12 +611,12 @@ impl MqttRelayService for MyRelay {
                         };
 
                         if let Err(e) = response_tx.send(Ok(pingresp_response)).await {
-                            eprintln!("Failed to send PingResp response: {}", e);
+                            error!("Failed to send PingResp response: {}", e);
                         }
                     }
                     Some(mqttv5pb::mqtt_stream_message::Payload::Pubcomp(pubcomp)) => {
                         // Handle PubComp from client (QoS 2 flow) - forward to broker
-                        println!("Received PubComp from stream: {:?}", pubcomp);
+                        debug!("Received PubComp from stream: {:?}", pubcomp);
 
                         if let Some(client_id) =
                             find_client_by_session(&connections, &stream_msg.session_id)
@@ -680,34 +626,31 @@ impl MqttRelayService for MyRelay {
                                 if let Err(e) =
                                     broker_tx.send(BrokerControlMessage::PubComp(pubcomp)).await
                                 {
-                                    eprintln!(
+                                    error!(
                                         "Failed to forward PubComp to broker for client {}: {}",
                                         client_id, e
                                     );
                                 } else {
-                                    println!(
-                                        "PubComp forwarded to broker for client: {}",
-                                        client_id
-                                    );
+                                    debug!("PubComp forwarded to broker for client: {}", client_id);
                                 }
                             }
                         } else {
-                            eprintln!("No client found for session: {}", stream_msg.session_id);
+                            error!("No client found for session: {}", stream_msg.session_id);
                         }
                     }
                     Some(mqttv5pb::mqtt_stream_message::Payload::Disconnect(disconnect)) => {
                         // Handle disconnect from client
-                        println!("Received Disconnect from stream: {:?}", disconnect);
+                        debug!("Received Disconnect from stream: {:?}", disconnect);
 
                         if let Some(client_id) =
                             find_client_by_session(&connections, &stream_msg.session_id)
                         {
-                            println!("Client {} disconnecting", client_id);
+                            debug!("Client {} disconnecting", client_id);
                             connections.remove(&client_id);
                         }
                     }
                     _ => {
-                        println!("Unhandled stream message payload: {:?}", stream_msg.payload);
+                        debug!("Unhandled stream message payload: {:?}", stream_msg.payload);
                     }
                 }
             }
@@ -743,6 +686,8 @@ async fn mqtt_connect_to_broker(
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt::init();
+
     let args: Vec<String> = env::args().collect();
 
     if args.len() != 3 {
