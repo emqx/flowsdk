@@ -18,7 +18,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::spawn;
 use tokio::sync::mpsc;
-use tracing::{info, error, debug};
+use tracing::{debug, error, info};
 
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status, Streaming};
