@@ -1,4 +1,5 @@
 use crate::mqtt_serde::control_packet::MqttPacket;
+use crate::mqtt_serde::mqttv5::puback::MqttPubAck;
 use crate::mqtt_serde::mqttv5::pubcomp::MqttPubComp;
 use crate::mqtt_serde::mqttv5::publish::MqttPublish;
 use crate::mqtt_serde::mqttv5::pubrec::MqttPubRec;
@@ -17,10 +18,6 @@ pub struct ServerSession {
 
     // QoS 1 and QoS 2 messages pending transmission to the client.
     pending_publishes: Vec<MqttPublish>,
-
-    // QoS 2 messages that have been received from the client but not yet completely acknowledged.
-    // The key is the packet identifier.
-    unacknowledged_pubrecs: HashMap<u16, MqttPubRec>,
 
     // QoS 2 PUBREL messages that have been sent but not yet acknowledged with PUBCOMP.
     // The key is the packet identifier.
@@ -45,7 +42,6 @@ impl ServerSession {
             subscriptions: HashMap::new(),
             unacknowledged_publishes: HashMap::new(),
             pending_publishes: Vec::new(),
-            unacknowledged_pubrecs: HashMap::new(),
             unacknowledged_pubrels: HashMap::new(),
             will: None,
             session_expiry_interval: 0,
@@ -67,53 +63,35 @@ impl ServerSession {
     }
 
     pub fn handle_incoming_publish(&mut self, publish: MqttPublish) -> Option<MqttPacket> {
+        // TODO: Implement topic matching logic here.
+        // For now, we will just queue the message for all subscribers.
+        for (_topic_filter, _subscription) in &self.subscriptions {
+            self.pending_publishes.push(publish.clone());
+        }
+
         match publish.qos {
-            0 => {
-                // TODO: Implement topic matching logic here.
-                // For now, we will just queue the message for all subscribers.
-                for (_topic_filter, _subscription) in &self.subscriptions {
-                    self.pending_publishes.push(publish.clone());
-                }
-                None
-            }
-            1 => {
-                // TODO: Implement topic matching logic here.
-                for (_topic_filter, _subscription) in &self.subscriptions {
-                    self.pending_publishes.push(publish.clone());
-                }
-                Some(MqttPacket::PubAck(crate::mqtt_serde::mqttv5::puback::MqttPubAck {
-                    packet_id: publish.packet_id.unwrap(),
-                    reason_code: 0,
-                    properties: Vec::new(),
-                }))
-            }
+            1 => Some(MqttPacket::PubAck(crate::mqtt_serde::mqttv5::puback::MqttPubAck {
+                packet_id: publish.packet_id.unwrap(),
+                reason_code: 0,
+                properties: Vec::new(),
+            })),
             2 => {
                 let pubrec = MqttPubRec {
                     packet_id: publish.packet_id.unwrap(),
                     reason_code: 0,
                     properties: Vec::new(),
                 };
-                self.unacknowledged_pubrecs.insert(publish.packet_id.unwrap(), pubrec.clone());
                 Some(MqttPacket::PubRec(pubrec))
             }
-            _ => None, // Invalid QoS
+            _ => None,
         }
     }
 
-    pub fn handle_outgoing_publish(&mut self, publish: MqttPublish) -> Option<MqttPacket> {
-        if self.inflight_messages < self.receive_maximum {
-            self.inflight_messages += 1;
-            Some(MqttPacket::Publish(publish))
-        } else {
-            self.pending_publishes.push(publish);
-            None
-        }
-    }
-
-    pub fn handle_incoming_puback(&mut self) {
+    pub fn handle_incoming_puback(&mut self, _puback: MqttPubAck) {
         if self.inflight_messages > 0 {
             self.inflight_messages -= 1;
         }
+        self.unacknowledged_publishes.remove(&_puback.packet_id);
     }
 
     pub fn handle_incoming_pubrec(&mut self, pubrec: MqttPubRec) -> Option<MqttPubRel> {
@@ -133,7 +111,6 @@ impl ServerSession {
     }
 
     pub fn handle_incoming_pubrel(&mut self, pubrel: MqttPubRel) -> MqttPubComp {
-        self.unacknowledged_pubrecs.remove(&pubrel.packet_id);
         MqttPubComp {
             packet_id: pubrel.packet_id,
             reason_code: 0,
