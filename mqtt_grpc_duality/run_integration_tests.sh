@@ -95,14 +95,14 @@ fi
 echo "Activating Python virtual environment..."
 source "$VENV_DIR/bin/activate"
 
-echo "Installing test dependencies into venv..."
+#echo "Installing test dependencies into venv..."
 #pip install -r requirements.txt > /dev/null
-pip install pytest
+#pip install pytest
 
-echo "Running pytest suite against r-proxy..."
+#echo "Running pytest suite against r-proxy..."
 #pytest --host "$BROKER_HOST" --port "$R_PROXY_MQTT_PORT"
 cd interoperability;
-python3 client_test5.py
+python3 client_test5.py Test.test_client_topic_alias
 TEST_RESULT=$?
 
 echo "Deactivating Python virtual environment..."

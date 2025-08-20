@@ -22,6 +22,27 @@ pub mod mqttv5pb {
     tonic::include_proto!("mqttv5");
 }
 
+// Helper functions for property conversion
+fn convert_properties_to_pb<T>(properties: Vec<T>) -> Vec<mqttv5pb::Property>
+where
+    T: TryInto<mqttv5pb::Property>,
+{
+    properties
+        .into_iter()
+        .filter_map(|p| p.try_into().ok())
+        .collect()
+}
+
+fn convert_properties_from_pb<T>(properties: Vec<mqttv5pb::Property>) -> Vec<T>
+where
+    mqttv5pb::Property: TryInto<T>,
+{
+    properties
+        .into_iter()
+        .filter_map(|p| p.try_into().ok())
+        .collect()
+}
+
 // For r-proxy compatibility - keep the trait implementations
 impl From<MqttConnect> for mqttv5pb::Connect {
     fn from(connect: MqttConnect) -> Self {
@@ -33,8 +54,8 @@ impl From<MqttConnect> for mqttv5pb::Connect {
             keep_alive: connect.keep_alive as u32,
             username: connect.username.unwrap_or_default(),
             password: connect.password.unwrap_or_default(),
-            will: None,         // @TODO
-            properties: vec![], // @TODO
+            will: None, // @TODO
+            properties: convert_properties_to_pb(connect.properties),
         }
     }
 }
@@ -46,12 +67,7 @@ impl From<MqttConnAck> for mqttv5pb::Connack {
             reason_code: connack.reason_code as u32,
             properties: connack
                 .properties
-                .map(|props| {
-                    props
-                        .into_iter()
-                        .filter_map(|p| p.try_into().ok())
-                        .collect()
-                })
+                .map(|props| convert_properties_to_pb(props))
                 .unwrap_or_default(),
         }
     }
@@ -150,14 +166,19 @@ impl TryFrom<Property> for mqttv5pb::Property {
 
 impl From<mqttv5pb::Publish> for MqttPublish {
     fn from(publish: mqttv5pb::Publish) -> Self {
-        MqttPublish::new(
+        let mut mqtt_publish = MqttPublish::new(
             publish.qos as u8,
             publish.topic,
             Some(publish.message_id as u16),
             publish.payload,
             publish.retain,
             publish.dup,
-        )
+        );
+
+        // Convert properties if present
+        mqtt_publish.properties = convert_properties_from_pb(publish.properties);
+
+        mqtt_publish
     }
 }
 
@@ -270,11 +291,7 @@ impl TryFrom<mqttv5pb::Property> for Property {
 
 impl From<mqttv5pb::Connect> for MqttConnect {
     fn from(connect: mqttv5pb::Connect) -> Self {
-        let properties: Vec<Property> = connect
-            .properties
-            .into_iter()
-            .filter_map(|p| p.try_into().ok())
-            .collect();
+        let properties: Vec<Property> = convert_properties_from_pb(connect.properties);
 
         MqttConnect::new(
             connect.client_id,
@@ -297,7 +314,7 @@ impl From<MqttPublish> for mqttv5pb::Publish {
             retain: publish.retain,
             dup: publish.dup,
             message_id: publish.packet_id.unwrap_or(0) as u32,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_to_pb(publish.properties),
         }
     }
 }
@@ -307,7 +324,7 @@ impl From<MqttPubAck> for mqttv5pb::Puback {
         mqttv5pb::Puback {
             message_id: puback.packet_id as u32,
             reason_code: puback.reason_code as u32,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_to_pb(puback.properties),
         }
     }
 }
@@ -317,7 +334,7 @@ impl From<MqttPubRec> for mqttv5pb::Pubrec {
         mqttv5pb::Pubrec {
             message_id: pubrec.packet_id as u32,
             reason_code: pubrec.reason_code as u32,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_to_pb(pubrec.properties),
         }
     }
 }
@@ -327,7 +344,7 @@ impl From<MqttPubRel> for mqttv5pb::Pubrel {
         mqttv5pb::Pubrel {
             message_id: pubrel.packet_id as u32,
             reason_code: pubrel.reason_code as u32,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_to_pb(pubrel.properties),
         }
     }
 }
@@ -337,7 +354,7 @@ impl From<MqttPubComp> for mqttv5pb::Pubcomp {
         mqttv5pb::Pubcomp {
             message_id: pubcomp.packet_id as u32,
             reason_code: pubcomp.reason_code as u32,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_to_pb(pubcomp.properties),
         }
     }
 }
@@ -347,7 +364,7 @@ impl From<MqttSubAck> for mqttv5pb::Suback {
         mqttv5pb::Suback {
             message_id: suback.packet_id as u32,
             reason_codes: suback.reason_codes.into_iter().map(|c| c as u32).collect(),
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_to_pb(suback.properties),
         }
     }
 }
@@ -361,7 +378,7 @@ impl From<MqttUnsubAck> for mqttv5pb::Unsuback {
                 .into_iter()
                 .map(|c| c as u32)
                 .collect(),
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_to_pb(unsuback.properties),
         }
     }
 }
@@ -370,7 +387,7 @@ impl From<MqttDisconnect> for mqttv5pb::Disconnect {
     fn from(disconnect: MqttDisconnect) -> Self {
         mqttv5pb::Disconnect {
             reason_code: disconnect.reason_code as u32,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_to_pb(disconnect.properties),
         }
     }
 }
@@ -379,7 +396,7 @@ impl From<MqttAuth> for mqttv5pb::Auth {
     fn from(auth: MqttAuth) -> Self {
         mqttv5pb::Auth {
             reason_code: auth.reason_code as u32,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_to_pb(auth.properties),
         }
     }
 }
@@ -390,7 +407,7 @@ impl From<mqttv5pb::Subscribe> for MqttSubscribe {
     fn from(subscribe: mqttv5pb::Subscribe) -> Self {
         MqttSubscribe {
             packet_id: subscribe.message_id as u16,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_from_pb(subscribe.properties),
             subscriptions: subscribe
                 .subscriptions
                 .into_iter()
@@ -412,7 +429,7 @@ impl From<mqttv5pb::Unsubscribe> for MqttUnsubscribe {
     fn from(unsubscribe: mqttv5pb::Unsubscribe) -> Self {
         MqttUnsubscribe {
             packet_id: unsubscribe.message_id as u16,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_from_pb(unsubscribe.properties),
             topic_filters: unsubscribe.topic_filters,
         }
     }
@@ -423,7 +440,7 @@ impl From<mqttv5pb::Puback> for MqttPubAck {
         MqttPubAck {
             packet_id: puback.message_id as u16,
             reason_code: puback.reason_code as u8,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_from_pb(puback.properties),
         }
     }
 }
@@ -433,7 +450,7 @@ impl From<mqttv5pb::Pubrec> for MqttPubRec {
         MqttPubRec {
             packet_id: pubrec.message_id as u16,
             reason_code: pubrec.reason_code as u8,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_from_pb(pubrec.properties),
         }
     }
 }
@@ -443,7 +460,7 @@ impl From<mqttv5pb::Pubrel> for MqttPubRel {
         MqttPubRel {
             packet_id: pubrel.message_id as u16,
             reason_code: pubrel.reason_code as u8,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_from_pb(pubrel.properties),
         }
     }
 }
@@ -453,7 +470,7 @@ impl From<mqttv5pb::Pubcomp> for MqttPubComp {
         MqttPubComp {
             packet_id: pubcomp.message_id as u16,
             reason_code: pubcomp.reason_code as u8,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_from_pb(pubcomp.properties),
         }
     }
 }
@@ -462,7 +479,7 @@ impl From<mqttv5pb::Disconnect> for MqttDisconnect {
     fn from(disconnect: mqttv5pb::Disconnect) -> Self {
         MqttDisconnect {
             reason_code: disconnect.reason_code as u8,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_from_pb(disconnect.properties),
         }
     }
 }
@@ -471,7 +488,7 @@ impl From<mqttv5pb::Auth> for MqttAuth {
     fn from(auth: mqttv5pb::Auth) -> Self {
         MqttAuth {
             reason_code: auth.reason_code as u8,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_from_pb(auth.properties),
         }
     }
 }
@@ -479,11 +496,7 @@ impl From<mqttv5pb::Auth> for MqttAuth {
 // Missing reverse implementations for r-proxy compatibility
 impl From<mqttv5pb::Connack> for MqttConnAck {
     fn from(connack: mqttv5pb::Connack) -> Self {
-        let properties: Vec<Property> = connack
-            .properties
-            .into_iter()
-            .filter_map(|p| p.try_into().ok())
-            .collect();
+        let properties: Vec<Property> = convert_properties_from_pb(connack.properties);
         MqttConnAck {
             session_present: connack.session_present,
             reason_code: connack.reason_code as u8,
@@ -507,7 +520,7 @@ impl From<MqttSubscribe> for mqttv5pb::Subscribe {
                     retain_handling: sub.retain_handling as u32,
                 })
                 .collect(),
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_to_pb(subscribe.properties),
         }
     }
 }
@@ -517,7 +530,7 @@ impl From<MqttUnsubscribe> for mqttv5pb::Unsubscribe {
         mqttv5pb::Unsubscribe {
             message_id: unsubscribe.packet_id as u32,
             topic_filters: unsubscribe.topic_filters,
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_to_pb(unsubscribe.properties),
         }
     }
 }
@@ -527,7 +540,7 @@ impl From<mqttv5pb::Suback> for MqttSubAck {
         MqttSubAck {
             packet_id: suback.message_id as u16,
             reason_codes: suback.reason_codes.into_iter().map(|c| c as u8).collect(),
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_from_pb(suback.properties),
         }
     }
 }
@@ -537,7 +550,7 @@ impl From<mqttv5pb::Unsuback> for MqttUnsubAck {
         MqttUnsubAck {
             packet_id: unsuback.message_id as u16,
             reason_codes: unsuback.reason_codes.into_iter().map(|c| c as u8).collect(),
-            properties: Vec::new(), // TODO: Convert properties
+            properties: convert_properties_from_pb(unsuback.properties),
         }
     }
 }
