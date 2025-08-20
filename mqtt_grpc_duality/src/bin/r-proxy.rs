@@ -18,7 +18,7 @@ use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::spawn;
 use tokio::sync::mpsc;
-use tracing::info;
+use tracing::{info, error, debug};
 
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Status, Streaming};
@@ -64,7 +64,7 @@ async fn run_proxy(
                     info!("Client connection handled successfully");
                 }
                 Err(e) => {
-                    eprintln!("Error handling client connection: {}", e);
+                    error!("Error handling client connection: {}", e);
                 }
             }
         });
@@ -158,6 +158,7 @@ async fn start_streaming_client_loop(
             _ = conn.read_h.read_buf(parser.buffer_mut()) => {
                 match parser.next_packet() {
                     Ok(Some(packet)) => {
+                        debug!("Parsed MQTT packet from client {}: {:?}", conn.client_id, packet);
                         // Convert MQTT packet to gRPC stream message
                         if let Some(payload) = convert_mqtt_to_stream_payload(&packet) {
                             let stream_msg = mqttv5pb::MqttStreamMessage {
@@ -168,8 +169,10 @@ async fn start_streaming_client_loop(
                             };
 
                             if let Err(e) = conn.grpc_stream_sender.send(stream_msg).await {
-                                eprintln!("Error sending to gRPC stream: {}", e);
+                                error!("Failed to send MQTT packet to gRPC stream for client {}: {}", conn.client_id, e);
                                 break;
+                            } else {
+                                debug!("MQTT packet forwarded to s-proxy for client {}", conn.client_id);
                             }
                         }
                     }
@@ -177,7 +180,7 @@ async fn start_streaming_client_loop(
                         // Incomplete packet, continue
                     }
                     Err(e) => {
-                        eprintln!("Error parsing MQTT packet: {}", e);
+                        error!("Error parsing MQTT packet from client {}: {}", conn.client_id, e);
                         break;
                     }
                 }
@@ -191,7 +194,7 @@ async fn start_streaming_client_loop(
                             // Convert all payloads (including ConnAck) to MQTT bytes and forward
                             if let Some(mqtt_bytes) = convert_stream_payload_to_mqtt_bytes(payload) {
                                 if let Err(e) = conn.write_h.write_all(&mqtt_bytes).await {
-                                    eprintln!("Error writing to MQTT client: {}", e);
+                                    error!("Failed to write MQTT response to client {}: {}", conn.client_id, e);
                                     break;
                                 }
 
@@ -229,16 +232,16 @@ async fn start_streaming_client_loop(
                                     }
                                 }
                             } else {
-                                eprintln!("Failed to convert payload to MQTT bytes: {:?}", payload);
+                                error!("Failed to convert payload to MQTT bytes for client {}: {:?}", conn.client_id, payload);
                             }
                         }
                     }
                     Some(Err(e)) => {
-                        eprintln!("gRPC stream error: {}", e);
+                        error!("gRPC stream error for client {}: {}", conn.client_id, e);
                         break;
                     }
                     None => {
-                        info!("gRPC stream closed");
+                        info!("gRPC stream closed for client {}", conn.client_id);
                         break;
                     }
                 }
@@ -247,8 +250,8 @@ async fn start_streaming_client_loop(
     }
 
     info!(
-        "Streaming client loop ended for session: {}",
-        conn.session_id
+        "Streaming client loop ended for session: {} (client: {})",
+        conn.session_id, conn.client_id
     );
     Ok(())
 }
@@ -374,7 +377,7 @@ async fn wait_for_mqtt_connect(
                 // Incomplete packet, continue reading
             }
             Err(e) => {
-                eprintln!("Error parsing CONNECT: {:?}", e);
+                error!("Error parsing CONNECT packet: {:?}", e);
                 return Err(Status::invalid_argument("Failed to parse CONNECT packet"));
             }
         }
