@@ -20,6 +20,7 @@ pub enum ParseError {
     FromUtf8Error(std::string::FromUtf8Error),
     StringTooLong,
     BufferTooShort,
+    BufferEmpty,
     InvalidLength,
     InvalidPropertyId,
     InvalidPacketType,
@@ -39,6 +40,7 @@ impl fmt::Display for ParseError {
             ParseError::FromUtf8Error(e) => write!(f, "From UTF-8 Error: {}", e),
             ParseError::StringTooLong => write!(f, "String Too Long"),
             ParseError::BufferTooShort => write!(f, "Buffer Too Short"),
+            ParseError::BufferEmpty => write!(f, "Buffer is Empty"),
             ParseError::InvalidLength => write!(f, "Invalid Length"),
             ParseError::InvalidPropertyId => write!(f, "Invalid Property ID"),
             ParseError::InvalidPacketType => write!(f, "Invalid Packet Type"),
@@ -70,7 +72,7 @@ pub enum ParseOk {
 
 pub fn packet_type(buffer: &[u8]) -> Result<u8, ParseError> {
     if buffer.is_empty() {
-        return Err(ParseError::BufferTooShort);
+        return Err(ParseError::BufferEmpty);
     }
     Ok(buffer[0] >> 4)
 }

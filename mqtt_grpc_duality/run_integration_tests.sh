@@ -5,8 +5,10 @@ set -e
 
 # --- Configuration ---
 S_PROXY_GRPC_PORT=50055
-R_PROXY_MQTT_PORT=1883
-BROKER_PORT=1884
+R_PROXY_MQTT_PORT=1884
+
+# Real MQTT broker settings
+BROKER_PORT=1883
 BROKER_HOST="127.0.0.1"
 S_PROXY_TARGET_BROKER="$BROKER_HOST:$BROKER_PORT"
 R_PROXY_TARGET_S_PROXY="127.0.0.1:$S_PROXY_GRPC_PORT"
@@ -61,16 +63,18 @@ cargo build --bin s-proxy
 cargo build --bin r-proxy
 
 # --- Step 3: Start Proxies ---
-export RUST_LOG=debug
+if [ -n "$DEBUG" ]; then
+    export RUST_LOG=debug
+fi
 echo "--- Starting s-proxy ---"
-./target/debug/s-proxy "$S_PROXY_GRPC_PORT" "$S_PROXY_TARGET_BROKER" &
+../target/debug/s-proxy "$S_PROXY_GRPC_PORT" "$S_PROXY_TARGET_BROKER" &
 S_PROXY_PID=$!
 echo "s-proxy started with PID $S_PROXY_PID, listening on gRPC port $S_PROXY_GRPC_PORT."
 
 sleep 1
 
 echo "--- Starting r-proxy ---"
-./target/debug/r-proxy "$R_PROXY_MQTT_PORT" "$R_PROXY_TARGET_S_PROXY" &
+../target/debug/r-proxy "$R_PROXY_MQTT_PORT" "$R_PROXY_TARGET_S_PROXY" &
 R_PROXY_PID=$!
 echo "r-proxy started with PID $R_PROXY_PID, listening on MQTT port $R_PROXY_MQTT_PORT."
 
@@ -101,8 +105,13 @@ source "$VENV_DIR/bin/activate"
 
 #echo "Running pytest suite against r-proxy..."
 #pytest --host "$BROKER_HOST" --port "$R_PROXY_MQTT_PORT"
+
 cd interoperability;
-python3 client_test5.py Test.test_client_topic_alias
+#python3 startbroker.py --port "$BROKER_PORT" &
+#BROKER_PID=$!
+#echo "Broker started with PID $BROKER_PID on port $BROKER_PORT."
+#sleep 3 # Give broker time to initialize
+python3 client_test5.py -p 1884 -v  # Test.test_flow_control2
 TEST_RESULT=$?
 
 echo "Deactivating Python virtual environment..."
