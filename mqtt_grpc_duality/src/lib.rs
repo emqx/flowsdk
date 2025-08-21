@@ -67,7 +67,7 @@ impl From<MqttConnAck> for mqttv5pb::Connack {
             reason_code: connack.reason_code as u32,
             properties: connack
                 .properties
-                .map(|props| convert_properties_to_pb(props))
+                .map(convert_properties_to_pb)
                 .unwrap_or_default(),
         }
     }
