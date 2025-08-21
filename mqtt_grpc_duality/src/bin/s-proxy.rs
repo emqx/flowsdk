@@ -640,18 +640,39 @@ impl MqttRelayService for MyRelay {
                         }
                     }
                     Some(mqttv5pb::mqtt_stream_message::Payload::Disconnect(disconnect)) => {
-                        // Handle disconnect from client
+                        // Handle disconnect from client - forward to broker
                         debug!("Received Disconnect from stream: {:?}", disconnect);
 
                         if let Some(client_id) =
                             find_client_by_session(&connections, &stream_msg.session_id)
                         {
                             debug!("Client {} disconnecting", client_id);
+
+                            // Forward Disconnect to broker first
+                            if let Some(conn) = connections.get(&client_id) {
+                                let (broker_tx, _, _) = conn.value();
+                                if let Err(e) = broker_tx
+                                    .send(BrokerControlMessage::Disconnect(disconnect))
+                                    .await
+                                {
+                                    error!(
+                                        "Failed to forward Disconnect to broker for client {}: {}",
+                                        client_id, e
+                                    );
+                                } else {
+                                    debug!(
+                                        "Disconnect forwarded to broker for client: {}",
+                                        client_id
+                                    );
+                                }
+                            }
+
+                            // Remove connection after forwarding to broker
                             connections.remove(&client_id);
                         }
                     }
                     _ => {
-                        debug!("Unhandled stream message payload: {:?}", stream_msg.payload);
+                        error!("Unhandled stream message payload: {:?}", stream_msg.payload);
                     }
                 }
             }
@@ -685,39 +706,6 @@ async fn mqtt_connect_to_broker(
     Ok(stream)
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
-
-    let args: Vec<String> = env::args().collect();
-
-    if args.len() != 3 {
-        error!(
-            "Usage: {} <grpc_listen_port> <broker_host>:<broker_port>",
-            args[0]
-        );
-        error!("Example: {} 50515 127.0.0.1:1883", args[0]);
-        return Err("Invalid number of arguments".into());
-    }
-
-    let grpc_listen_port = args[1].parse::<u16>()?;
-    let broker_addr: SocketAddr = args[2].parse()?;
-
-    let grpc_addr = format!("127.0.0.1:{}", grpc_listen_port).parse()?;
-    let relay = MyRelay::new(broker_addr);
-
-    info!("s-proxy starting:");
-    info!("  gRPC server listening on: {}", grpc_addr);
-    info!("  MQTT broker address: {}", broker_addr);
-
-    Server::builder()
-        .add_service(MqttRelayServiceServer::new(relay))
-        .serve(grpc_addr)
-        .await?;
-
-    Ok(())
-}
-
 async fn mqtt_client_loop_simple(
     mut rx: mpsc::Receiver<BrokerControlMessage>,
     mut stream: tokio::net::TcpStream,
@@ -729,6 +717,7 @@ async fn mqtt_client_loop_simple(
 
     loop {
         tokio::select! {
+            // Handle control messages from r-proxy
             Some(control_msg) = rx.recv() => {
                 debug!("Processing control message for broker");
 
@@ -777,6 +766,7 @@ async fn mqtt_client_loop_simple(
                     break;
                 }
             }
+            // Handle incoming data from the broker
             result = stream.read_buf(parser.buffer_mut()) => {
                 match result {
                     Ok(0) => {
@@ -831,4 +821,37 @@ fn find_client_by_session(
         }
     }
     None
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    tracing_subscriber::fmt::init();
+
+    let args: Vec<String> = env::args().collect();
+
+    if args.len() != 3 {
+        error!(
+            "Usage: {} <grpc_listen_port> <broker_host>:<broker_port>",
+            args[0]
+        );
+        error!("Example: {} 50515 127.0.0.1:1883", args[0]);
+        return Err("Invalid number of arguments".into());
+    }
+
+    let grpc_listen_port = args[1].parse::<u16>()?;
+    let broker_addr: SocketAddr = args[2].parse()?;
+
+    let grpc_addr = format!("127.0.0.1:{}", grpc_listen_port).parse()?;
+    let relay = MyRelay::new(broker_addr);
+
+    info!("s-proxy starting:");
+    info!("  gRPC server listening on: {}", grpc_addr);
+    info!("  MQTT broker address: {}", broker_addr);
+
+    Server::builder()
+        .add_service(MqttRelayServiceServer::new(relay))
+        .serve(grpc_addr)
+        .await?;
+
+    Ok(())
 }
