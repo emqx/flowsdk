@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["convert_mqtt_to_stream_payload","convert_stream_payload_to_mqtt_bytes","handle_new_streaming_conn","main","run_proxy","start_streaming_client_loop","wait_for_mqtt_connect"],"struct":["RProxyState","StreamingClientConnection"]};
+window.SIDEBAR_ITEMS = {"fn":["handle_new_streaming_tcp_conn","main","run_proxy","start_streaming_client_loop","wait_for_mqtt_connect"],"struct":["RProxyState","StreamingClientConnection"]};
