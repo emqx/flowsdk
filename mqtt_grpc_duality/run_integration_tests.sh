@@ -52,8 +52,8 @@ fi
 
 # --- Step 1: Start MQTT Broker ---
 echo "--- Starting local Mosquitto MQTT Broker ---"
-mosquitto -p "$BROKER_PORT" &
-BROKER_PID=$!
+#mosquitto -p "$BROKER_PORT" -v &
+#BROKER_PID=$!
 echo "Broker started with PID $BROKER_PID on port $BROKER_PORT."
 sleep 3 # Give broker time to initialize
 
@@ -107,10 +107,10 @@ source "$VENV_DIR/bin/activate"
 #pytest --host "$BROKER_HOST" --port "$R_PROXY_MQTT_PORT"
 
 cd interoperability;
-#python3 startbroker.py --port "$BROKER_PORT" &
-#BROKER_PID=$!
-#echo "Broker started with PID $BROKER_PID on port $BROKER_PORT."
-#sleep 3 # Give broker time to initialize
+python3 startbroker.py --port "$BROKER_PORT" &
+BROKER_PID=$!
+echo "Broker started with PID $BROKER_PID on port $BROKER_PORT."
+sleep 3 # Give broker time to initialize
 python3 client_test5.py -p 1884 -v  # Test.test_flow_control2
 TEST_RESULT=$?
 

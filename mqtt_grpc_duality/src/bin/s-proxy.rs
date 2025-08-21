@@ -127,7 +127,7 @@ impl MqttRelayService for MyRelay {
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             };
 
-            mqtt_client_loop_simple(rx, stream, response_tx, session_id).await;
+            mqtt_client_loop_simple(connections, rx, stream, response_tx, session_id).await;
         });
 
         // Return a default successful CONNACK - the real CONNACK will be forwarded by mqtt_client_loop
@@ -427,6 +427,7 @@ impl MqttRelayService for MyRelay {
 
                                     // Start the MQTT client loop to handle broker communication
                                     mqtt_client_loop_simple(
+                                        connections.clone(),
                                         broker_rx,
                                         stream,
                                         response_tx_for_spawn,
@@ -707,6 +708,7 @@ async fn mqtt_connect_to_broker(
 }
 
 async fn mqtt_client_loop_simple(
+    connections: Arc<DashMap<String, ConnectionInfo>>,
     mut rx: mpsc::Receiver<BrokerControlMessage>,
     mut stream: tokio::net::TcpStream,
     response_tx: mpsc::Sender<Result<mqttv5pb::MqttStreamMessage, Status>>,
@@ -771,6 +773,7 @@ async fn mqtt_client_loop_simple(
                 match result {
                     Ok(0) => {
                         info!("Connection closed by the broker");
+                        connections.remove(&session_id);
                         break;
                     }
                     Ok(n) => {
