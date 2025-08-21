@@ -295,8 +295,16 @@ impl From<mqttv5pb::Connect> for MqttConnect {
 
         MqttConnect::new(
             connect.client_id,
-            Some(connect.username),
-            Some(connect.password),
+            if connect.username.is_empty() {
+                None
+            } else {
+                Some(connect.username)
+            },
+            if connect.password.is_empty() {
+                None
+            } else {
+                Some(connect.password)
+            },
             None,
             0,
             connect.clean_start,
