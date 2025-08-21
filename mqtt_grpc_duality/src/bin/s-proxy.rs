@@ -7,6 +7,7 @@ use tonic::{transport::Server, Request, Response, Status};
 use tracing::{debug, error, info};
 
 // Import shared conversions and protobuf types from the proxy workspace
+use mqtt_grpc_proxy::convert_mqtt_to_stream_payload;
 use mqtt_grpc_proxy::mqttv5pb;
 use mqttv5pb::mqtt_relay_service_server::{MqttRelayService, MqttRelayServiceServer};
 use mqttv5pb::{MqttPacket, RelayResponse};
@@ -830,51 +831,4 @@ fn find_client_by_session(
         }
     }
     None
-}
-
-// Helper function to convert MQTT packets to stream payloads
-fn convert_mqtt_to_stream_payload(
-    packet: &flowsdk::mqtt_serde::control_packet::MqttPacket,
-) -> Option<mqttv5pb::mqtt_stream_message::Payload> {
-    use flowsdk::mqtt_serde::control_packet::MqttPacket;
-
-    match packet {
-        MqttPacket::Publish(publish) => Some(mqttv5pb::mqtt_stream_message::Payload::Publish(
-            publish.clone().into(),
-        )),
-        MqttPacket::PubAck(puback) => Some(mqttv5pb::mqtt_stream_message::Payload::Puback(
-            puback.clone().into(),
-        )),
-        MqttPacket::PubRec(pubrec) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubrec(
-            pubrec.clone().into(),
-        )),
-        MqttPacket::PubRel(pubrel) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubrel(
-            pubrel.clone().into(),
-        )),
-        MqttPacket::PubComp(pubcomp) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubcomp(
-            pubcomp.clone().into(),
-        )),
-        MqttPacket::SubAck(suback) => Some(mqttv5pb::mqtt_stream_message::Payload::Suback(
-            suback.clone().into(),
-        )),
-        MqttPacket::UnsubAck(unsuback) => Some(mqttv5pb::mqtt_stream_message::Payload::Unsuback(
-            unsuback.clone().into(),
-        )),
-        MqttPacket::PingResp(_) => Some(mqttv5pb::mqtt_stream_message::Payload::Pingresp(
-            mqttv5pb::Pingresp {},
-        )),
-        MqttPacket::ConnAck(connack) => Some(mqttv5pb::mqtt_stream_message::Payload::Connack(
-            connack.clone().into(),
-        )),
-        MqttPacket::Disconnect(disconnect) => Some(
-            mqttv5pb::mqtt_stream_message::Payload::Disconnect(disconnect.clone().into()),
-        ),
-        MqttPacket::Auth(auth) => Some(mqttv5pb::mqtt_stream_message::Payload::Auth(
-            auth.clone().into(),
-        )),
-        _ => {
-            debug!("Unhandled packet type from broker: {:?}", packet);
-            None
-        }
-    }
 }

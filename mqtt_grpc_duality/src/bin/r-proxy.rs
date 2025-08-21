@@ -3,17 +3,14 @@ use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
-use flowsdk::mqtt_serde::control_packet::MqttControlPacket;
 use flowsdk::mqtt_serde::control_packet::MqttPacket;
-use flowsdk::mqtt_serde::mqttv5;
-use flowsdk::mqtt_serde::mqttv5::connack::MqttConnAck;
 use flowsdk::mqtt_serde::mqttv5::connect::MqttConnect;
-use flowsdk::mqtt_serde::mqttv5::suback::MqttSubAck;
 use flowsdk::mqtt_serde::parser::stream::MqttParser;
 use flowsdk::mqtt_serde::parser::ParseError;
 // Import shared conversions and protobuf types
 use mqtt_grpc_proxy::mqttv5pb;
 use mqtt_grpc_proxy::mqttv5pb::mqtt_relay_service_client::MqttRelayServiceClient;
+use mqtt_grpc_proxy::{convert_mqtt_to_stream_payload, convert_stream_payload_to_mqtt_bytes};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -33,7 +30,6 @@ pub struct StreamingClientConnection {
     pub write_h: OwnedWriteHalf,
     pub read_h: OwnedReadHalf,
     pub grpc_stream_sender: mpsc::Sender<mqttv5pb::MqttStreamMessage>,
-    pub grpc_stream_receiver: mpsc::Receiver<Result<mqttv5pb::MqttStreamMessage, Status>>,
 }
 
 // State management for r-proxy
@@ -60,7 +56,7 @@ async fn run_proxy(
         let state = proxy_state.clone();
         info!("Accepted connection from {}", addr);
         spawn(async move {
-            match handle_new_streaming_conn(incoming_stream, destination, state).await {
+            match handle_new_streaming_tcp_conn(incoming_stream, destination, state).await {
                 Ok(_) => {
                     info!("Client connection handled successfully");
                 }
@@ -72,7 +68,7 @@ async fn run_proxy(
     }
 }
 
-async fn handle_new_streaming_conn(
+async fn handle_new_streaming_tcp_conn(
     incoming: TcpStream,
     destination: SocketAddr,
     state: Arc<RProxyState>,
@@ -82,10 +78,11 @@ async fn handle_new_streaming_conn(
     let mut parser: MqttParser = MqttParser::new();
 
     // Wait for MQTT Connect packet
+    // @TODO: with some timeout
     let connect = wait_for_mqtt_connect(&mut read_half, &mut parser).await?;
 
-    let client_id = connect.client_id.clone();
-    let session_id = format!(
+    let client_id: String = connect.client_id.clone();
+    let session_id: String = format!(
         "{}-{}",
         client_id,
         state.sequence_counter.fetch_add(1, Ordering::SeqCst)
@@ -108,8 +105,7 @@ async fn handle_new_streaming_conn(
         MqttRelayServiceClient::new(channel);
 
     // Create bidirectional streaming channels
-    let (stream_sender, stream_receiver) = mpsc::channel(1000);
-    let (_response_sender, response_receiver) = mpsc::channel(1000);
+    let (grpc_stream_sender, grpc_stream_receiver) = mpsc::channel(1000);
 
     // Convert MQTT Connect to protobuf Connect and send directly
     let connect_msg: mqttv5pb::MqttStreamMessage = mqttv5pb::MqttStreamMessage {
@@ -121,12 +117,12 @@ async fn handle_new_streaming_conn(
         )),
     };
 
-    stream_sender.send(connect_msg).await?;
+    grpc_stream_sender.send(connect_msg).await?;
 
     // Establish gRPC streaming connection
-    let outbound_stream = ReceiverStream::new(stream_receiver);
-    let request = Request::new(outbound_stream);
-    let inbound_stream = grpc_client
+    let outbound_gstream = ReceiverStream::new(grpc_stream_receiver);
+    let request = Request::new(outbound_gstream);
+    let inbound_gstream = grpc_client
         .stream_mqtt_messages(request)
         .await?
         .into_inner();
@@ -137,12 +133,11 @@ async fn handle_new_streaming_conn(
         client_id: client_id.clone(),
         write_h: write_half,
         read_h: read_half,
-        grpc_stream_sender: stream_sender,
-        grpc_stream_receiver: response_receiver,
+        grpc_stream_sender,
     };
 
     // Start the message handling loops (ConnAck will be handled in the loop)
-    start_streaming_client_loop(streaming_conn, inbound_stream, state).await?;
+    start_streaming_client_loop(streaming_conn, inbound_gstream, state).await?;
 
     Ok(())
 }
@@ -157,7 +152,7 @@ async fn start_streaming_client_loop(
 
     loop {
         tokio::select! {
-            // Handle messages from MQTT client
+            // Handle MQTT messages, client facing.
             _ = conn.read_h.read_buf(parser.buffer_mut()) => {
                 match parser.next_packet() {
                     Ok(Some(packet))=> {
@@ -194,7 +189,7 @@ async fn start_streaming_client_loop(
                 }
             }
 
-            // Handle messages from s-proxy
+            // Handle gRPC messages, s-proxy facing
             msg = inbound_stream.next() => {
                 match msg {
                     Some(Ok(stream_msg)) => {
@@ -202,43 +197,10 @@ async fn start_streaming_client_loop(
                             // Convert all payloads (including ConnAck) to MQTT bytes and forward
                             if let Some(mqtt_bytes) = convert_stream_payload_to_mqtt_bytes(payload) {
                                 if let Err(e) = conn.write_h.write_all(&mqtt_bytes).await {
-                                    error!("Failed to write MQTT response to client {}: {}", conn.client_id, e);
+                                    error!("Failed to write MQTT response to client {}: {}, grpc payload: {:?}", conn.client_id, e, payload);
                                     break;
                                 }
-
-                                // Log specific message types for debugging
-                                match payload {
-                                    mqttv5pb::mqtt_stream_message::Payload::Connack(_) => {
-                                        debug!("ConnAck forwarded to client {}", conn.client_id);
-                                    }
-                                    mqttv5pb::mqtt_stream_message::Payload::Publish(_) => {
-                                        debug!("Publish message forwarded to client {}", conn.client_id);
-                                    }
-                                    mqttv5pb::mqtt_stream_message::Payload::Suback(_) => {
-                                        debug!("SubAck forwarded to client {}", conn.client_id);
-                                    }
-                                    mqttv5pb::mqtt_stream_message::Payload::Unsuback(_) => {
-                                        debug!("UnsubAck forwarded to client {}", conn.client_id);
-                                    }
-                                    mqttv5pb::mqtt_stream_message::Payload::Puback(_) => {
-                                        debug!("PubAck forwarded to client {}", conn.client_id);
-                                    }
-                                    mqttv5pb::mqtt_stream_message::Payload::Pubrec(_) => {
-                                        debug!("PubRec forwarded to client {}", conn.client_id);
-                                    }
-                                    mqttv5pb::mqtt_stream_message::Payload::Pubrel(_) => {
-                                        debug!("PubRel forwarded to client {}", conn.client_id);
-                                    }
-                                    mqttv5pb::mqtt_stream_message::Payload::Pubcomp(_) => {
-                                        debug!("PubComp forwarded to client {}", conn.client_id);
-                                    }
-                                    mqttv5pb::mqtt_stream_message::Payload::Pingresp(_) => {
-                                        debug!("PingResp forwarded to client {}", conn.client_id);
-                                    }
-                                    _ => {
-                                        debug!("Message forwarded to client {}", conn.client_id);
-                                    }
-                                }
+                                debug!("Forwarded gRPC message to MQTT client {}: {:?}", conn.client_id, payload);
                             } else {
                                 error!("Failed to convert payload to MQTT bytes for client {}: {:?}", conn.client_id, payload);
                             }
@@ -262,101 +224,6 @@ async fn start_streaming_client_loop(
         conn.session_id, conn.client_id
     );
     Ok(())
-}
-
-// Helper function to convert MQTT packets to stream payloads
-fn convert_mqtt_to_stream_payload(
-    packet: &MqttPacket,
-) -> Option<mqttv5pb::mqtt_stream_message::Payload> {
-    match packet {
-        MqttPacket::Connect(connect) => Some(mqttv5pb::mqtt_stream_message::Payload::Connect(
-            connect.clone().into(),
-        )),
-        MqttPacket::Publish(publish) => Some(mqttv5pb::mqtt_stream_message::Payload::Publish(
-            publish.clone().into(),
-        )),
-        MqttPacket::Subscribe(subscribe) => Some(
-            mqttv5pb::mqtt_stream_message::Payload::Subscribe(subscribe.clone().into()),
-        ),
-        MqttPacket::Unsubscribe(unsubscribe) => Some(
-            mqttv5pb::mqtt_stream_message::Payload::Unsubscribe(unsubscribe.clone().into()),
-        ),
-        MqttPacket::PubAck(puback) => Some(mqttv5pb::mqtt_stream_message::Payload::Puback(
-            puback.clone().into(),
-        )),
-        MqttPacket::PubRec(pubrec) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubrec(
-            pubrec.clone().into(),
-        )),
-        MqttPacket::PubRel(pubrel) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubrel(
-            pubrel.clone().into(),
-        )),
-        MqttPacket::PubComp(pubcomp) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubcomp(
-            pubcomp.clone().into(),
-        )),
-        MqttPacket::PingReq(_) => Some(mqttv5pb::mqtt_stream_message::Payload::Pingreq(
-            mqttv5pb::Pingreq {},
-        )),
-        MqttPacket::Disconnect(disconnect) => Some(
-            mqttv5pb::mqtt_stream_message::Payload::Disconnect(disconnect.clone().into()),
-        ),
-        MqttPacket::Auth(auth) => Some(mqttv5pb::mqtt_stream_message::Payload::Auth(
-            auth.clone().into(),
-        )),
-        _ => None,
-    }
-}
-
-// Helper function to convert stream payloads to MQTT bytes
-fn convert_stream_payload_to_mqtt_bytes(
-    payload: &mqttv5pb::mqtt_stream_message::Payload,
-) -> Option<Vec<u8>> {
-    match payload {
-        mqttv5pb::mqtt_stream_message::Payload::Connack(connack) => {
-            let mqtt_connack: MqttConnAck = connack.clone().into();
-            mqtt_connack.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Publish(publish) => {
-            let mqtt_publish: mqttv5::publish::MqttPublish = publish.clone().into();
-            mqtt_publish.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Suback(suback) => {
-            let mqtt_suback: MqttSubAck = suback.clone().into();
-            mqtt_suback.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Unsuback(unsuback) => {
-            let mqtt_unsuback: mqttv5::unsuback::MqttUnsubAck = unsuback.clone().into();
-            mqtt_unsuback.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Puback(puback) => {
-            let mqtt_puback: mqttv5::puback::MqttPubAck = puback.clone().into();
-            mqtt_puback.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Pubrec(pubrec) => {
-            let mqtt_pubrec: mqttv5::pubrec::MqttPubRec = pubrec.clone().into();
-            mqtt_pubrec.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Pubrel(pubrel) => {
-            let mqtt_pubrel: mqttv5::pubrel::MqttPubRel = pubrel.clone().into();
-            mqtt_pubrel.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Pubcomp(pubcomp) => {
-            let mqtt_pubcomp: mqttv5::pubcomp::MqttPubComp = pubcomp.clone().into();
-            mqtt_pubcomp.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Pingresp(_) => {
-            let mqtt_pingresp = mqttv5::pingresp::MqttPingResp::new();
-            mqtt_pingresp.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Disconnect(disconnect) => {
-            let mqtt_disconnect: mqttv5::disconnect::MqttDisconnect = disconnect.clone().into();
-            mqtt_disconnect.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Auth(auth) => {
-            let mqtt_auth: mqttv5::auth::MqttAuth = auth.clone().into();
-            mqtt_auth.to_bytes().ok()
-        }
-        _ => None,
-    }
 }
 
 async fn wait_for_mqtt_connect(
