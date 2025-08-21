@@ -554,3 +554,135 @@ impl From<mqttv5pb::Unsuback> for MqttUnsubAck {
         }
     }
 }
+
+// Additional imports needed for the helper functions
+use flowsdk::mqtt_serde::control_packet::MqttPacket;
+
+// Helper function to convert MQTT packets to stream payloads
+pub fn convert_mqtt_to_stream_payload(
+    packet: &MqttPacket,
+) -> Option<mqttv5pb::mqtt_stream_message::Payload> {
+    match packet {
+        MqttPacket::Connect(connect) => Some(mqttv5pb::mqtt_stream_message::Payload::Connect(
+            connect.clone().into(),
+        )),
+        MqttPacket::ConnAck(connack) => Some(mqttv5pb::mqtt_stream_message::Payload::Connack(
+            connack.clone().into(),
+        )),
+        MqttPacket::Publish(publish) => Some(mqttv5pb::mqtt_stream_message::Payload::Publish(
+            publish.clone().into(),
+        )),
+        MqttPacket::Subscribe(subscribe) => Some(
+            mqttv5pb::mqtt_stream_message::Payload::Subscribe(subscribe.clone().into()),
+        ),
+        MqttPacket::SubAck(suback) => Some(mqttv5pb::mqtt_stream_message::Payload::Suback(
+            suback.clone().into(),
+        )),
+        MqttPacket::Unsubscribe(unsubscribe) => Some(
+            mqttv5pb::mqtt_stream_message::Payload::Unsubscribe(unsubscribe.clone().into()),
+        ),
+        MqttPacket::UnsubAck(unsuback) => Some(mqttv5pb::mqtt_stream_message::Payload::Unsuback(
+            unsuback.clone().into(),
+        )),
+        MqttPacket::PubAck(puback) => Some(mqttv5pb::mqtt_stream_message::Payload::Puback(
+            puback.clone().into(),
+        )),
+        MqttPacket::PubRec(pubrec) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubrec(
+            pubrec.clone().into(),
+        )),
+        MqttPacket::PubRel(pubrel) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubrel(
+            pubrel.clone().into(),
+        )),
+        MqttPacket::PubComp(pubcomp) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubcomp(
+            pubcomp.clone().into(),
+        )),
+        MqttPacket::PingReq(_) => Some(mqttv5pb::mqtt_stream_message::Payload::Pingreq(
+            mqttv5pb::Pingreq {},
+        )),
+        MqttPacket::PingResp(_) => Some(mqttv5pb::mqtt_stream_message::Payload::Pingresp(
+            mqttv5pb::Pingresp {},
+        )),
+        MqttPacket::Disconnect(disconnect) => Some(
+            mqttv5pb::mqtt_stream_message::Payload::Disconnect(disconnect.clone().into()),
+        ),
+        MqttPacket::Auth(auth) => Some(mqttv5pb::mqtt_stream_message::Payload::Auth(
+            auth.clone().into(),
+        )),
+    }
+}
+
+// Helper function to convert stream payloads to MQTT bytes
+pub fn convert_stream_payload_to_mqtt_bytes(
+    payload: &mqttv5pb::mqtt_stream_message::Payload,
+) -> Option<Vec<u8>> {
+    use flowsdk::mqtt_serde::control_packet::MqttControlPacket;
+    use flowsdk::mqtt_serde::mqttv5;
+
+    match payload {
+        mqttv5pb::mqtt_stream_message::Payload::Connect(connect) => {
+            let mqtt_connect: MqttConnect = connect.clone().into();
+            mqtt_connect.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Connack(connack) => {
+            let mqtt_connack: MqttConnAck = connack.clone().into();
+            mqtt_connack.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Publish(publish) => {
+            let mqtt_publish: mqttv5::publish::MqttPublish = publish.clone().into();
+            mqtt_publish.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Subscribe(subscribe) => {
+            let mqtt_subscribe: MqttSubscribe = subscribe.clone().into();
+            mqtt_subscribe.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Suback(suback) => {
+            let mqtt_suback: MqttSubAck = suback.clone().into();
+            mqtt_suback.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Unsubscribe(unsubscribe) => {
+            let mqtt_unsubscribe: MqttUnsubscribe = unsubscribe.clone().into();
+            mqtt_unsubscribe.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Unsuback(unsuback) => {
+            let mqtt_unsuback: mqttv5::unsuback::MqttUnsubAck = unsuback.clone().into();
+            mqtt_unsuback.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Puback(puback) => {
+            let mqtt_puback: mqttv5::puback::MqttPubAck = puback.clone().into();
+            mqtt_puback.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Pubrec(pubrec) => {
+            let mqtt_pubrec: mqttv5::pubrec::MqttPubRec = pubrec.clone().into();
+            mqtt_pubrec.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Pubrel(pubrel) => {
+            let mqtt_pubrel: mqttv5::pubrel::MqttPubRel = pubrel.clone().into();
+            mqtt_pubrel.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Pubcomp(pubcomp) => {
+            let mqtt_pubcomp: mqttv5::pubcomp::MqttPubComp = pubcomp.clone().into();
+            mqtt_pubcomp.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Pingreq(_) => {
+            let mqtt_pingreq = mqttv5::pingreq::MqttPingReq::new();
+            mqtt_pingreq.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Pingresp(_) => {
+            let mqtt_pingresp = mqttv5::pingresp::MqttPingResp::new();
+            mqtt_pingresp.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Disconnect(disconnect) => {
+            let mqtt_disconnect: mqttv5::disconnect::MqttDisconnect = disconnect.clone().into();
+            mqtt_disconnect.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::Auth(auth) => {
+            let mqtt_auth: mqttv5::auth::MqttAuth = auth.clone().into();
+            mqtt_auth.to_bytes().ok()
+        }
+        mqttv5pb::mqtt_stream_message::Payload::SessionControl(_) => {
+            // SessionControl is a gRPC-specific message that doesn't have an MQTT equivalent
+            // This is used for connection management, not actual MQTT protocol messages
+            None
+        }
+    }
+}
