@@ -534,9 +534,9 @@ impl From<mqttv5pb::Subscribe> for MqttSubscribe {
                     |s| flowsdk::mqtt_serde::mqttv5::subscribe::TopicSubscription {
                         topic_filter: s.topic_filter,
                         qos: s.qos as u8,
-                        no_local: false,
-                        retain_as_published: false,
-                        retain_handling: 0,
+                        no_local: s.no_local,
+                        retain_as_published: s.retain_as_published,
+                        retain_handling: s.retain_handling as u8,
                     },
                 )
                 .collect(),
