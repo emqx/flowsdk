@@ -17,6 +17,7 @@ tonic = "0.12"
 prost = "0.13"
 tokio = { version = "1.40", features = ["full"] }
 tokio-stream = "0.1"
+tokio-util = "0.7.16"
 
 # Networking and data structures
 dashmap = "6.1"
