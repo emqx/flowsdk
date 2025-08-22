@@ -22,6 +22,103 @@ pub mod mqttv5pb {
     tonic::include_proto!("mqttv5");
 }
 
+// Helper function to convert WillProperties to protobuf properties
+fn convert_will_properties_to_pb(
+    will_props: &flowsdk::mqtt_serde::mqttv5::will::WillProperties,
+) -> Vec<mqttv5pb::Property> {
+    let mut properties = Vec::new();
+
+    // Add WillDelayInterval if present
+    if let Some(will_delay_interval) = will_props.will_delay_interval {
+        if let Ok(prop) = Property::WillDelayInterval(will_delay_interval).try_into() {
+            properties.push(prop);
+        }
+    }
+
+    // Add PayloadFormatIndicator if present
+    if let Some(payload_format_indicator) = will_props.payload_format_indicator {
+        if let Ok(prop) = Property::PayloadFormatIndicator(payload_format_indicator).try_into() {
+            properties.push(prop);
+        }
+    }
+
+    // Add MessageExpiryInterval if present
+    if let Some(message_expiry_interval) = will_props.message_expiry_interval {
+        if let Ok(prop) = Property::MessageExpiryInterval(message_expiry_interval).try_into() {
+            properties.push(prop);
+        }
+    }
+
+    // Add ContentType if present
+    if let Some(ref content_type) = will_props.content_type {
+        if let Ok(prop) = Property::ContentType(content_type.clone()).try_into() {
+            properties.push(prop);
+        }
+    }
+
+    // Add ResponseTopic if present
+    if let Some(ref response_topic) = will_props.response_topic {
+        if let Ok(prop) = Property::ResponseTopic(response_topic.clone()).try_into() {
+            properties.push(prop);
+        }
+    }
+
+    // Add CorrelationData if present
+    if let Some(ref correlation_data) = will_props.correlation_data {
+        if let Ok(prop) = Property::CorrelationData(correlation_data.clone()).try_into() {
+            properties.push(prop);
+        }
+    }
+
+    // Add UserProperties
+    properties.extend(convert_properties_to_pb(will_props.user_properties.clone()));
+
+    properties
+}
+
+// Helper function to convert protobuf properties to WillProperties
+#[allow(dead_code)]
+fn convert_pb_to_will_properties(
+    pb_properties: Vec<mqttv5pb::Property>,
+) -> flowsdk::mqtt_serde::mqttv5::will::WillProperties {
+    let mut will_props = flowsdk::mqtt_serde::mqttv5::will::WillProperties::default();
+
+    for pb_prop in pb_properties {
+        if let Some(property_type) = pb_prop.property_type {
+            match property_type {
+                mqttv5pb::property::PropertyType::WillDelayInterval(val) => {
+                    will_props.will_delay_interval = Some(val);
+                }
+                mqttv5pb::property::PropertyType::PayloadFormatIndicator(val) => {
+                    will_props.payload_format_indicator = Some(if val { 1 } else { 0 });
+                }
+                mqttv5pb::property::PropertyType::MessageExpiryInterval(val) => {
+                    will_props.message_expiry_interval = Some(val);
+                }
+                mqttv5pb::property::PropertyType::ContentType(val) => {
+                    will_props.content_type = Some(val);
+                }
+                mqttv5pb::property::PropertyType::ResponseTopic(val) => {
+                    will_props.response_topic = Some(val);
+                }
+                mqttv5pb::property::PropertyType::CorrelationData(val) => {
+                    will_props.correlation_data = Some(val);
+                }
+                mqttv5pb::property::PropertyType::UserProperty(user_prop) => {
+                    will_props
+                        .user_properties
+                        .push(Property::UserProperty(user_prop.key, user_prop.value));
+                }
+                _ => {
+                    // Ignore properties that don't belong to Will
+                }
+            }
+        }
+    }
+
+    will_props
+}
+
 // Helper functions for property conversion
 fn convert_properties_to_pb<T>(properties: Vec<T>) -> Vec<mqttv5pb::Property>
 where
@@ -54,7 +151,13 @@ impl From<MqttConnect> for mqttv5pb::Connect {
             keep_alive: connect.keep_alive as u32,
             username: connect.username.unwrap_or_default(),
             password: connect.password.unwrap_or_default(),
-            will: None, // @TODO
+            will: connect.will.map(|will| mqttv5pb::Will {
+                qos: will.will_qos as i32,
+                retain: will.will_retain,
+                topic: will.will_topic,
+                payload: will.will_message,
+                properties: convert_will_properties_to_pb(&will.properties),
+            }),
             properties: convert_properties_to_pb(connect.properties),
         }
     }
@@ -305,8 +408,16 @@ impl From<mqttv5pb::Connect> for MqttConnect {
             } else {
                 Some(connect.password)
             },
-            None,
-            0,
+            connect
+                .will
+                .map(|will| flowsdk::mqtt_serde::mqttv5::will::Will {
+                    will_qos: will.qos as u8,
+                    will_retain: will.retain,
+                    will_topic: will.topic,
+                    will_message: will.payload,
+                    properties: convert_pb_to_will_properties(will.properties),
+                }),
+            connect.keep_alive as u16,
             connect.clean_start,
             properties,
         )
