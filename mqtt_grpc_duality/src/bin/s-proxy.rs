@@ -3,6 +3,7 @@ use flowsdk::mqtt_serde::control_packet::MqttControlPacket;
 use std::sync::Arc;
 use std::{env, net::SocketAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::{debug, error, info};
 
@@ -82,6 +83,8 @@ impl MqttRelayService for MyRelay {
         let clientid = request.get_ref().client_id.clone();
         let (tx, rx) = mpsc::channel::<BrokerControlMessage>(32);
 
+        let token = CancellationToken::new();
+
         let stream = match mqtt_connect_to_broker(request, self.broker_addr).await {
             Ok(s) => s,
             Err(e) => {
@@ -127,7 +130,15 @@ impl MqttRelayService for MyRelay {
                 tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
             };
 
-            mqtt_client_loop_simple(connections, rx, stream, response_tx, session_id).await;
+            mqtt_client_loop_simple(
+                token.clone(),
+                connections,
+                rx,
+                stream,
+                response_tx,
+                session_id,
+            )
+            .await;
         });
 
         // Return a default successful CONNACK - the real CONNACK will be forwarded by mqtt_client_loop
@@ -384,302 +395,376 @@ impl MqttRelayService for MyRelay {
         let connections = self.connections.clone();
         let broker_addr = self.broker_addr; // Capture broker_addr before move
 
+        let token = CancellationToken::new();
+
         // @FIXME: This is a one green thread per request, which is not ideal for scalability
         // Handle the bidirectional stream
         tokio::spawn(async move {
-            while let Some(Ok(stream_msg)) = incoming_stream.next().await {
-                debug!(
-                    "Received stream message for session: {}",
-                    stream_msg.session_id
-                );
+            loop {
+                let cloned_token: CancellationToken = token.clone();
 
-                match stream_msg.payload {
-                    Some(mqttv5pb::mqtt_stream_message::Payload::Connect(connect)) => {
-                        // Handle MQTT Connect message directly
-                        let client_id = connect.client_id.clone();
-                        info!("Received Connect from client: {}", client_id);
-
-                        // Create broker connection for this client
-                        let connections = connections.clone();
-                        let response_tx_for_spawn = response_tx.clone();
-                        let session_id = stream_msg.session_id.clone();
-
-                        tokio::spawn(async move {
-                            let connect_request = tonic::Request::new(connect);
-                            match mqtt_connect_to_broker(connect_request, broker_addr).await {
-                                Ok(stream) => {
-                                    let (broker_tx, broker_rx) =
-                                        tokio::sync::mpsc::channel::<BrokerControlMessage>(32);
-
-                                    // Store connection info
-                                    connections.insert(
-                                        client_id.clone(),
-                                        (
-                                            broker_tx,
-                                            response_tx_for_spawn.clone(),
-                                            session_id.clone(),
-                                        ),
-                                    );
-
-                                    info!(
-                                        "Broker connection established for client: {}",
-                                        client_id
-                                    );
-
-                                    // Start the MQTT client loop to handle broker communication
-                                    mqtt_client_loop_simple(
-                                        connections.clone(),
-                                        broker_rx,
-                                        stream,
-                                        response_tx_for_spawn,
-                                        session_id,
-                                    )
-                                    .await;
-                                }
-                                Err(e) => {
-                                    error!(
-                                        "Failed to connect to broker for client {}: {}",
-                                        client_id, e
-                                    );
-                                }
-                            }
-                        });
+                match incoming_stream.next().await {
+                    None => {
+                        debug!("Stream closed by client, exiting grpc stream handler");
+                        token.cancel();
+                        break;
                     }
-                    Some(mqttv5pb::mqtt_stream_message::Payload::Publish(publish)) => {
-                        // Forward publish messages to broker via the publish channel
-                        debug!("Received publish from stream: {:?}", publish);
+                    Some(Err(e)) => {
+                        error!("Error in incoming grpc stream: {}", e);
+                        break;
+                    }
 
-                        // Extract client ID from session or use a default lookup mechanism
-                        if let Some(client_id) =
-                            find_client_by_session(&connections, &stream_msg.session_id)
-                        {
-                            if let Some(conn) = connections.get(&client_id) {
-                                let (publish_tx, _, _) = conn.value();
-                                if let Err(e) = publish_tx
-                                    .send(BrokerControlMessage::Publish(publish))
-                                    .await
+                    Some(Ok(stream_msg)) => {
+                        debug!(
+                            "Received stream message for session: {}",
+                            stream_msg.session_id
+                        );
+
+                        match stream_msg.payload {
+                            Some(mqttv5pb::mqtt_stream_message::Payload::Connect(connect)) => {
+                                // Handle MQTT Connect message directly
+                                let client_id = connect.client_id.clone();
+                                info!("Received Connect from client: {}", client_id);
+
+                                // Create broker connection for this client
+                                let connections = connections.clone();
+                                let response_tx_for_spawn = response_tx.clone();
+                                let session_id = stream_msg.session_id.clone();
+
+                                tokio::spawn(async move {
+                                    let connect_request = tonic::Request::new(connect);
+                                    match mqtt_connect_to_broker(connect_request, broker_addr).await
+                                    {
+                                        Ok(stream) => {
+                                            let (broker_tx, broker_rx) =
+                                                tokio::sync::mpsc::channel::<BrokerControlMessage>(
+                                                    32,
+                                                );
+
+                                            // Store connection info
+                                            connections.insert(
+                                                client_id.clone(),
+                                                (
+                                                    broker_tx,
+                                                    response_tx_for_spawn.clone(),
+                                                    session_id.clone(),
+                                                ),
+                                            );
+
+                                            info!(
+                                                "Broker connection established for client: {}",
+                                                client_id
+                                            );
+
+                                            // Start the MQTT client loop to handle broker communication
+                                            mqtt_client_loop_simple(
+                                                cloned_token,
+                                                connections.clone(),
+                                                broker_rx,
+                                                stream,
+                                                response_tx_for_spawn,
+                                                session_id,
+                                            )
+                                            .await;
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                "Failed to connect to broker for client {}: {}",
+                                                client_id, e
+                                            );
+                                        }
+                                    }
+                                });
+                            }
+                            Some(mqttv5pb::mqtt_stream_message::Payload::Publish(publish)) => {
+                                // Forward publish messages to broker via the publish channel
+                                debug!("Received publish from stream: {:?}", publish);
+
+                                // Extract client ID from session or use a default lookup mechanism
+                                if let Some(client_id) =
+                                    find_client_by_session(&connections, &stream_msg.session_id)
                                 {
-                                    error!(
+                                    if let Some(conn) = connections.get(&client_id) {
+                                        let (publish_tx, _, _) = conn.value();
+                                        if let Err(e) = publish_tx
+                                            .send(BrokerControlMessage::Publish(publish))
+                                            .await
+                                        {
+                                            error!(
                                         "Failed to forward publish to broker for client {}: {}",
                                         client_id, e
                                     );
-                                }
-                            }
-                        } else {
-                            error!("No client found for session: {}", stream_msg.session_id);
-                        }
-                    }
-                    Some(mqttv5pb::mqtt_stream_message::Payload::Subscribe(subscribe)) => {
-                        // Forward subscribe messages to broker
-                        debug!("Received subscribe from stream: {:?}", subscribe);
-
-                        // Find the connection and forward Subscribe to broker
-                        if let Some(client_id) =
-                            find_client_by_session(&connections, &stream_msg.session_id)
-                        {
-                            if let Some(conn_info) = connections.get(&client_id) {
-                                let (broker_tx, _, _) = conn_info.value();
-
-                                // Forward Subscribe message to broker via control channel
-                                if let Err(e) = broker_tx
-                                    .send(BrokerControlMessage::Subscribe(subscribe.clone()))
-                                    .await
-                                {
-                                    error!("Failed to send Subscribe to broker: {}", e);
+                                        }
+                                    }
                                 } else {
-                                    debug!("Subscribe forwarded to broker for client: {} with topics: {:?}",
-                                        client_id, subscribe.subscriptions);
-                                }
-
-                                // Note: SubAck will be generated by broker and forwarded via mqtt_client_loop_simple
-                            } else {
-                                error!("Connection info not found for client: {}", client_id);
-                            }
-                        } else {
-                            error!("Client not found for session: {}", stream_msg.session_id);
-                        }
-                    }
-                    Some(mqttv5pb::mqtt_stream_message::Payload::Unsubscribe(unsubscribe)) => {
-                        // Forward unsubscribe messages to broker
-                        debug!("Received unsubscribe from stream: {:?}", unsubscribe);
-
-                        if let Some(client_id) =
-                            find_client_by_session(&connections, &stream_msg.session_id)
-                        {
-                            if let Some(conn) = connections.get(&client_id) {
-                                let (broker_tx, _, _) = conn.value();
-                                if let Err(e) = broker_tx
-                                    .send(BrokerControlMessage::Unsubscribe(unsubscribe))
-                                    .await
-                                {
                                     error!(
+                                        "No client found for session: {}",
+                                        stream_msg.session_id
+                                    );
+                                }
+                            }
+                            Some(mqttv5pb::mqtt_stream_message::Payload::Subscribe(subscribe)) => {
+                                // Forward subscribe messages to broker
+                                debug!("Received subscribe from stream: {:?}", subscribe);
+
+                                // Find the connection and forward Subscribe to broker
+                                if let Some(client_id) =
+                                    find_client_by_session(&connections, &stream_msg.session_id)
+                                {
+                                    if let Some(conn_info) = connections.get(&client_id) {
+                                        let (broker_tx, _, _) = conn_info.value();
+
+                                        // Forward Subscribe message to broker via control channel
+                                        if let Err(e) = broker_tx
+                                            .send(BrokerControlMessage::Subscribe(
+                                                subscribe.clone(),
+                                            ))
+                                            .await
+                                        {
+                                            error!("Failed to send Subscribe to broker: {}", e);
+                                        } else {
+                                            debug!("Subscribe forwarded to broker for client: {} with topics: {:?}",
+                                        client_id, subscribe.subscriptions);
+                                        }
+
+                                        // Note: SubAck will be generated by broker and forwarded via mqtt_client_loop_simple
+                                    } else {
+                                        error!(
+                                            "Connection info not found for client: {}",
+                                            client_id
+                                        );
+                                    }
+                                } else {
+                                    error!(
+                                        "Client not found for session: {}",
+                                        stream_msg.session_id
+                                    );
+                                }
+                            }
+                            Some(mqttv5pb::mqtt_stream_message::Payload::Unsubscribe(
+                                unsubscribe,
+                            )) => {
+                                // Forward unsubscribe messages to broker
+                                debug!("Received unsubscribe from stream: {:?}", unsubscribe);
+
+                                if let Some(client_id) =
+                                    find_client_by_session(&connections, &stream_msg.session_id)
+                                {
+                                    if let Some(conn) = connections.get(&client_id) {
+                                        let (broker_tx, _, _) = conn.value();
+                                        if let Err(e) = broker_tx
+                                            .send(BrokerControlMessage::Unsubscribe(unsubscribe))
+                                            .await
+                                        {
+                                            error!(
                                         "Failed to forward Unsubscribe to broker for client {}: {}",
                                         client_id, e
                                     );
+                                        } else {
+                                            debug!(
+                                                "Unsubscribe forwarded to broker for client: {}",
+                                                client_id
+                                            );
+                                        }
+                                    }
                                 } else {
-                                    debug!(
-                                        "Unsubscribe forwarded to broker for client: {}",
-                                        client_id
+                                    error!(
+                                        "No client found for session: {}",
+                                        stream_msg.session_id
                                     );
                                 }
                             }
-                        } else {
-                            error!("No client found for session: {}", stream_msg.session_id);
-                        }
-                    }
-                    Some(mqttv5pb::mqtt_stream_message::Payload::Puback(puback)) => {
-                        // Handle PubAck from client (QoS 1 acknowledgment) - forward to broker
-                        debug!("Received PubAck from stream: {:?}", puback);
+                            Some(mqttv5pb::mqtt_stream_message::Payload::Puback(puback)) => {
+                                // Handle PubAck from client (QoS 1 acknowledgment) - forward to broker
+                                debug!("Received PubAck from stream: {:?}", puback);
 
-                        if let Some(client_id) =
-                            find_client_by_session(&connections, &stream_msg.session_id)
-                        {
-                            if let Some(conn) = connections.get(&client_id) {
-                                let (broker_tx, _, _) = conn.value();
-                                if let Err(e) =
-                                    broker_tx.send(BrokerControlMessage::PubAck(puback)).await
+                                if let Some(client_id) =
+                                    find_client_by_session(&connections, &stream_msg.session_id)
                                 {
-                                    error!(
+                                    if let Some(conn) = connections.get(&client_id) {
+                                        let (broker_tx, _, _) = conn.value();
+                                        if let Err(e) = broker_tx
+                                            .send(BrokerControlMessage::PubAck(puback))
+                                            .await
+                                        {
+                                            error!(
                                         "Failed to forward PubAck to broker for client {}: {}",
                                         client_id, e
                                     );
+                                        } else {
+                                            debug!(
+                                                "PubAck forwarded to broker for client: {}",
+                                                client_id
+                                            );
+                                        }
+                                    }
                                 } else {
-                                    debug!("PubAck forwarded to broker for client: {}", client_id);
+                                    error!(
+                                        "No client found for session: {}",
+                                        stream_msg.session_id
+                                    );
                                 }
                             }
-                        } else {
-                            error!("No client found for session: {}", stream_msg.session_id);
-                        }
-                    }
-                    Some(mqttv5pb::mqtt_stream_message::Payload::Pubrec(pubrec)) => {
-                        // Handle PubRec from client (QoS 2 flow) - forward to broker
-                        debug!("Received PubRec from stream: {:?}", pubrec);
+                            Some(mqttv5pb::mqtt_stream_message::Payload::Pubrec(pubrec)) => {
+                                // Handle PubRec from client (QoS 2 flow) - forward to broker
+                                debug!("Received PubRec from stream: {:?}", pubrec);
 
-                        if let Some(client_id) =
-                            find_client_by_session(&connections, &stream_msg.session_id)
-                        {
-                            if let Some(conn) = connections.get(&client_id) {
-                                let (broker_tx, _, _) = conn.value();
-                                if let Err(e) =
-                                    broker_tx.send(BrokerControlMessage::PubRec(pubrec)).await
+                                if let Some(client_id) =
+                                    find_client_by_session(&connections, &stream_msg.session_id)
                                 {
-                                    error!(
+                                    if let Some(conn) = connections.get(&client_id) {
+                                        let (broker_tx, _, _) = conn.value();
+                                        if let Err(e) = broker_tx
+                                            .send(BrokerControlMessage::PubRec(pubrec))
+                                            .await
+                                        {
+                                            error!(
                                         "Failed to forward PubRec to broker for client {}: {}",
                                         client_id, e
                                     );
+                                        } else {
+                                            debug!(
+                                                "PubRec forwarded to broker for client: {}",
+                                                client_id
+                                            );
+                                        }
+                                    }
                                 } else {
-                                    debug!("PubRec forwarded to broker for client: {}", client_id);
+                                    error!(
+                                        "No client found for session: {}",
+                                        stream_msg.session_id
+                                    );
                                 }
                             }
-                        } else {
-                            error!("No client found for session: {}", stream_msg.session_id);
-                        }
-                    }
-                    Some(mqttv5pb::mqtt_stream_message::Payload::Pubrel(pubrel)) => {
-                        // Handle PubRel from client (QoS 2 flow) - forward to broker
-                        debug!("Received PubRel from stream: {:?}", pubrel);
+                            Some(mqttv5pb::mqtt_stream_message::Payload::Pubrel(pubrel)) => {
+                                // Handle PubRel from client (QoS 2 flow) - forward to broker
+                                debug!("Received PubRel from stream: {:?}", pubrel);
 
-                        if let Some(client_id) =
-                            find_client_by_session(&connections, &stream_msg.session_id)
-                        {
-                            if let Some(conn) = connections.get(&client_id) {
-                                let (broker_tx, _, _) = conn.value();
-                                if let Err(e) =
-                                    broker_tx.send(BrokerControlMessage::PubRel(pubrel)).await
+                                if let Some(client_id) =
+                                    find_client_by_session(&connections, &stream_msg.session_id)
                                 {
-                                    error!(
+                                    if let Some(conn) = connections.get(&client_id) {
+                                        let (broker_tx, _, _) = conn.value();
+                                        if let Err(e) = broker_tx
+                                            .send(BrokerControlMessage::PubRel(pubrel))
+                                            .await
+                                        {
+                                            error!(
                                         "Failed to forward PubRel to broker for client {}: {}",
                                         client_id, e
                                     );
+                                        } else {
+                                            debug!(
+                                                "PubRel forwarded to broker for client: {}",
+                                                client_id
+                                            );
+                                        }
+                                    }
                                 } else {
-                                    debug!("PubRel forwarded to broker for client: {}", client_id);
+                                    error!(
+                                        "No client found for session: {}",
+                                        stream_msg.session_id
+                                    );
                                 }
                             }
-                        } else {
-                            error!("No client found for session: {}", stream_msg.session_id);
-                        }
-                    }
-                    Some(mqttv5pb::mqtt_stream_message::Payload::Pingreq(_)) => {
-                        // Handle ping from client
-                        debug!("Received PingReq from stream");
+                            Some(mqttv5pb::mqtt_stream_message::Payload::Pingreq(_)) => {
+                                // Handle ping from client
+                                debug!("Received PingReq from stream");
 
-                        // Send PingResp response
-                        let pingresp_response = mqttv5pb::MqttStreamMessage {
-                            session_id: stream_msg.session_id,
-                            sequence_id: stream_msg.sequence_id + 1,
-                            direction: mqttv5pb::MessageDirection::BrokerToClient as i32,
-                            payload: Some(mqttv5pb::mqtt_stream_message::Payload::Pingresp(
-                                mqttv5pb::Pingresp {},
-                            )),
-                        };
+                                // Send PingResp response
+                                let pingresp_response = mqttv5pb::MqttStreamMessage {
+                                    session_id: stream_msg.session_id,
+                                    sequence_id: stream_msg.sequence_id + 1,
+                                    direction: mqttv5pb::MessageDirection::BrokerToClient as i32,
+                                    payload: Some(
+                                        mqttv5pb::mqtt_stream_message::Payload::Pingresp(
+                                            mqttv5pb::Pingresp {},
+                                        ),
+                                    ),
+                                };
 
-                        if let Err(e) = response_tx.send(Ok(pingresp_response)).await {
-                            error!("Failed to send PingResp response: {}", e);
-                        }
-                    }
-                    Some(mqttv5pb::mqtt_stream_message::Payload::Pubcomp(pubcomp)) => {
-                        // Handle PubComp from client (QoS 2 flow) - forward to broker
-                        debug!("Received PubComp from stream: {:?}", pubcomp);
+                                if let Err(e) = response_tx.send(Ok(pingresp_response)).await {
+                                    error!("Failed to send PingResp response: {}", e);
+                                }
+                            }
+                            Some(mqttv5pb::mqtt_stream_message::Payload::Pubcomp(pubcomp)) => {
+                                // Handle PubComp from client (QoS 2 flow) - forward to broker
+                                debug!("Received PubComp from stream: {:?}", pubcomp);
 
-                        if let Some(client_id) =
-                            find_client_by_session(&connections, &stream_msg.session_id)
-                        {
-                            if let Some(conn) = connections.get(&client_id) {
-                                let (broker_tx, _, _) = conn.value();
-                                if let Err(e) =
-                                    broker_tx.send(BrokerControlMessage::PubComp(pubcomp)).await
+                                if let Some(client_id) =
+                                    find_client_by_session(&connections, &stream_msg.session_id)
                                 {
-                                    error!(
+                                    if let Some(conn) = connections.get(&client_id) {
+                                        let (broker_tx, _, _) = conn.value();
+                                        if let Err(e) = broker_tx
+                                            .send(BrokerControlMessage::PubComp(pubcomp))
+                                            .await
+                                        {
+                                            error!(
                                         "Failed to forward PubComp to broker for client {}: {}",
                                         client_id, e
                                     );
+                                        } else {
+                                            debug!(
+                                                "PubComp forwarded to broker for client: {}",
+                                                client_id
+                                            );
+                                        }
+                                    }
                                 } else {
-                                    debug!("PubComp forwarded to broker for client: {}", client_id);
+                                    error!(
+                                        "No client found for session: {}",
+                                        stream_msg.session_id
+                                    );
                                 }
                             }
-                        } else {
-                            error!("No client found for session: {}", stream_msg.session_id);
-                        }
-                    }
-                    Some(mqttv5pb::mqtt_stream_message::Payload::Disconnect(disconnect)) => {
-                        // Handle disconnect from client - forward to broker
-                        debug!("Received Disconnect from stream: {:?}", disconnect);
+                            Some(mqttv5pb::mqtt_stream_message::Payload::Disconnect(
+                                disconnect,
+                            )) => {
+                                // Handle disconnect from client - forward to broker
+                                debug!("Received Disconnect from stream: {:?}", disconnect);
 
-                        if let Some(client_id) =
-                            find_client_by_session(&connections, &stream_msg.session_id)
-                        {
-                            debug!("Client {} disconnecting", client_id);
-
-                            // Forward Disconnect to broker first
-                            if let Some(conn) = connections.get(&client_id) {
-                                let (broker_tx, _, _) = conn.value();
-                                if let Err(e) = broker_tx
-                                    .send(BrokerControlMessage::Disconnect(disconnect))
-                                    .await
+                                if let Some(client_id) =
+                                    find_client_by_session(&connections, &stream_msg.session_id)
                                 {
-                                    error!(
+                                    debug!("Client {} disconnecting", client_id);
+
+                                    // Forward Disconnect to broker first
+                                    if let Some(conn) = connections.get(&client_id) {
+                                        let (broker_tx, _, _) = conn.value();
+                                        if let Err(e) = broker_tx
+                                            .send(BrokerControlMessage::Disconnect(disconnect))
+                                            .await
+                                        {
+                                            error!(
                                         "Failed to forward Disconnect to broker for client {}: {}",
                                         client_id, e
                                     );
-                                } else {
-                                    debug!(
-                                        "Disconnect forwarded to broker for client: {}",
-                                        client_id
-                                    );
+                                        } else {
+                                            debug!(
+                                                "Disconnect forwarded to broker for client: {}",
+                                                client_id
+                                            );
+                                        }
+                                    }
+
+                                    // Remove connection after forwarding to broker
+                                    connections.remove(&client_id);
                                 }
                             }
-
-                            // Remove connection after forwarding to broker
-                            connections.remove(&client_id);
+                            _ => {
+                                error!(
+                                    "Unhandled stream message payload: {:?}",
+                                    stream_msg.payload
+                                );
+                            }
                         }
-                    }
-                    _ => {
-                        error!("Unhandled stream message payload: {:?}", stream_msg.payload);
                     }
                 }
             }
         });
 
+        // @FIXME: This is a temporary solution to return a stream
         Ok(Response::new(tokio_stream::wrappers::ReceiverStream::new(
             response_rx,
         )))
@@ -709,6 +794,7 @@ async fn mqtt_connect_to_broker(
 }
 
 async fn mqtt_client_loop_simple(
+    token: CancellationToken,
     connections: Arc<DashMap<String, ConnectionInfo>>,
     mut rx: mpsc::Receiver<BrokerControlMessage>,
     mut stream: tokio::net::TcpStream,
@@ -720,6 +806,13 @@ async fn mqtt_client_loop_simple(
 
     loop {
         tokio::select! {
+            _ = token.cancelled() => {
+                // The token was cancelled
+                info!("Cancellation token triggered, exiting MQTT client loop for session: {}", session_id);
+                connections.remove(&session_id);
+                break;
+            }
+
             // Handle control messages from r-proxy
             Some(control_msg) = rx.recv() => {
                 debug!("Processing control message for broker");
@@ -798,6 +891,8 @@ async fn mqtt_client_loop_simple(
                                     break;
                                 }
                             }
+
+                            debug!("Processed packet from broker, continuing to next packet");
                         }
                     }
                     Err(e) => {
@@ -807,6 +902,7 @@ async fn mqtt_client_loop_simple(
                 }
             }
             else => {
+                info!("No more data to read from broker, exiting MQTT client loop for session: {}", session_id);
                 break;
             }
         }

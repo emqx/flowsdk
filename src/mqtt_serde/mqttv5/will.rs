@@ -77,9 +77,13 @@ impl Will {
         for property in properties {
             match property {
                 // MQTT 5.0: 3.1.3.2.2 Will Delay Interval
-                Property::WillDelayInterval(value) => will.properties.will_delay_interval = Some(value),
+                Property::WillDelayInterval(value) => {
+                    will.properties.will_delay_interval = Some(value)
+                }
                 // MQTT 5.0: 3.1.3.2.3 Payload format indicator
-                Property::PayloadFormatIndicator(value) => will.properties.payload_format_indicator = Some(value),
+                Property::PayloadFormatIndicator(value) => {
+                    will.properties.payload_format_indicator = Some(value)
+                }
                 // MQTT 5.0: 3.1.3.2.4 Message Expiry Interval
                 Property::MessageExpiryInterval(value) => {
                     if will.properties.message_expiry_interval.is_none() {
@@ -95,7 +99,8 @@ impl Will {
                 // MQTT 5.0: 3.1.3.2.8 UserProperty
                 _ => {
                     if let Property::UserProperty(key, value) = property {
-                        will.properties.user_properties
+                        will.properties
+                            .user_properties
                             .push(Property::UserProperty(key, value));
                     }
                 }
