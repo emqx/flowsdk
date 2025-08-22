@@ -110,28 +110,36 @@ impl MqttControlPacket for MqttConnect {
 
         // MQTT 5.0: 3.1.3.2 Will Properties
         if let Some(will) = &self.will {
-            let mut will_properties = vec![
-                // MQTT 5.0: 3.1.3.2.2
-                Property::WillDelayInterval(will.will_delay_interval),
-                // MQTT 5.0: 3.1.3.2.3
-                Property::PayloadFormatIndicator(will.payload_format_indicator),
+            let mut will_properties = vec![];
+
+            // MQTT 5.0: 3.1.3.2.2 - Only add if present
+            if let Some(will_delay_interval) = will.properties.will_delay_interval {
+                will_properties.push(Property::WillDelayInterval(will_delay_interval));
+            }
+
+            // MQTT 5.0: 3.1.3.2.3 - Only add if present
+            if let Some(payload_format_indicator) = will.properties.payload_format_indicator {
+                will_properties.push(Property::PayloadFormatIndicator(payload_format_indicator));
+            }
+
+            if let Some(message_expiry_interval) = &will.properties.message_expiry_interval {
                 // MQTT 5.0: 3.1.3.2.4
-                Property::MessageExpiryInterval(will.message_expiry_interval),
-            ];
-            if let Some(content_type) = &will.content_type {
+                will_properties.push(Property::MessageExpiryInterval(*message_expiry_interval));
+            }
+            if let Some(content_type) = &will.properties.content_type {
                 // MQTT 5.0: 3.1.3.2.5
                 will_properties.push(Property::ContentType(content_type.clone()));
             }
-            if let Some(response_topic) = &will.response_topic {
+            if let Some(response_topic) = &will.properties.response_topic {
                 // MQTT 5.0: 3.1.3.2.6
                 will_properties.push(Property::ResponseTopic(response_topic.clone()));
             }
-            if let Some(correlation_data) = &will.correlation_data {
+            if let Some(correlation_data) = &will.properties.correlation_data {
                 // MQTT 5.0: 3.1.3.2.7
                 will_properties.push(Property::CorrelationData(correlation_data.clone()));
             }
             // MQTT 5.0: 3.1.3.2.8
-            will_properties.extend(will.user_properties.clone());
+            will_properties.extend(will.properties.user_properties.clone());
             bytes.extend(encode_properities_hdr(&will_properties)?);
             bytes.extend(crate::mqtt_serde::encode_utf8_string(&will.will_topic)?);
             bytes.extend(crate::mqtt_serde::encode_binary_data(&will.will_message)?);

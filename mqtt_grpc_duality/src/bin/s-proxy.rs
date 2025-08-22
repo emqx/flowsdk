@@ -384,6 +384,7 @@ impl MqttRelayService for MyRelay {
         let connections = self.connections.clone();
         let broker_addr = self.broker_addr; // Capture broker_addr before move
 
+        // @FIXME: This is a one green thread per request, which is not ideal for scalability
         // Handle the bidirectional stream
         tokio::spawn(async move {
             while let Some(Ok(stream_msg)) = incoming_stream.next().await {
@@ -505,25 +506,25 @@ impl MqttRelayService for MyRelay {
                         if let Some(client_id) =
                             find_client_by_session(&connections, &stream_msg.session_id)
                         {
-                            debug!("Unsubscribe forwarded for client: {}", client_id);
-
-                            // Send UnsubAck response back via stream
-                            let unsuback_response = mqttv5pb::MqttStreamMessage {
-                                session_id: stream_msg.session_id,
-                                sequence_id: stream_msg.sequence_id + 1,
-                                direction: mqttv5pb::MessageDirection::BrokerToClient as i32,
-                                payload: Some(mqttv5pb::mqtt_stream_message::Payload::Unsuback(
-                                    mqttv5pb::Unsuback {
-                                        message_id: unsubscribe.message_id,
-                                        reason_codes: vec![0; unsubscribe.topic_filters.len()], // Success for all
-                                        properties: vec![],
-                                    },
-                                )),
-                            };
-
-                            if let Err(e) = response_tx.send(Ok(unsuback_response)).await {
-                                error!("Failed to send UnsubAck response: {}", e);
+                            if let Some(conn) = connections.get(&client_id) {
+                                let (broker_tx, _, _) = conn.value();
+                                if let Err(e) = broker_tx
+                                    .send(BrokerControlMessage::Unsubscribe(unsubscribe))
+                                    .await
+                                {
+                                    error!(
+                                        "Failed to forward Unsubscribe to broker for client {}: {}",
+                                        client_id, e
+                                    );
+                                } else {
+                                    debug!(
+                                        "Unsubscribe forwarded to broker for client: {}",
+                                        client_id
+                                    );
+                                }
                             }
+                        } else {
+                            error!("No client found for session: {}", stream_msg.session_id);
                         }
                     }
                     Some(mqttv5pb::mqtt_stream_message::Payload::Puback(puback)) => {

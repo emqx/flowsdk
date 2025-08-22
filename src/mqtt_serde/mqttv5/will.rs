@@ -4,18 +4,44 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct Will {
-    pub will_qos: u8,
-    pub will_retain: bool,
-    pub will_delay_interval: u32,
-    pub payload_format_indicator: u8,
-    pub message_expiry_interval: u32,
+pub struct WillProperties {
+    pub will_delay_interval: Option<u32>,
+    pub payload_format_indicator: Option<u8>,
+    pub message_expiry_interval: Option<u32>,
     pub content_type: Option<String>,
     pub response_topic: Option<String>,
     pub correlation_data: Option<Vec<u8>>,
     pub user_properties: Vec<Property>,
+}
+
+impl WillProperties {
+    pub fn new() -> Self {
+        WillProperties::default()
+    }
+}
+
+impl Default for WillProperties {
+    fn default() -> Self {
+        WillProperties {
+            will_delay_interval: None,
+            payload_format_indicator: None,
+            message_expiry_interval: None,
+            content_type: None,
+            response_topic: None,
+            correlation_data: None,
+            user_properties: Vec::new(),
+        }
+    }
+}
+
+#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
+pub struct Will {
+    pub will_qos: u8,
+    pub will_retain: bool,
     pub will_topic: String,
     pub will_message: Vec<u8>,
+    pub properties: WillProperties,
 }
 
 impl Will {
@@ -23,15 +49,9 @@ impl Will {
         Will {
             will_qos,
             will_retain,
-            will_delay_interval: 0,
-            payload_format_indicator: 0,
-            message_expiry_interval: 0,
-            content_type: None,
-            response_topic: None,
-            correlation_data: None,
-            user_properties: Vec::new(),
             will_topic,
             will_message,
+            properties: WillProperties::new(),
         }
     }
 
@@ -57,21 +77,25 @@ impl Will {
         for property in properties {
             match property {
                 // MQTT 5.0: 3.1.3.2.2 Will Delay Interval
-                Property::WillDelayInterval(value) => will.will_delay_interval = value,
+                Property::WillDelayInterval(value) => will.properties.will_delay_interval = Some(value),
                 // MQTT 5.0: 3.1.3.2.3 Payload format indicator
-                Property::PayloadFormatIndicator(value) => will.payload_format_indicator = value,
+                Property::PayloadFormatIndicator(value) => will.properties.payload_format_indicator = Some(value),
                 // MQTT 5.0: 3.1.3.2.4 Message Expiry Interval
-                Property::MessageExpiryInterval(value) => will.message_expiry_interval = value,
+                Property::MessageExpiryInterval(value) => {
+                    if will.properties.message_expiry_interval.is_none() {
+                        will.properties.message_expiry_interval = Some(value);
+                    }
+                }
                 // MQTT 5.0: 3.1.3.2.5 Content Type
-                Property::ContentType(value) => will.content_type = Some(value),
+                Property::ContentType(value) => will.properties.content_type = Some(value),
                 // MQTT 5.0: 3.1.3.2.6 Response Topic
-                Property::ResponseTopic(value) => will.response_topic = Some(value),
+                Property::ResponseTopic(value) => will.properties.response_topic = Some(value),
                 // MQTT 5.0: 3.1.3.2.7 Correlation Data
-                Property::CorrelationData(value) => will.correlation_data = Some(value),
+                Property::CorrelationData(value) => will.properties.correlation_data = Some(value),
                 // MQTT 5.0: 3.1.3.2.8 UserProperty
                 _ => {
                     if let Property::UserProperty(key, value) = property {
-                        will.user_properties
+                        will.properties.user_properties
                             .push(Property::UserProperty(key, value));
                     }
                 }

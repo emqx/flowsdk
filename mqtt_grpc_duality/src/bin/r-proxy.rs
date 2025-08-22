@@ -150,41 +150,49 @@ async fn start_streaming_client_loop(
     let mut parser = MqttParser::new();
     let sequence_counter = Arc::new(AtomicU64::new(1));
 
-    loop {
+    'outer: loop {
         tokio::select! {
             // Handle MQTT messages, client facing.
             _ = conn.read_h.read_buf(parser.buffer_mut()) => {
-                match parser.next_packet() {
-                    Ok(Some(packet))=> {
-                        debug!("Parsed MQTT packet from client {}: {:?}", conn.client_id, packet);
-                        // Convert MQTT packet to gRPC stream message
-                        if let Some(payload) = convert_mqtt_to_stream_payload(&packet) {
-                            let stream_msg = mqttv5pb::MqttStreamMessage {
-                                session_id: conn.session_id.clone(),
-                                sequence_id: sequence_counter.fetch_add(1, Ordering::SeqCst),
-                                direction: mqttv5pb::MessageDirection::ClientToBroker as i32,
-                                payload: Some(payload),
-                            };
+                // Parse all available packets from the buffer
+                loop {
+                    match parser.next_packet() {
+                        Ok(Some(packet)) => {
+                            debug!("Parsed MQTT packet from client {}: {:?}", conn.client_id, packet);
+                            // Convert MQTT packet to gRPC stream message
+                            if let Some(payload) = convert_mqtt_to_stream_payload(&packet) {
+                                let stream_msg = mqttv5pb::MqttStreamMessage {
+                                    session_id: conn.session_id.clone(),
+                                    sequence_id: sequence_counter.fetch_add(1, Ordering::SeqCst),
+                                    direction: mqttv5pb::MessageDirection::ClientToBroker as i32,
+                                    payload: Some(payload),
+                                };
 
-                            if let Err(e) = conn.grpc_stream_sender.send(stream_msg).await {
-                                error!("Failed to send MQTT packet to gRPC stream for client {}: {}", conn.client_id, e);
-                                break;
-                            } else {
-                                debug!("MQTT packet forwarded to s-proxy for client {}", conn.client_id);
+                                if let Err(e) = conn.grpc_stream_sender.send(stream_msg).await {
+                                    error!("Failed to send MQTT packet to gRPC stream for client {}: {}", conn.client_id, e);
+                                    break;
+                                } else {
+                                    debug!("MQTT packet forwarded to s-proxy for client {}: {:?}", conn.client_id, packet);
+                                }
+                            }
+                            // Continue parsing more packets from the same buffer
+                            if parser.buffer_mut().is_empty() {
+                                break; // No more data to parse, exit inner loop
                             }
                         }
-                    }
-                    Ok(None) => {
-                        // Incomplete packet, continue
-                        // @TODO: handle ParseOK::Continue and use the hint to read more data
-                    }
-                    Err(ParseError::BufferEmpty) => {
-                        // No data to read, continue waiting
-                        break;
-                    }
-                    Err(e) => {
-                        error!("Error parsing MQTT packet from client {}: {}", conn.client_id, e);
-                        break;
+                        Ok(None) => {
+                            // No more complete packets available, exit parsing loop
+                            break;
+                        }
+                        Err(ParseError::BufferEmpty) => {
+                            // No data to read, exit parsing loop
+                            debug!("No data to read for client {}, ending...", conn.client_id);
+                            break 'outer;
+                        }
+                        Err(e) => {
+                            error!("Error parsing MQTT packet from client {}: {}", conn.client_id, e);
+                            break 'outer;
+                        }
                     }
                 }
             }
