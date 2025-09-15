@@ -270,7 +270,7 @@ mod tests {
         conn.password = Some(b"pass".to_vec());
         // This should fail during serialization in a real scenario, but here we test the parser
         let bytes = vec![
-            0x10, 31, // type, len
+            0x10, 24, // type, len
             0x00, 0x04, b'M', b'Q', b'T', b'T', // proto name
             0x04, // version
             0x42, // flags: password, no username, clean session

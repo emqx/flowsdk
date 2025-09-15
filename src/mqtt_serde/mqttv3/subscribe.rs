@@ -148,7 +148,7 @@ mod tests {
             bytes,
             vec![
                 0x82, // Packet type and flags
-                6,    // Remaining length (2 msg id + 3 topic + 1 qos)
+                8,    // Remaining length (2 msg id + 4 topicfilter + 1 qos)
                 0x00, 0x01, // Message ID
                 0x00, 0x03, b'a', b'/', b'b', // Topic
                 0x01, // QoS
@@ -159,11 +159,11 @@ mod tests {
     #[test]
     fn test_subscribe_deserialization_multiple() {
         let bytes = vec![
-            0x82, 11, 0x00, 0x0A, 0x00, 0x03, b'a', b'/', b'b', 0x01, 0x00, 0x01, b'c', 0x02,
+            0x82, 12, 0x00, 0x0A, 0x00, 0x03, b'a', b'/', b'b', 0x01, 0x00, 0x01, b'c', 0x02,
         ];
         match MqttSubscribe::from_bytes(&bytes).unwrap() {
             ParseOk::Packet(MqttPacket::Subscribe3(subscribe), consumed) => {
-                assert_eq!(consumed, 13);
+                assert_eq!(consumed, 14);
                 assert_eq!(subscribe.message_id, 10);
                 assert_eq!(subscribe.subscriptions.len(), 2);
                 assert_eq!(subscribe.subscriptions[0].topic_filter, "a/b");
@@ -222,7 +222,7 @@ mod tests {
 
     #[test]
     fn test_subscribe_invalid_qos_deserialize() {
-        let bytes = vec![0x82, 0x06, 0x00, 0x01, 0x00, 0x03, b'a', b'/', b'b', 0x03];
+        let bytes = vec![0x82, 8, 0x00, 0x01, 0x00, 0x03, b'a', b'/', b'b', 0x03];
         match MqttSubscribe::from_bytes(&bytes) {
             Err(ParseError::ParseError(msg)) if msg.contains("Invalid QoS level") => {}
             _ => panic!("Expected ParseError with QoS message"),
@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn test_subscribe_payload_missing_qos() {
-        let bytes = vec![0x82, 0x05, 0x00, 0x01, 0x00, 0x03, b'a', b'/', b'b']; // Missing QoS byte
+        let bytes = vec![0x82, 0x07, 0x00, 0x01, 0x00, 0x03, b'a', b'/', b'b']; // Missing QoS byte
         match MqttSubscribe::from_bytes(&bytes) {
             Err(ParseError::ParseError(msg)) if msg.contains("missing QoS byte") => {}
             other => panic!(
