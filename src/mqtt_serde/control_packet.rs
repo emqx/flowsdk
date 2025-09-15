@@ -242,6 +242,6 @@ fn test_control_packet_type_conversion() {
 
     let json = serde_json::to_string(&pkt).unwrap();
 
-    let expected ="{\"type\":\"Connect\",\"protocol_name\":\"MQTT\",\"protocol_version\":5,\"keep_alive\":60,\"client_id\":\"test_client\",\"will\":null,\"username\":null,\"password\":null,\"properties\":[],\"clean_start\":true}";
+    let expected ="{\"type\":\"Connect5\",\"protocol_name\":\"MQTT\",\"protocol_version\":5,\"keep_alive\":60,\"client_id\":\"test_client\",\"will\":null,\"username\":null,\"password\":null,\"properties\":[],\"clean_start\":true}";
     assert_eq!(json, expected);
 }

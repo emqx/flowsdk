@@ -47,6 +47,10 @@ impl MqttControlPacket for MqttPingResp {
             ));
         }
 
+        if buffer[1..].is_empty() {
+            return Ok(ParseOk::Continue(1, 0));
+        }
+
         let (size, vbi_len) = parse_remaining_length(&buffer[1..])?;
         let total_len = 1 + vbi_len + size;
 
