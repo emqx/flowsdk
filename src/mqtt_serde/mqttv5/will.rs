@@ -2,7 +2,7 @@ use crate::mqtt_serde::mqttv5::common::properties::{parse_properties_hdr, Proper
 use crate::mqtt_serde::parser::{parse_binary_data, parse_utf8_string, ParseError};
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, PartialEq, Serialize, Deserialize, Clone)]
+#[derive(Debug, Default, PartialEq, Serialize, Deserialize, Clone)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct WillProperties {
     pub will_delay_interval: Option<u32>,
@@ -17,20 +17,6 @@ pub struct WillProperties {
 impl WillProperties {
     pub fn new() -> Self {
         WillProperties::default()
-    }
-}
-
-impl Default for WillProperties {
-    fn default() -> Self {
-        WillProperties {
-            will_delay_interval: None,
-            payload_format_indicator: None,
-            message_expiry_interval: None,
-            content_type: None,
-            response_topic: None,
-            correlation_data: None,
-            user_properties: Vec::new(),
-        }
     }
 }
 
