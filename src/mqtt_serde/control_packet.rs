@@ -5,73 +5,137 @@ use super::encode_variable_length;
 use super::parser::packet_type;
 use super::parser::{ParseError, ParseOk};
 
-use crate::mqtt_serde::mqttv5;
+use crate::mqtt_serde::mqttv3::*;
+use crate::mqtt_serde::mqttv5::*;
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 #[serde(tag = "type")]
 #[allow(clippy::large_enum_variant)]
 pub enum MqttPacket {
-    Connect(mqttv5::connect::MqttConnect),
-    ConnAck(mqttv5::connack::MqttConnAck),
-    Publish(mqttv5::publish::MqttPublish),
-    PubAck(mqttv5::puback::MqttPubAck),
-    PubRec(mqttv5::pubrec::MqttPubRec),
-    PubRel(mqttv5::pubrel::MqttPubRel),
-    PubComp(mqttv5::pubcomp::MqttPubComp),
-    Subscribe(mqttv5::subscribe::MqttSubscribe),
-    SubAck(mqttv5::suback::MqttSubAck),
-    Unsubscribe(mqttv5::unsubscribe::MqttUnsubscribe),
-    UnsubAck(mqttv5::unsuback::MqttUnsubAck),
-    PingReq(mqttv5::pingreq::MqttPingReq),
-    PingResp(mqttv5::pingresp::MqttPingResp),
-    Disconnect(mqttv5::disconnect::MqttDisconnect),
-    Auth(mqttv5::auth::MqttAuth),
+    // V5
+    Connect5(connectv5::MqttConnect),
+    ConnAck5(connackv5::MqttConnAck),
+    Publish5(publishv5::MqttPublish),
+    PubAck5(pubackv5::MqttPubAck),
+    PubRec5(pubrecv5::MqttPubRec),
+    PubRel5(pubrelv5::MqttPubRel),
+    PubComp5(pubcompv5::MqttPubComp),
+    Subscribe5(subscribev5::MqttSubscribe),
+    SubAck5(subackv5::MqttSubAck),
+    Unsubscribe5(unsubscribev5::MqttUnsubscribe),
+    UnsubAck5(unsubackv5::MqttUnsubAck),
+    PingReq5(pingreqv5::MqttPingReq),
+    PingResp5(pingrespv5::MqttPingResp),
+    Disconnect5(disconnectv5::MqttDisconnect),
+    Auth(authv5::MqttAuth),
+
+    // V3
+    Connect3(connectv3::MqttConnect),
+    ConnAck3(connackv3::MqttConnAck),
+    Publish3(publishv3::MqttPublish),
+    PubAck3(pubackv3::MqttPubAck),
+    PubRec3(pubrecv3::MqttPubRec),
+    PubRel3(pubrelv3::MqttPubRel),
+    PubComp3(pubcompv3::MqttPubComp),
+    Subscribe3(subscribev3::MqttSubscribe),
+    SubAck3(subackv3::MqttSubAck),
+    Unsubscribe3(unsubscribev3::MqttUnsubscribe),
+    UnsubAck3(unsubackv3::MqttUnsubAck),
+    PingReq3(pingreqv3::MqttPingReq),
+    PingResp3(pingrespv3::MqttPingResp),
+    Disconnect3(disconnectv3::MqttDisconnect),
 }
 
 impl MqttPacket {
     pub fn to_bytes(&self) -> Result<Vec<u8>, ParseError> {
         match self {
-            MqttPacket::Connect(p) => p.to_bytes(),
-            MqttPacket::ConnAck(p) => p.to_bytes(),
-            MqttPacket::Publish(p) => p.to_bytes(),
-            MqttPacket::PubAck(p) => p.to_bytes(),
-            MqttPacket::PubRec(p) => p.to_bytes(),
-            MqttPacket::PubRel(p) => p.to_bytes(),
-            MqttPacket::PubComp(p) => p.to_bytes(),
-            MqttPacket::Subscribe(p) => p.to_bytes(),
-            MqttPacket::SubAck(p) => p.to_bytes(),
-            MqttPacket::Unsubscribe(p) => p.to_bytes(),
-            MqttPacket::UnsubAck(p) => p.to_bytes(),
-            MqttPacket::PingReq(p) => p.to_bytes(),
-            MqttPacket::PingResp(p) => p.to_bytes(),
-            MqttPacket::Disconnect(p) => p.to_bytes(),
+            // V5
+            MqttPacket::Connect5(p) => p.to_bytes(),
+            MqttPacket::ConnAck5(p) => p.to_bytes(),
+            MqttPacket::Publish5(p) => p.to_bytes(),
+            MqttPacket::PubAck5(p) => p.to_bytes(),
+            MqttPacket::PubRec5(p) => p.to_bytes(),
+            MqttPacket::PubRel5(p) => p.to_bytes(),
+            MqttPacket::PubComp5(p) => p.to_bytes(),
+            MqttPacket::Subscribe5(p) => p.to_bytes(),
+            MqttPacket::SubAck5(p) => p.to_bytes(),
+            MqttPacket::Unsubscribe5(p) => p.to_bytes(),
+            MqttPacket::UnsubAck5(p) => p.to_bytes(),
+            MqttPacket::PingReq5(p) => p.to_bytes(),
+            MqttPacket::PingResp5(p) => p.to_bytes(),
+            MqttPacket::Disconnect5(p) => p.to_bytes(),
             MqttPacket::Auth(p) => p.to_bytes(),
+
+            // V3
+            MqttPacket::Connect3(p) => p.to_bytes(),
+            MqttPacket::ConnAck3(p) => p.to_bytes(),
+            MqttPacket::Publish3(p) => p.to_bytes(),
+            MqttPacket::PubAck3(p) => p.to_bytes(),
+            MqttPacket::PubRec3(p) => p.to_bytes(),
+            MqttPacket::PubRel3(p) => p.to_bytes(),
+            MqttPacket::PubComp3(p) => p.to_bytes(),
+            MqttPacket::Subscribe3(p) => p.to_bytes(),
+            MqttPacket::SubAck3(p) => p.to_bytes(),
+            MqttPacket::Unsubscribe3(p) => p.to_bytes(),
+            MqttPacket::UnsubAck3(p) => p.to_bytes(),
+            MqttPacket::PingReq3(p) => p.to_bytes(),
+            MqttPacket::PingResp3(p) => p.to_bytes(),
+            MqttPacket::Disconnect3(p) => p.to_bytes(),
         }
     }
 
-    pub fn from_bytes(buffer: &[u8]) -> Result<ParseOk, ParseError> {
+    pub fn from_bytes_with_version(buffer: &[u8], mqtt_version: u8) -> Result<ParseOk, ParseError> {
+        match mqtt_version {
+            3 => Self::from_bytes_v3(buffer),
+            5 => Self::from_bytes_v5(buffer),
+            _ => Err(ParseError::InvalidPacketType),
+        }
+    }
+
+    pub fn from_bytes_v5(buffer: &[u8]) -> Result<ParseOk, ParseError> {
         let packet_type_byte = packet_type(buffer)?;
         let packet_type = ControlPacketType::try_from(packet_type_byte)?;
 
         match packet_type {
-            ControlPacketType::CONNECT => mqttv5::connect::MqttConnect::from_bytes(buffer),
-            ControlPacketType::CONNACK => mqttv5::connack::MqttConnAck::from_bytes(buffer),
-            ControlPacketType::PUBLISH => mqttv5::publish::MqttPublish::from_bytes(buffer),
-            ControlPacketType::PUBACK => mqttv5::puback::MqttPubAck::from_bytes(buffer),
-            ControlPacketType::PUBREC => mqttv5::pubrec::MqttPubRec::from_bytes(buffer),
-            ControlPacketType::PUBREL => mqttv5::pubrel::MqttPubRel::from_bytes(buffer),
-            ControlPacketType::PUBCOMP => mqttv5::pubcomp::MqttPubComp::from_bytes(buffer),
-            ControlPacketType::SUBSCRIBE => mqttv5::subscribe::MqttSubscribe::from_bytes(buffer),
-            ControlPacketType::SUBACK => mqttv5::suback::MqttSubAck::from_bytes(buffer),
-            ControlPacketType::UNSUBSCRIBE => {
-                mqttv5::unsubscribe::MqttUnsubscribe::from_bytes(buffer)
-            }
-            ControlPacketType::UNSUBACK => mqttv5::unsuback::MqttUnsubAck::from_bytes(buffer),
-            ControlPacketType::PINGREQ => mqttv5::pingreq::MqttPingReq::from_bytes(buffer),
-            ControlPacketType::PINGRESP => mqttv5::pingresp::MqttPingResp::from_bytes(buffer),
-            ControlPacketType::DISCONNECT => mqttv5::disconnect::MqttDisconnect::from_bytes(buffer),
-            ControlPacketType::AUTH => mqttv5::auth::MqttAuth::from_bytes(buffer),
+            ControlPacketType::CONNECT => connectv5::MqttConnect::from_bytes(buffer),
+            ControlPacketType::CONNACK => connackv5::MqttConnAck::from_bytes(buffer),
+            ControlPacketType::PUBLISH => publishv5::MqttPublish::from_bytes(buffer),
+            ControlPacketType::PUBACK => pubackv5::MqttPubAck::from_bytes(buffer),
+            ControlPacketType::PUBREC => pubrecv5::MqttPubRec::from_bytes(buffer),
+            ControlPacketType::PUBREL => pubrelv5::MqttPubRel::from_bytes(buffer),
+            ControlPacketType::PUBCOMP => pubcompv5::MqttPubComp::from_bytes(buffer),
+            ControlPacketType::SUBSCRIBE => subscribev5::MqttSubscribe::from_bytes(buffer),
+            ControlPacketType::SUBACK => subackv5::MqttSubAck::from_bytes(buffer),
+            ControlPacketType::UNSUBSCRIBE => unsubscribev5::MqttUnsubscribe::from_bytes(buffer),
+            ControlPacketType::UNSUBACK => unsubackv5::MqttUnsubAck::from_bytes(buffer),
+            ControlPacketType::PINGREQ => pingreqv5::MqttPingReq::from_bytes(buffer),
+            ControlPacketType::PINGRESP => pingrespv5::MqttPingResp::from_bytes(buffer),
+            ControlPacketType::DISCONNECT => disconnectv5::MqttDisconnect::from_bytes(buffer),
+            ControlPacketType::AUTH => authv5::MqttAuth::from_bytes(buffer),
+        }
+    }
+
+    pub fn from_bytes_v3(buffer: &[u8]) -> Result<ParseOk, ParseError> {
+        let packet_type_byte = packet_type(buffer)?;
+        let packet_type = ControlPacketType::try_from(packet_type_byte)?;
+
+        match packet_type {
+            ControlPacketType::CONNECT => connectv3::MqttConnect::from_bytes(buffer),
+            ControlPacketType::CONNACK => connackv3::MqttConnAck::from_bytes(buffer),
+            ControlPacketType::PUBLISH => publishv3::MqttPublish::from_bytes(buffer),
+            ControlPacketType::PUBACK => pubackv3::MqttPubAck::from_bytes(buffer),
+            ControlPacketType::PUBREC => pubrecv3::MqttPubRec::from_bytes(buffer),
+            ControlPacketType::PUBREL => pubrelv3::MqttPubRel::from_bytes(buffer),
+            ControlPacketType::PUBCOMP => pubcompv3::MqttPubComp::from_bytes(buffer),
+            ControlPacketType::SUBSCRIBE => subscribev3::MqttSubscribe::from_bytes(buffer),
+            ControlPacketType::SUBACK => subackv3::MqttSubAck::from_bytes(buffer),
+            ControlPacketType::UNSUBSCRIBE => unsubscribev3::MqttUnsubscribe::from_bytes(buffer),
+            ControlPacketType::UNSUBACK => unsubackv3::MqttUnsubAck::from_bytes(buffer),
+            ControlPacketType::PINGREQ => pingreqv3::MqttPingReq::from_bytes(buffer),
+            ControlPacketType::PINGRESP => pingrespv3::MqttPingResp::from_bytes(buffer),
+            ControlPacketType::DISCONNECT => disconnectv3::MqttDisconnect::from_bytes(buffer),
+            _ => Err(ParseError::InvalidPacketType),
         }
     }
 }
@@ -164,7 +228,7 @@ pub trait MqttControlPacket {
 
 #[test]
 fn test_control_packet_type_conversion() {
-    let pkt = MqttPacket::Connect(mqttv5::connect::MqttConnect {
+    let pkt = MqttPacket::Connect5(connectv5::MqttConnect {
         protocol_name: "MQTT".to_string(),
         protocol_version: 5,
         keep_alive: 60,

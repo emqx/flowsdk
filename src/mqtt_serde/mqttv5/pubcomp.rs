@@ -134,7 +134,7 @@ impl MqttControlPacket for MqttPubComp {
             properties,
         };
 
-        Ok(ParseOk::Packet(MqttPacket::PubComp(pubcomp), offset))
+        Ok(ParseOk::Packet(MqttPacket::PubComp5(pubcomp), offset))
     }
 }
 
@@ -157,7 +157,7 @@ mod tests {
 
         // Test round-trip parsing
         match MqttPubComp::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubComp(parsed_pubcomp), consumed) => {
+            ParseOk::Packet(MqttPacket::PubComp5(parsed_pubcomp), consumed) => {
                 assert_eq!(consumed, 4);
                 assert_eq!(parsed_pubcomp.packet_id, 0x1234);
                 assert_eq!(parsed_pubcomp.reason_code, 0x00);
@@ -184,7 +184,7 @@ mod tests {
 
         // Test parsing
         match MqttPubComp::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubComp(parsed_pubcomp), consumed) => {
+            ParseOk::Packet(MqttPacket::PubComp5(parsed_pubcomp), consumed) => {
                 assert_eq!(consumed, 6);
                 assert_eq!(parsed_pubcomp.packet_id, 0x5678);
                 assert_eq!(parsed_pubcomp.reason_code, 0x92);
@@ -206,7 +206,7 @@ mod tests {
 
         // Test that it can be parsed back
         match MqttPubComp::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubComp(parsed_pubcomp), _) => {
+            ParseOk::Packet(MqttPacket::PubComp5(parsed_pubcomp), _) => {
                 assert_eq!(parsed_pubcomp.packet_id, 0xABCD);
                 assert_eq!(parsed_pubcomp.reason_code, 0x00);
                 assert_eq!(parsed_pubcomp.properties.len(), 2);
@@ -221,7 +221,7 @@ mod tests {
         let bytes = vec![0x70, 0x02, 0x00, 0x01]; // packet ID = 1
 
         match MqttPubComp::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubComp(pubcomp), consumed) => {
+            ParseOk::Packet(MqttPacket::PubComp5(pubcomp), consumed) => {
                 assert_eq!(consumed, 4);
                 assert_eq!(pubcomp.packet_id, 1);
                 assert_eq!(pubcomp.reason_code, 0x00); // Default success
@@ -245,7 +245,7 @@ mod tests {
             let bytes = pubcomp.to_bytes().unwrap();
 
             match MqttPubComp::from_bytes(&bytes).unwrap() {
-                ParseOk::Packet(MqttPacket::PubComp(parsed), _) => {
+                ParseOk::Packet(MqttPacket::PubComp5(parsed), _) => {
                     assert_eq!(parsed.packet_id, 0x3000);
                     assert_eq!(parsed.reason_code, error_code);
                 }
@@ -262,7 +262,7 @@ mod tests {
         assert!(result.is_ok());
 
         match result.unwrap() {
-            ParseOk::Packet(MqttPacket::PubComp(pubcomp), consumed) => {
+            ParseOk::Packet(MqttPacket::PubComp5(pubcomp), consumed) => {
                 assert_eq!(consumed, 6);
                 assert_eq!(pubcomp.packet_id, 5);
                 assert_eq!(pubcomp.reason_code, 0x00); // Success
@@ -309,7 +309,7 @@ mod tests {
         let bytes = original_pubcomp.to_bytes().unwrap();
 
         match MqttPubComp::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubComp(parsed_pubcomp), _) => {
+            ParseOk::Packet(MqttPacket::PubComp5(parsed_pubcomp), _) => {
                 assert_eq!(parsed_pubcomp.packet_id, original_pubcomp.packet_id);
                 assert_eq!(parsed_pubcomp.reason_code, original_pubcomp.reason_code);
                 assert_eq!(
@@ -326,7 +326,7 @@ mod tests {
         let packet = vec![0x70, 0x03, 0x00, 0x0A, 0x00, 0x00, 0x00, 0x00];
         let result = MqttPubComp::from_bytes(&packet);
         match result {
-            Ok(ParseOk::Packet(MqttPacket::PubComp(pubcomp), _consumed)) => {
+            Ok(ParseOk::Packet(MqttPacket::PubComp5(pubcomp), _consumed)) => {
                 assert_eq!(pubcomp.reason_code, 0);
                 assert_eq!(pubcomp.properties, vec![]);
             }
@@ -340,7 +340,7 @@ mod tests {
 
         let result = MqttPubComp::from_bytes(&packet_bytes);
         match result {
-            Ok(ParseOk::Packet(MqttPacket::PubComp(pubcomp), _consumed)) => {
+            Ok(ParseOk::Packet(MqttPacket::PubComp5(pubcomp), _consumed)) => {
                 assert_eq!(pubcomp.packet_id, 2);
                 assert_eq!(pubcomp.reason_code, 0);
                 assert_eq!(pubcomp.properties, vec![]);

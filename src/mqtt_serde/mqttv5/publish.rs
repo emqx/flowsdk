@@ -190,7 +190,7 @@ impl MqttControlPacket for MqttPublish {
             properties,
         };
 
-        Ok(ParseOk::Packet(MqttPacket::Publish(publish), offset))
+        Ok(ParseOk::Packet(MqttPacket::Publish5(publish), offset))
     }
 }
 
@@ -206,7 +206,7 @@ mod tests {
         let buffer = hex::decode(pub_msg).unwrap();
         println!("buffer: {:?}", buffer);
         match MqttPublish::from_bytes(&buffer).unwrap() {
-            ParseOk::Packet(MqttPacket::Publish(publish), consumed) => {
+            ParseOk::Packet(MqttPacket::Publish5(publish), consumed) => {
                 assert_eq!(consumed, 1 + 2 + 268);
                 assert_eq!(publish.topic_name, "undefined");
                 assert_eq!(publish.packet_id, None);
@@ -223,7 +223,7 @@ mod tests {
         let buffer = hex::decode(pub_msg).unwrap();
         println!("buffer: {:?}", buffer);
         match MqttPublish::from_bytes(&buffer).unwrap() {
-            ParseOk::Packet(MqttPacket::Publish(publish), consumed) => {
+            ParseOk::Packet(MqttPacket::Publish5(publish), consumed) => {
                 assert_eq!(consumed, 1 + 2 + 263);
                 assert_eq!(publish.qos, 1);
                 assert_eq!(publish.topic_name, "aa");
@@ -241,7 +241,7 @@ mod tests {
         let buffer = hex::decode(pub_msg).unwrap();
         println!("buffer: {:?}", buffer);
         match MqttPublish::from_bytes(&buffer).unwrap() {
-            ParseOk::Packet(MqttPacket::Publish(publish), consumed) => {
+            ParseOk::Packet(MqttPacket::Publish5(publish), consumed) => {
                 assert_eq!(consumed, 1 + 2 + 263);
                 assert_eq!(publish.qos, 2);
                 assert_eq!(publish.topic_name, "aa");
@@ -280,7 +280,7 @@ mod tests {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 assert_eq!(consumed, 9);
                 match packet {
-                    MqttPacket::Publish(publish) => {
+                    MqttPacket::Publish5(publish) => {
                         assert_eq!(publish.topic_name, "aa");
                         assert_eq!(publish.qos, 0);
                         assert_eq!(publish.packet_id, None);

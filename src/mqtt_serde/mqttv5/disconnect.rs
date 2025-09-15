@@ -231,7 +231,7 @@ impl MqttControlPacket for MqttDisconnect {
 
         let disconnect = MqttDisconnect::new(reason_code, properties);
         Ok(ParseOk::Packet(
-            MqttPacket::Disconnect(disconnect),
+            MqttPacket::Disconnect5(disconnect),
             total_len,
         ))
     }
@@ -327,7 +327,7 @@ mod tests {
         let bytes = vec![0xE0, 0x00]; // DISCONNECT with remaining length 0
 
         match MqttDisconnect::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Disconnect(disconnect), consumed) => {
+            ParseOk::Packet(MqttPacket::Disconnect5(disconnect), consumed) => {
                 assert_eq!(consumed, 2);
                 assert_eq!(disconnect.reason_code, 0x00);
                 assert!(disconnect.properties.is_empty());
@@ -341,7 +341,7 @@ mod tests {
         let bytes = vec![0xE0, 0x02, 0x81, 0x00]; // DISCONNECT with reason code 0x81, no properties
 
         match MqttDisconnect::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Disconnect(disconnect), consumed) => {
+            ParseOk::Packet(MqttPacket::Disconnect5(disconnect), consumed) => {
                 assert_eq!(consumed, 4);
                 assert_eq!(disconnect.reason_code, 0x81);
                 assert!(disconnect.properties.is_empty());
@@ -356,7 +356,7 @@ mod tests {
         let bytes = original.to_bytes().unwrap();
 
         match MqttDisconnect::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Disconnect(parsed), _) => {
+            ParseOk::Packet(MqttPacket::Disconnect5(parsed), _) => {
                 assert_eq!(original, parsed);
             }
             _ => panic!("Expected DISCONNECT packet"),
@@ -369,7 +369,7 @@ mod tests {
         let bytes = original.to_bytes().unwrap();
 
         match MqttDisconnect::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Disconnect(parsed), _) => {
+            ParseOk::Packet(MqttPacket::Disconnect5(parsed), _) => {
                 assert_eq!(original, parsed);
             }
             _ => panic!("Expected DISCONNECT packet"),
@@ -456,7 +456,7 @@ mod tests {
             let bytes = disconnect.to_bytes().unwrap();
 
             match MqttDisconnect::from_bytes(&bytes).unwrap() {
-                ParseOk::Packet(MqttPacket::Disconnect(parsed), _) => {
+                ParseOk::Packet(MqttPacket::Disconnect5(parsed), _) => {
                     assert_eq!(parsed.reason_code, reason_code);
                 }
                 _ => panic!(
@@ -477,7 +477,7 @@ mod tests {
         let bytes = disconnect.to_bytes().unwrap();
 
         match MqttDisconnect::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Disconnect(parsed), _) => {
+            ParseOk::Packet(MqttPacket::Disconnect5(parsed), _) => {
                 assert_eq!(parsed.reason_code, 0x8B);
                 assert_eq!(parsed.properties, properties);
             }

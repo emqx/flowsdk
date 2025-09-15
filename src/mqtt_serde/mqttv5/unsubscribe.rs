@@ -176,7 +176,7 @@ impl MqttControlPacket for MqttUnsubscribe {
         };
 
         Ok(ParseOk::Packet(
-            MqttPacket::Unsubscribe(unsubscribe),
+            MqttPacket::Unsubscribe5(unsubscribe),
             offset,
         ))
     }
@@ -201,7 +201,7 @@ mod tests {
 
         // Test round-trip parsing
         match MqttUnsubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), consumed) => {
+            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), consumed) => {
                 assert_eq!(consumed, bytes.len());
                 assert_eq!(parsed_unsubscribe.packet_id, 1234);
                 assert_eq!(parsed_unsubscribe.topic_filters, vec!["test/topic"]);
@@ -225,7 +225,7 @@ mod tests {
         let bytes = unsubscribe.to_bytes().unwrap();
 
         match MqttUnsubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), _) => {
+            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), _) => {
                 assert_eq!(parsed_unsubscribe.packet_id, 5678);
                 assert_eq!(parsed_unsubscribe.topic_filters, topic_filters);
             }
@@ -246,7 +246,7 @@ mod tests {
         let bytes = unsubscribe.to_bytes().unwrap();
 
         match MqttUnsubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), _) => {
+            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), _) => {
                 assert_eq!(parsed_unsubscribe.packet_id, 9999);
                 assert_eq!(parsed_unsubscribe.topic_filters, topic_filters);
                 assert_eq!(parsed_unsubscribe.properties.len(), 2);
@@ -269,7 +269,7 @@ mod tests {
         let bytes = unsubscribe.to_bytes().unwrap();
 
         match MqttUnsubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), _) => {
+            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), _) => {
                 assert_eq!(parsed_unsubscribe.topic_filters, topic_filters);
             }
             _ => panic!("Expected UNSUBSCRIBE packet"),
@@ -320,7 +320,7 @@ mod tests {
         let bytes = unsubscribe.to_bytes().unwrap();
 
         match MqttUnsubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), _) => {
+            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), _) => {
                 assert_eq!(parsed_unsubscribe.topic_filters, unsubscribe.topic_filters);
             }
             _ => panic!("Expected UNSUBSCRIBE packet"),
@@ -341,7 +341,7 @@ mod tests {
         let bytes = unsubscribe.to_bytes().unwrap();
 
         match MqttUnsubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), _) => {
+            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), _) => {
                 assert_eq!(parsed_unsubscribe.topic_filters, topic_filters);
             }
             _ => panic!("Expected UNSUBSCRIBE packet"),
@@ -366,7 +366,7 @@ mod tests {
         let bytes = original_unsubscribe.to_bytes().unwrap();
 
         match MqttUnsubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), consumed) => {
+            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), consumed) => {
                 assert_eq!(consumed, bytes.len());
                 assert_eq!(parsed_unsubscribe.packet_id, original_unsubscribe.packet_id);
                 assert_eq!(
@@ -391,7 +391,7 @@ mod tests {
         let bytes = unsubscribe.to_bytes().unwrap();
 
         match MqttUnsubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), _) => {
+            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), _) => {
                 assert_eq!(parsed_unsubscribe.topic_filters, topic_filters);
             }
             _ => panic!("Expected UNSUBSCRIBE packet"),
@@ -413,7 +413,7 @@ mod tests {
         let bytes = unsubscribe.to_bytes().unwrap();
 
         match MqttUnsubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), _) => {
+            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), _) => {
                 assert_eq!(parsed_unsubscribe.topic_filters, topic_filters);
             }
             _ => panic!("Expected UNSUBSCRIBE packet"),
@@ -436,7 +436,7 @@ mod tests {
         assert_eq!(offset, packet.len());
         assert_eq!(
             parsed_packet,
-            MqttPacket::Unsubscribe(MqttUnsubscribe::new(
+            MqttPacket::Unsubscribe5(MqttUnsubscribe::new(
                 29196,
                 vec!["testtopic/#".to_string()],
                 vec![]

@@ -133,7 +133,7 @@ impl MqttControlPacket for MqttPubRec {
             properties,
         };
 
-        Ok(ParseOk::Packet(MqttPacket::PubRec(pubrec), offset))
+        Ok(ParseOk::Packet(MqttPacket::PubRec5(pubrec), offset))
     }
 }
 
@@ -156,7 +156,7 @@ mod tests {
 
         // Test round-trip parsing
         match MqttPubRec::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubRec(parsed_pubrec), consumed) => {
+            ParseOk::Packet(MqttPacket::PubRec5(parsed_pubrec), consumed) => {
                 assert_eq!(consumed, 4);
                 assert_eq!(parsed_pubrec.packet_id, 0x1234);
                 assert_eq!(parsed_pubrec.reason_code, 0x00);
@@ -183,7 +183,7 @@ mod tests {
 
         // Test parsing
         match MqttPubRec::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubRec(parsed_pubrec), consumed) => {
+            ParseOk::Packet(MqttPacket::PubRec5(parsed_pubrec), consumed) => {
                 assert_eq!(consumed, 6);
                 assert_eq!(parsed_pubrec.packet_id, 0x5678);
                 assert_eq!(parsed_pubrec.reason_code, 0x80);
@@ -205,7 +205,7 @@ mod tests {
 
         // Test that it can be parsed back
         match MqttPubRec::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubRec(parsed_pubrec), _) => {
+            ParseOk::Packet(MqttPacket::PubRec5(parsed_pubrec), _) => {
                 assert_eq!(parsed_pubrec.packet_id, 0xABCD);
                 assert_eq!(parsed_pubrec.reason_code, 0x83);
                 assert_eq!(parsed_pubrec.properties.len(), 2);
@@ -220,7 +220,7 @@ mod tests {
         let bytes = vec![0x50, 0x02, 0x00, 0x01]; // packet ID = 1
 
         match MqttPubRec::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubRec(pubrec), consumed) => {
+            ParseOk::Packet(MqttPacket::PubRec5(pubrec), consumed) => {
                 assert_eq!(consumed, 4);
                 assert_eq!(pubrec.packet_id, 1);
                 assert_eq!(pubrec.reason_code, 0x00); // Default success
@@ -246,7 +246,7 @@ mod tests {
             let bytes = pubrec.to_bytes().unwrap();
 
             match MqttPubRec::from_bytes(&bytes).unwrap() {
-                ParseOk::Packet(MqttPacket::PubRec(parsed), _) => {
+                ParseOk::Packet(MqttPacket::PubRec5(parsed), _) => {
                     assert_eq!(parsed.packet_id, 0x1000);
                     assert_eq!(parsed.reason_code, error_code);
                 }
@@ -266,7 +266,7 @@ mod tests {
         };
         assert_eq!(
             parsed,
-            MqttPacket::PubRec(MqttPubRec::new(2_u16, 0x10, vec![]))
+            MqttPacket::PubRec5(MqttPubRec::new(2_u16, 0x10, vec![]))
         );
     }
 }

@@ -150,7 +150,7 @@ impl MqttControlPacket for MqttSubAck {
             properties,
         };
 
-        Ok(ParseOk::Packet(MqttPacket::SubAck(suback), total_len))
+        Ok(ParseOk::Packet(MqttPacket::SubAck5(suback), total_len))
     }
 }
 
@@ -170,7 +170,7 @@ mod tests {
 
         // Test round-trip parsing
         match MqttSubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::SubAck(parsed_suback), consumed) => {
+            ParseOk::Packet(MqttPacket::SubAck5(parsed_suback), consumed) => {
                 assert_eq!(consumed, bytes.len());
                 assert_eq!(parsed_suback.packet_id, 1234);
                 assert_eq!(parsed_suback.reason_codes, vec![0x00, 0x00, 0x00]);
@@ -189,7 +189,7 @@ mod tests {
         let bytes = suback.to_bytes().unwrap();
 
         match MqttSubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::SubAck(parsed_suback), _) => {
+            ParseOk::Packet(MqttPacket::SubAck5(parsed_suback), _) => {
                 assert_eq!(parsed_suback.packet_id, 5678);
                 assert_eq!(parsed_suback.reason_codes, qos_levels);
             }
@@ -215,7 +215,7 @@ mod tests {
         let bytes = suback.to_bytes().unwrap();
 
         match MqttSubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::SubAck(parsed_suback), _) => {
+            ParseOk::Packet(MqttPacket::SubAck5(parsed_suback), _) => {
                 assert_eq!(parsed_suback.packet_id, 9999);
                 assert_eq!(parsed_suback.reason_codes, reason_codes);
             }
@@ -236,7 +236,7 @@ mod tests {
         let bytes = suback.to_bytes().unwrap();
 
         match MqttSubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::SubAck(parsed_suback), _) => {
+            ParseOk::Packet(MqttPacket::SubAck5(parsed_suback), _) => {
                 assert_eq!(parsed_suback.packet_id, 1111);
                 assert_eq!(parsed_suback.reason_codes, reason_codes);
                 assert_eq!(parsed_suback.properties.len(), 2);
@@ -256,7 +256,7 @@ mod tests {
         assert_eq!(bytes[0], 0x90); // SUBACK packet type (9 << 4)
 
         match MqttSubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::SubAck(parsed_suback), _) => {
+            ParseOk::Packet(MqttPacket::SubAck5(parsed_suback), _) => {
                 assert_eq!(parsed_suback.packet_id, 42);
                 assert_eq!(parsed_suback.reason_codes, vec![0x02]);
             }
@@ -294,7 +294,7 @@ mod tests {
         let bytes = suback.to_bytes().unwrap();
 
         match MqttSubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::SubAck(parsed_suback), _) => {
+            ParseOk::Packet(MqttPacket::SubAck5(parsed_suback), _) => {
                 assert_eq!(parsed_suback.reason_codes, reason_codes);
             }
             _ => panic!("Expected SUBACK packet"),
@@ -314,7 +314,7 @@ mod tests {
         let bytes = original_suback.to_bytes().unwrap();
 
         match MqttSubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::SubAck(parsed_suback), consumed) => {
+            ParseOk::Packet(MqttPacket::SubAck5(parsed_suback), consumed) => {
                 assert_eq!(consumed, bytes.len());
                 assert_eq!(parsed_suback.packet_id, original_suback.packet_id);
                 assert_eq!(parsed_suback.reason_codes, original_suback.reason_codes);
@@ -338,7 +338,7 @@ mod tests {
         let bytes = suback.to_bytes().unwrap();
 
         match MqttSubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::SubAck(parsed_suback), _) => {
+            ParseOk::Packet(MqttPacket::SubAck5(parsed_suback), _) => {
                 assert_eq!(parsed_suback.packet_id, 3333);
                 assert_eq!(parsed_suback.reason_codes.len(), 100);
                 assert_eq!(parsed_suback.reason_codes, reason_codes);
@@ -355,7 +355,7 @@ mod tests {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 assert_eq!(consumed, 6);
                 match packet {
-                    MqttPacket::SubAck(suback) => {
+                    MqttPacket::SubAck5(suback) => {
                         assert_eq!(suback.packet_id, 43407);
                         assert_eq!(suback.reason_codes, vec![0]);
                     }

@@ -28,7 +28,7 @@ cleanup() {
     fi
     if [ -n "$BROKER_PID" ]; then
         echo "Stopping Mosquitto broker (PID: $BROKER_PID)..."
-        kill "$BROKER_PID" 2>/dev/null || true
+        kill -9 "$BROKER_PID" 2>/dev/null || true
     fi
     echo "Cleanup complete."
 }
@@ -111,7 +111,7 @@ python3 startbroker.py --port "$BROKER_PORT" &
 BROKER_PID=$!
 echo "Broker started with PID $BROKER_PID on port $BROKER_PORT."
 sleep 3 # Give broker time to initialize
-python3 client_test5.py -p 1884 -v  # Test.test_flow_control2
+python3 client_test5.py -p 1884 -v  $@ #Test.test_keepalive
 TEST_RESULT=$?
 
 echo "Deactivating Python virtual environment..."

@@ -79,7 +79,7 @@ impl MqttControlPacket for MqttPingReq {
         }
 
         let ping_req = MqttPingReq::new();
-        Ok(ParseOk::Packet(MqttPacket::PingReq(ping_req), total_len))
+        Ok(ParseOk::Packet(MqttPacket::PingReq5(ping_req), total_len))
     }
 }
 
@@ -119,7 +119,7 @@ mod tests {
         let bytes = vec![0xC0, 0x00]; // PINGREQ with remaining length 0
 
         match MqttPingReq::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PingReq(_), consumed) => {
+            ParseOk::Packet(MqttPacket::PingReq5(_), consumed) => {
                 assert_eq!(consumed, 2);
             }
             _ => panic!("Expected PINGREQ packet"),
@@ -132,7 +132,7 @@ mod tests {
         let bytes = original.to_bytes().unwrap();
 
         match MqttPingReq::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PingReq(parsed), _) => {
+            ParseOk::Packet(MqttPacket::PingReq5(parsed), _) => {
                 assert_eq!(original, parsed);
             }
             _ => panic!("Expected PINGREQ packet"),

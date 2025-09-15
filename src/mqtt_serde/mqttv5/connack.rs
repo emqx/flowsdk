@@ -101,7 +101,7 @@ pub fn parse_connack(buffer: &[u8]) -> Result<ParseOk, ParseError> {
     }
 
     Ok(ParseOk::Packet(
-        MqttPacket::ConnAck(MqttConnAck::new(session_present, reason_code, properties)),
+        MqttPacket::ConnAck5(MqttConnAck::new(session_present, reason_code, properties)),
         offset,
     ))
 }
@@ -124,7 +124,7 @@ mod tests {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 assert_eq!(consumed, 24);
                 match packet {
-                    MqttPacket::ConnAck(connack) => {
+                    MqttPacket::ConnAck5(connack) => {
                         assert!(!connack.session_present);
                         assert_eq!(connack.reason_code, 0);
                     }

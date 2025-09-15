@@ -1,0 +1,248 @@
+syntax = "proto3";
+
+package mqttv3;
+
+// Top-level message representing any MQTT 3.1.1 control packet.
+message MqttPacket {
+  oneof packet {
+    Connect connect = 1;
+    Connack connack = 2;
+    Publish publish = 3;
+    Puback puback = 4;
+    Pubrec pubrec = 5;
+    Pubrel pubrel = 6;
+    Pubcomp pubcomp = 7;
+    Subscribe subscribe = 8;
+    Suback suback = 9;
+    Unsubscribe unsubscribe = 10;
+    Unsuback unsuback = 11;
+    Pingreq pingreq = 12;
+    Pingresp pingresp = 13;
+    Disconnect disconnect = 14;
+  }
+}
+
+// CONNECT packet: Client requests connection to server.
+message Connect {
+  // Client identifier (UTF-8 string).
+  string client_id = 1;
+  // Protocol name (e.g., "MQTT" or "MQIsdp").
+  string protocol_name = 2;
+  // Protocol version (4 for MQTT 3.1.1, 3 for MQTT 3.1).
+  uint32 protocol_version = 3;
+  // Clean session flag (MQTT 3.1.1 uses clean session, not clean start).
+  bool clean_session = 4;
+  // Keep-alive timer in seconds (16-bit).
+  uint32 keep_alive = 5;
+  // Username (optional).
+  string username = 6;
+  // Password (optional, binary data).
+  bytes password = 7;
+  // Will message (optional).
+  Will will = 8;
+}
+
+// Will message for CONNECT packet (simplified for MQTT 3.1.1).
+message Will {
+  string topic = 1;
+  bytes payload = 2;
+  QoS qos = 3;
+  bool retain = 4;
+}
+
+// CONNACK packet: Server acknowledges connection.
+message Connack {
+  // Session present flag.
+  bool session_present = 1;
+  // Return code (e.g., 0x00 for connection accepted).
+  uint32 return_code = 2;
+}
+
+// PUBLISH packet: Publishes a message.
+message Publish {
+  // Topic name (UTF-8 string).
+  string topic = 1;
+  // Message ID (for QoS 1 or 2).
+  uint32 message_id = 2;
+  // Quality of Service level.
+  QoS qos = 3;
+  // Retain flag.
+  bool retain = 4;
+  // Duplicate delivery flag.
+  bool dup = 5;
+  // Binary payload.
+  bytes payload = 6;
+}
+
+// PUBACK packet: Acknowledges QoS 1 PUBLISH (no reason code in MQTT 3.1.1).
+message Puback {
+  // Message ID.
+  uint32 message_id = 1;
+}
+
+// PUBREC packet: Acknowledges QoS 2 PUBLISH (step 1).
+message Pubrec {
+  // Message ID.
+  uint32 message_id = 1;
+}
+
+// PUBREL packet: Continues QoS 2 (step 2).
+message Pubrel {
+  // Message ID.
+  uint32 message_id = 1;
+}
+
+// PUBCOMP packet: Completes QoS 2.
+message Pubcomp {
+  // Message ID.
+  uint32 message_id = 1;
+}
+
+// SUBSCRIBE packet: Client subscribes to topics.
+message Subscribe {
+  // Message ID.
+  uint32 message_id = 1;
+  // List of topic filters and their QoS levels.
+  repeated TopicSubscription subscriptions = 2;
+}
+
+// Topic subscription for SUBSCRIBE (simplified for MQTT 3.1.1).
+message TopicSubscription {
+  string topic_filter = 1;
+  // QoS level (0, 1, or 2).
+  uint32 qos = 2;
+}
+
+// SUBACK packet: Server acknowledges subscription.
+message Suback {
+  // Message ID.
+  uint32 message_id = 1;
+  // Return codes for each topic subscription (0x00, 0x01, 0x02 for granted QoS, 0x80 for failure).
+  repeated uint32 return_codes = 2;
+}
+
+// UNSUBSCRIBE packet: Client unsubscribes from topics.
+message Unsubscribe {
+  // Message ID.
+  uint32 message_id = 1;
+  // List of topic filters to unsubscribe.
+  repeated string topic_filters = 2;
+}
+
+// UNSUBACK packet: Server acknowledges unsubscription.
+message Unsuback {
+  // Message ID.
+  uint32 message_id = 1;
+}
+
+// PINGREQ packet: Client ping request.
+message Pingreq {
+  // No fields (empty packet).
+}
+
+// PINGRESP packet: Server ping response.
+message Pingresp {
+  // No fields (empty packet).
+}
+
+// DISCONNECT packet: Client disconnects (no reason code in MQTT 3.1.1).
+message Disconnect {
+  // No fields (empty packet).
+}
+
+// Enum for MQTT QoS levels.
+enum QoS {
+  AT_MOST_ONCE = 0;  // QoS 0
+  AT_LEAST_ONCE = 1; // QoS 1
+  EXACTLY_ONCE = 2;  // QoS 2
+}
+
+// New streaming message wrapper for MQTT 3.1.1
+message MqttStreamMessage {
+  string session_id = 1;      // Unique identifier for this MQTT session
+  uint64 sequence_id = 2;     // For message ordering within session
+  MessageDirection direction = 3;
+  oneof payload {
+    mqttv3.Connect connect = 10;
+    mqttv3.Connack connack = 11;
+    mqttv3.Publish publish = 12;
+    mqttv3.Puback puback = 13;
+    mqttv3.Pubrec pubrec = 14;
+    mqttv3.Pubrel pubrel = 15;
+    mqttv3.Pubcomp pubcomp = 16;
+    mqttv3.Subscribe subscribe = 17;
+    mqttv3.Suback suback = 18;
+    mqttv3.Unsubscribe unsubscribe = 19;
+    mqttv3.Unsuback unsuback = 20;
+    mqttv3.Pingreq pingreq = 21;
+    mqttv3.Pingresp pingresp = 22;
+    mqttv3.Disconnect disconnect = 23;
+    SessionControl session_control = 50;
+  }
+}
+
+message SessionControl {
+  enum ControlType {
+    ESTABLISH = 0;
+    TERMINATE = 1;
+    HEARTBEAT = 2;
+  }
+  ControlType control_type = 1;
+  string client_id = 2;
+}
+
+enum MessageDirection {
+  CLIENT_TO_BROKER = 0;
+  BROKER_TO_CLIENT = 1;
+}
+
+// gRPC service for relaying MQTT 3.1.1 packets.
+service MqttRelayService {
+  // Bidirectional streaming - one stream per MQTT connection
+  rpc StreamMqttMessages(stream MqttStreamMessage) returns (stream MqttStreamMessage);
+
+  // Legacy unary RPCs (for backward compatibility)
+  rpc RelayPacket(MqttPacket) returns (RelayResponse);
+  rpc MQTTConnect(mqttv3.Connect) returns (mqttv3.Connack);
+
+  // mqtt publish RPC.
+  rpc MQTTPublishQos1(mqttv3.Publish) returns (mqttv3.Puback);
+
+  // mqtt subscribe RPC.
+  rpc MQTTSubscribe(mqttv3.Subscribe) returns (mqttv3.Suback);
+
+  // mqtt suback RPC - server subscription acknowledgment.
+  rpc MQTTSuback(mqttv3.Suback) returns (RelayResponse);
+
+  // mqtt unsubscribe RPC.
+  rpc MQTTUnsubscribe(mqttv3.Unsubscribe) returns (mqttv3.Unsuback);
+
+  // mqtt unsuback RPC - server unsubscription acknowledgment.
+  rpc MQTTUnsuback(mqttv3.Unsuback) returns (RelayResponse);
+
+  // mqtt puback RPC - QoS 1 acknowledgment.
+  rpc MQTTPuback(mqttv3.Puback) returns (RelayResponse);
+
+  // mqtt pubrec RPC - QoS 2 publish received (step 1).
+  rpc MQTTPubrec(mqttv3.Pubrec) returns (mqttv3.Pubrel);
+
+  // mqtt pubrel RPC - QoS 2 publish release (step 2).
+  rpc MQTTPubrel(mqttv3.Pubrel) returns (mqttv3.Pubcomp);
+
+  // mqtt pubcomp RPC - QoS 2 publish complete (step 3).
+  rpc MQTTPubcomp(mqttv3.Pubcomp) returns (RelayResponse);
+
+  // mqtt pingreq RPC - client ping request.
+  rpc MQTTPingreq(mqttv3.Pingreq) returns (mqttv3.Pingresp);
+
+  // mqtt disconnect RPC - graceful disconnection.
+  rpc MQTTDisconnect(mqttv3.Disconnect) returns (RelayResponse);
+}
+
+// Response for unary RelayPacket RPC.
+message RelayResponse {
+  // Status of the relay operation (e.g., 0 for success).
+  uint32 status_code = 1;
+  // Optional error message.
+  string error_message = 2;
+}

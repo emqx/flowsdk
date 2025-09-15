@@ -77,7 +77,7 @@ impl MqttControlPacket for MqttPingResp {
         }
 
         let ping_resp = MqttPingResp::new();
-        Ok(ParseOk::Packet(MqttPacket::PingResp(ping_resp), total_len))
+        Ok(ParseOk::Packet(MqttPacket::PingResp5(ping_resp), total_len))
     }
 }
 
@@ -118,7 +118,7 @@ mod tests {
         let bytes = vec![0xD0, 0x00]; // PINGRESP with remaining length 0
 
         match MqttPingResp::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PingResp(_), consumed) => {
+            ParseOk::Packet(MqttPacket::PingResp5(_), consumed) => {
                 assert_eq!(consumed, 2);
             }
             _ => panic!("Expected PINGRESP packet"),
@@ -131,7 +131,7 @@ mod tests {
         let bytes = original.to_bytes().unwrap();
 
         match MqttPingResp::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PingResp(parsed), _) => {
+            ParseOk::Packet(MqttPacket::PingResp5(parsed), _) => {
                 assert_eq!(original, parsed);
             }
             _ => panic!("Expected PINGRESP packet"),
@@ -216,12 +216,12 @@ mod tests {
 
         // Verify both can be parsed back
         match MqttPingReq::from_bytes(&pingreq_bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PingReq(_), _) => {}
+            ParseOk::Packet(MqttPacket::PingReq5(_), _) => {}
             _ => panic!("Expected PINGREQ"),
         }
 
         match MqttPingResp::from_bytes(&pingresp_bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PingResp(_), _) => {}
+            ParseOk::Packet(MqttPacket::PingResp5(_), _) => {}
             _ => panic!("Expected PINGRESP"),
         }
     }
