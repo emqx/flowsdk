@@ -154,7 +154,7 @@ impl MqttControlPacket for MqttPubRel {
             properties,
         };
 
-        Ok(ParseOk::Packet(MqttPacket::PubRel(pubrel), offset))
+        Ok(ParseOk::Packet(MqttPacket::PubRel5(pubrel), offset))
     }
 }
 
@@ -177,7 +177,7 @@ mod tests {
 
         // Test round-trip parsing
         match MqttPubRel::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubRel(parsed_pubrel), consumed) => {
+            ParseOk::Packet(MqttPacket::PubRel5(parsed_pubrel), consumed) => {
                 assert_eq!(consumed, 4);
                 assert_eq!(parsed_pubrel.packet_id, 0x1234);
                 assert_eq!(parsed_pubrel.reason_code, 0x00);
@@ -204,7 +204,7 @@ mod tests {
 
         // Test parsing
         match MqttPubRel::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubRel(parsed_pubrel), consumed) => {
+            ParseOk::Packet(MqttPacket::PubRel5(parsed_pubrel), consumed) => {
                 assert_eq!(consumed, 6);
                 assert_eq!(parsed_pubrel.packet_id, 0x5678);
                 assert_eq!(parsed_pubrel.reason_code, 0x92);
@@ -226,7 +226,7 @@ mod tests {
 
         // Test that it can be parsed back
         match MqttPubRel::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubRel(parsed_pubrel), _) => {
+            ParseOk::Packet(MqttPacket::PubRel5(parsed_pubrel), _) => {
                 assert_eq!(parsed_pubrel.packet_id, 0xABCD);
                 assert_eq!(parsed_pubrel.reason_code, 0x80);
                 assert_eq!(parsed_pubrel.properties.len(), 2);
@@ -241,7 +241,7 @@ mod tests {
         let bytes = vec![0x62, 0x02, 0x00, 0x01]; // packet ID = 1
 
         match MqttPubRel::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::PubRel(pubrel), consumed) => {
+            ParseOk::Packet(MqttPacket::PubRel5(pubrel), consumed) => {
                 assert_eq!(consumed, 4);
                 assert_eq!(pubrel.packet_id, 1);
                 assert_eq!(pubrel.reason_code, 0x00); // Default success
@@ -278,7 +278,7 @@ mod tests {
             let bytes = pubrel.to_bytes().unwrap();
 
             match MqttPubRel::from_bytes(&bytes).unwrap() {
-                ParseOk::Packet(MqttPacket::PubRel(parsed), _) => {
+                ParseOk::Packet(MqttPacket::PubRel5(parsed), _) => {
                     assert_eq!(parsed.packet_id, 0x2000);
                     assert_eq!(parsed.reason_code, error_code);
                 }
@@ -302,7 +302,7 @@ mod tests {
         assert!(result.is_ok());
 
         match result.unwrap() {
-            ParseOk::Packet(MqttPacket::PubRel(pubrel), consumed) => {
+            ParseOk::Packet(MqttPacket::PubRel5(pubrel), consumed) => {
                 assert_eq!(consumed, 6);
                 assert_eq!(pubrel.packet_id, 16);
                 assert_eq!(pubrel.reason_code, 0x92); // Packet Identifier not found
@@ -320,7 +320,7 @@ mod tests {
         match result {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 assert_eq!(consumed, 6);
-                assert_eq!(packet, MqttPacket::PubRel(MqttPubRel::new(3, 0, vec![])));
+                assert_eq!(packet, MqttPacket::PubRel5(MqttPubRel::new(3, 0, vec![])));
             }
             _ => panic!("Invalid result: {:?}", result),
         }

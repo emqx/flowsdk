@@ -150,7 +150,7 @@ impl MqttControlPacket for MqttUnsubAck {
             properties,
         };
 
-        Ok(ParseOk::Packet(MqttPacket::UnsubAck(unsuback), total_len))
+        Ok(ParseOk::Packet(MqttPacket::UnsubAck5(unsuback), total_len))
     }
 }
 
@@ -173,7 +173,7 @@ mod tests {
 
         // Test round-trip parsing
         match MqttUnsubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::UnsubAck(parsed_unsuback), consumed) => {
+            ParseOk::Packet(MqttPacket::UnsubAck5(parsed_unsuback), consumed) => {
                 assert_eq!(consumed, bytes.len());
                 assert_eq!(parsed_unsuback.packet_id, 1234);
                 assert_eq!(parsed_unsuback.reason_codes, vec![0x00, 0x00, 0x00]);
@@ -200,7 +200,7 @@ mod tests {
         let bytes = unsuback.to_bytes().unwrap();
 
         match MqttUnsubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::UnsubAck(parsed_unsuback), _) => {
+            ParseOk::Packet(MqttPacket::UnsubAck5(parsed_unsuback), _) => {
                 assert_eq!(parsed_unsuback.packet_id, 5678);
                 assert_eq!(parsed_unsuback.reason_codes, reason_codes);
             }
@@ -221,7 +221,7 @@ mod tests {
         let bytes = unsuback.to_bytes().unwrap();
 
         match MqttUnsubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::UnsubAck(parsed_unsuback), _) => {
+            ParseOk::Packet(MqttPacket::UnsubAck5(parsed_unsuback), _) => {
                 assert_eq!(parsed_unsuback.packet_id, 9999);
                 assert_eq!(parsed_unsuback.reason_codes, reason_codes);
                 assert_eq!(parsed_unsuback.properties.len(), 2);
@@ -238,7 +238,7 @@ mod tests {
         let bytes = unsuback.to_bytes().unwrap();
 
         match MqttUnsubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::UnsubAck(parsed_unsuback), _) => {
+            ParseOk::Packet(MqttPacket::UnsubAck5(parsed_unsuback), _) => {
                 assert_eq!(parsed_unsuback.packet_id, 42);
                 assert_eq!(parsed_unsuback.reason_codes, vec![0x00]);
             }
@@ -254,7 +254,7 @@ mod tests {
         let bytes = unsuback.to_bytes().unwrap();
 
         match MqttUnsubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::UnsubAck(parsed_unsuback), _) => {
+            ParseOk::Packet(MqttPacket::UnsubAck5(parsed_unsuback), _) => {
                 assert_eq!(parsed_unsuback.packet_id, 1111);
                 assert_eq!(parsed_unsuback.reason_codes, vec![0x87; 5]);
             }
@@ -282,7 +282,7 @@ mod tests {
             let bytes = unsuback.to_bytes().unwrap();
 
             match MqttUnsubAck::from_bytes(&bytes).unwrap() {
-                ParseOk::Packet(MqttPacket::UnsubAck(parsed_unsuback), _) => {
+                ParseOk::Packet(MqttPacket::UnsubAck5(parsed_unsuback), _) => {
                     assert_eq!(parsed_unsuback.reason_codes.len(), count);
                     assert!(parsed_unsuback
                         .reason_codes
@@ -307,7 +307,7 @@ mod tests {
         let bytes = unsuback.to_bytes().unwrap();
 
         match MqttUnsubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::UnsubAck(parsed_unsuback), _) => {
+            ParseOk::Packet(MqttPacket::UnsubAck5(parsed_unsuback), _) => {
                 assert_eq!(parsed_unsuback.reason_codes, reason_codes);
             }
             _ => panic!("Expected UNSUBACK packet"),
@@ -331,7 +331,7 @@ mod tests {
         let bytes = unsuback.to_bytes().unwrap();
 
         match MqttUnsubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::UnsubAck(parsed_unsuback), _) => {
+            ParseOk::Packet(MqttPacket::UnsubAck5(parsed_unsuback), _) => {
                 assert_eq!(parsed_unsuback.reason_codes, reason_codes);
             }
             _ => panic!("Expected UNSUBACK packet"),
@@ -351,7 +351,7 @@ mod tests {
         let bytes = original_unsuback.to_bytes().unwrap();
 
         match MqttUnsubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::UnsubAck(parsed_unsuback), consumed) => {
+            ParseOk::Packet(MqttPacket::UnsubAck5(parsed_unsuback), consumed) => {
                 assert_eq!(consumed, bytes.len());
                 assert_eq!(parsed_unsuback.packet_id, original_unsuback.packet_id);
                 assert_eq!(parsed_unsuback.reason_codes, original_unsuback.reason_codes);
@@ -375,7 +375,7 @@ mod tests {
         let bytes = unsuback.to_bytes().unwrap();
 
         match MqttUnsubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::UnsubAck(parsed_unsuback), _) => {
+            ParseOk::Packet(MqttPacket::UnsubAck5(parsed_unsuback), _) => {
                 assert_eq!(parsed_unsuback.packet_id, 4444);
                 assert_eq!(parsed_unsuback.reason_codes.len(), 100);
                 assert_eq!(parsed_unsuback.reason_codes, reason_codes);
@@ -401,7 +401,7 @@ mod tests {
         let bytes = unsuback.to_bytes().unwrap();
 
         match MqttUnsubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::UnsubAck(parsed_unsuback), _) => {
+            ParseOk::Packet(MqttPacket::UnsubAck5(parsed_unsuback), _) => {
                 assert_eq!(parsed_unsuback.reason_codes, reason_codes);
                 assert_eq!(parsed_unsuback.properties.len(), 1);
             }
@@ -423,7 +423,7 @@ mod tests {
         let bytes = unsuback.to_bytes().unwrap();
 
         match MqttUnsubAck::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::UnsubAck(parsed_unsuback), _) => {
+            ParseOk::Packet(MqttPacket::UnsubAck5(parsed_unsuback), _) => {
                 assert_eq!(parsed_unsuback.reason_codes, reason_codes);
             }
             _ => panic!("Expected UNSUBACK packet"),
@@ -438,7 +438,7 @@ mod tests {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 assert_eq!(consumed, 6);
                 match packet {
-                    MqttPacket::UnsubAck(unsuback) => {
+                    MqttPacket::UnsubAck5(unsuback) => {
                         assert_eq!(unsuback.packet_id, 29196);
                         assert_eq!(unsuback.reason_codes, vec![0x00]);
                     }

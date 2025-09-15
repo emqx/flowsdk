@@ -100,7 +100,7 @@ impl MqttControlPacket for MqttPubAck {
         };
         offset += consumed;
 
-        let packet = MqttPacket::PubAck(MqttPubAck {
+        let packet = MqttPacket::PubAck5(MqttPubAck {
             packet_id,
             reason_code,
             properties,
@@ -132,7 +132,7 @@ mod tests {
         // Expected: 0x40 (PUBACK), 0x02 (Remaining Length), 0x00, 0x2A (Packet ID 42)
         assert_eq!(bytes, vec![0x40, 0x02, 0x00, 0x2A]);
 
-        let ParseOk::Packet(MqttPacket::PubAck(puback_deserialized), consumed) =
+        let ParseOk::Packet(MqttPacket::PubAck5(puback_deserialized), consumed) =
             MqttPubAck::from_bytes(&bytes).unwrap()
         else {
             panic!("Failed to deserialize");
@@ -151,7 +151,7 @@ mod tests {
 
         println!("Serialized PUBACK with properties: {}", hex::encode(&bytes));
 
-        let ParseOk::Packet(MqttPacket::PubAck(puback_deserialized), consumed) =
+        let ParseOk::Packet(MqttPacket::PubAck5(puback_deserialized), consumed) =
             MqttPubAck::from_bytes(&bytes).unwrap()
         else {
             panic!("Failed to deserialize");
@@ -165,7 +165,7 @@ mod tests {
     fn test_parse_minimal_puback() {
         // A broker might send a PUBACK with just Packet ID for success.
         let bytes = vec![0x40, 0x02, 0x00, 0x2C]; // PUBACK for Packet ID 44
-        let ParseOk::Packet(MqttPacket::PubAck(puback_deserialized), _consumed) =
+        let ParseOk::Packet(MqttPacket::PubAck5(puback_deserialized), _consumed) =
             MqttPubAck::from_bytes(&bytes).unwrap()
         else {
             panic!("Failed to deserialize");
@@ -183,7 +183,7 @@ mod tests {
 
         let res: Result<ParseOk, ParseError> = MqttPubAck::from_bytes(&bytes);
         match res {
-            Ok(ParseOk::Packet(MqttPacket::PubAck(puback), consumed)) => {
+            Ok(ParseOk::Packet(MqttPacket::PubAck5(puback), consumed)) => {
                 assert_eq!(puback.packet_id, 2);
                 assert_eq!(puback.reason_code, 0x10);
                 assert_eq!(puback.properties, vec![]);

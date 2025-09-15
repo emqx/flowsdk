@@ -8,7 +8,7 @@ use tonic::{transport::Server, Request, Response, Status};
 use tracing::{debug, error, info};
 
 // Import shared conversions and protobuf types from the proxy workspace
-use mqtt_grpc_proxy::convert_mqtt_to_stream_payload;
+use mqtt_grpc_proxy::convert_mqtt_v5_to_stream_payload;
 use mqtt_grpc_proxy::mqttv5pb;
 use mqttv5pb::mqtt_relay_service_server::{MqttRelayService, MqttRelayServiceServer};
 use mqttv5pb::{MqttPacket, RelayResponse};
@@ -876,7 +876,7 @@ async fn mqtt_client_loop_simple(
                             debug!("Received packet from broker: {:?}", packet);
 
                             // Convert MQTT packet to gRPC stream message and forward to r-proxy
-                            if let Some(payload) = convert_mqtt_to_stream_payload(&packet) {
+                            if let Some(payload) = convert_mqtt_v5_to_stream_payload(&packet) {
                                 let stream_msg = mqttv5pb::MqttStreamMessage {
                                     session_id: session_id.clone(),
                                     sequence_id: sequence_counter,

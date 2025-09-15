@@ -7,6 +7,7 @@ use bytes::{Buf, BytesMut};
 #[derive(Debug)]
 pub struct MqttParser {
     buffer: BytesMut,
+    mqtt_version: u8,
 }
 
 impl Default for MqttParser {
@@ -20,6 +21,7 @@ impl MqttParser {
     pub fn new() -> Self {
         MqttParser {
             buffer: BytesMut::with_capacity(4096), // Start with a reasonable capacity
+            mqtt_version: 5,                       // Default to MQTT v5
         }
     }
 
@@ -35,7 +37,7 @@ impl MqttParser {
     /// - If the buffer does not contain a full packet, it returns `Ok(None)`.
     /// - If the data in the buffer is malformed, it returns `Err(ParseError)`.
     pub fn next_packet(&mut self) -> Result<Option<MqttPacket>, ParseError> {
-        match MqttPacket::from_bytes(&self.buffer) {
+        match MqttPacket::from_bytes_with_version(&self.buffer, self.mqtt_version) {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 // A full packet was parsed, advance the buffer
                 self.buffer.advance(consumed);

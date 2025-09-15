@@ -10,7 +10,7 @@ use flowsdk::mqtt_serde::parser::ParseError;
 // Import shared conversions and protobuf types
 use mqtt_grpc_proxy::mqttv5pb;
 use mqtt_grpc_proxy::mqttv5pb::mqtt_relay_service_client::MqttRelayServiceClient;
-use mqtt_grpc_proxy::{convert_mqtt_to_stream_payload, convert_stream_payload_to_mqtt_bytes};
+use mqtt_grpc_proxy::{convert_mqtt_v5_to_stream_payload, convert_stream_payload_to_mqtt_bytes};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
@@ -160,7 +160,7 @@ async fn start_streaming_client_loop(
                         Ok(Some(packet)) => {
                             debug!("Parsed MQTT packet from client {}: {:?}", conn.client_id, packet);
                             // Convert MQTT packet to gRPC stream message
-                            if let Some(payload) = convert_mqtt_to_stream_payload(&packet) {
+                            if let Some(payload) = convert_mqtt_v5_to_stream_payload(&packet) {
                                 let stream_msg = mqttv5pb::MqttStreamMessage {
                                     session_id: conn.session_id.clone(),
                                     sequence_id: sequence_counter.fetch_add(1, Ordering::SeqCst),
@@ -248,7 +248,7 @@ async fn wait_for_mqtt_connect(
         }
 
         match parser.next_packet() {
-            Ok(Some(MqttPacket::Connect(connect))) => {
+            Ok(Some(MqttPacket::Connect5(connect))) => {
                 return Ok(connect);
             }
             Ok(Some(_)) => {

@@ -103,6 +103,22 @@ pub fn parse_vbi(buffer: &[u8]) -> Result<(usize, usize), ParseError> {
     vbi(buffer)
 }
 
+// Helper functions for backward compatibility with MQTT v3 modules
+pub fn read_string(buffer: &[u8]) -> Result<(String, usize), ParseError> {
+    parse_utf8_string(buffer)
+}
+
+pub fn write_string(s: &str) -> Result<Vec<u8>, ParseError> {
+    Ok(Utf8String::encode(s))
+}
+
+pub fn read_u8(buffer: &[u8]) -> Result<u8, ParseError> {
+    if buffer.is_empty() {
+        return Err(ParseError::BufferTooShort);
+    }
+    Ok(buffer[0])
+}
+
 /*                   */
 /* Internal helpers  */
 /*                   */

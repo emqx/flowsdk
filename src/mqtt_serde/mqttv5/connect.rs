@@ -295,7 +295,7 @@ impl MqttControlPacket for MqttConnect {
             None
         };
 
-        let packet = MqttPacket::Connect(MqttConnect {
+        let packet = MqttPacket::Connect5(MqttConnect {
             protocol_name: protocol_name.to_string(),
             protocol_version,
             keep_alive,
@@ -345,7 +345,7 @@ mod tests {
         ];
         if let ParseOk::Packet(packet, consumed) = MqttConnect::from_bytes(&packet_bytes).unwrap() {
             assert_eq!(consumed, 36);
-            let MqttPacket::Connect(connect) = packet else {
+            let MqttPacket::Connect5(connect) = packet else {
                 panic!("Invalid packet type");
             };
             assert_eq!(connect.protocol_name, "MQTT");
@@ -366,7 +366,7 @@ mod tests {
 
         if let ParseOk::Packet(packet, consumed) = MqttConnect::from_bytes(&packet_bytes).unwrap() {
             assert_eq!(consumed, 18);
-            let MqttPacket::Connect(connect) = packet else {
+            let MqttPacket::Connect5(connect) = packet else {
                 panic!("Invalid packet type");
             };
             assert_eq!(connect.protocol_name, "MQTT");
@@ -439,10 +439,10 @@ mod tests {
 
         let data = connect.to_bytes().unwrap();
         println!("Serialized MqttConnect with Will: {:?}", hex::encode(&data));
-        let ParseOk::Packet(connect1, _) = MqttPacket::from_bytes(&data).unwrap() else {
+        let ParseOk::Packet(connect1, _) = MqttConnect::from_bytes(&data).unwrap() else {
             panic!("Expected packet");
         };
-        assert_eq!(connect1, MqttPacket::Connect(connect));
+        assert_eq!(connect1, MqttPacket::Connect5(connect));
     }
 
     #[test]

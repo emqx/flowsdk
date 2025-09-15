@@ -311,7 +311,7 @@ impl MqttControlPacket for MqttSubscribe {
             properties,
         };
 
-        Ok(ParseOk::Packet(MqttPacket::Subscribe(subscribe), offset))
+        Ok(ParseOk::Packet(MqttPacket::Subscribe5(subscribe), offset))
     }
 }
 
@@ -392,7 +392,7 @@ mod tests {
 
         // Test round-trip parsing
         match MqttSubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Subscribe(parsed_subscribe), consumed) => {
+            ParseOk::Packet(MqttPacket::Subscribe5(parsed_subscribe), consumed) => {
                 assert_eq!(consumed, bytes.len());
                 assert_eq!(parsed_subscribe.packet_id, 1234);
                 assert_eq!(parsed_subscribe.subscriptions.len(), 1);
@@ -417,7 +417,7 @@ mod tests {
         let bytes = subscribe.to_bytes().unwrap();
 
         match MqttSubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Subscribe(parsed_subscribe), _) => {
+            ParseOk::Packet(MqttPacket::Subscribe5(parsed_subscribe), _) => {
                 assert_eq!(parsed_subscribe.packet_id, 5678);
                 assert_eq!(parsed_subscribe.subscriptions.len(), 3);
 
@@ -462,7 +462,7 @@ mod tests {
         let bytes = subscribe.to_bytes().unwrap();
 
         match MqttSubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Subscribe(parsed_subscribe), _) => {
+            ParseOk::Packet(MqttPacket::Subscribe5(parsed_subscribe), _) => {
                 assert_eq!(parsed_subscribe.packet_id, 9999);
                 assert_eq!(parsed_subscribe.subscriptions.len(), 1);
                 assert_eq!(parsed_subscribe.properties.len(), 2);
@@ -504,7 +504,7 @@ mod tests {
         let bytes = subscribe.to_bytes().unwrap();
 
         match MqttSubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Subscribe(parsed_subscribe), _) => {
+            ParseOk::Packet(MqttPacket::Subscribe5(parsed_subscribe), _) => {
                 assert_eq!(parsed_subscribe.subscriptions.len(), 3);
                 assert_eq!(
                     parsed_subscribe.subscriptions[0].topic_filter,
@@ -546,7 +546,7 @@ mod tests {
             let bytes = subscribe.to_bytes().unwrap();
 
             match MqttSubscribe::from_bytes(&bytes).unwrap() {
-                ParseOk::Packet(MqttPacket::Subscribe(parsed_subscribe), _) => {
+                ParseOk::Packet(MqttPacket::Subscribe5(parsed_subscribe), _) => {
                     assert_eq!(parsed_subscribe.subscriptions[0].qos, qos);
                 }
                 _ => panic!("Expected SUBSCRIBE packet for QoS {}", qos),
@@ -572,7 +572,7 @@ mod tests {
         let bytes = original_subscribe.to_bytes().unwrap();
 
         match MqttSubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Subscribe(parsed_subscribe), consumed) => {
+            ParseOk::Packet(MqttPacket::Subscribe5(parsed_subscribe), consumed) => {
                 assert_eq!(consumed, bytes.len());
                 assert_eq!(parsed_subscribe.packet_id, original_subscribe.packet_id);
                 assert_eq!(
@@ -609,7 +609,7 @@ mod tests {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 assert_eq!(consumed, packet_bytes.len());
                 match packet {
-                    MqttPacket::Subscribe(subscribe) => {
+                    MqttPacket::Subscribe5(subscribe) => {
                         assert_eq!(subscribe.packet_id, 2);
                         assert_eq!(subscribe.subscriptions.len(), 1);
                         assert_eq!(subscribe.subscriptions[0].topic_filter, "test/1/a");
