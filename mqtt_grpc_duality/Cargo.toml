@@ -22,7 +22,7 @@ tokio-util = "0.7.16"
 # Networking and data structures
 dashmap = "6.1"
 tracing = "0.1"
-tracing-subscriber = "0.3"
+tracing-subscriber = "0.3.20"
 
 # Local dependencies - reference the parent workspace mqtt-serde
 flowsdk = { path = "..", features = [] }
