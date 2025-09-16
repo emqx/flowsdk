@@ -89,7 +89,7 @@ if [ ! -d "$PAHO_TEST_DIR" ]; then
 fi
 
 cd "$PAHO_TEST_DIR"
-VENV_DIR=".venv"
+VENV_DIR="../.venv"
 
 if [ ! -d "$VENV_DIR" ]; then
     echo "Creating Python virtual environment in $PAHO_TEST_DIR/$VENV_DIR..."
