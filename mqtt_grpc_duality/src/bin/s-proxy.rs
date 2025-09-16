@@ -801,7 +801,7 @@ async fn mqtt_client_loop_simple(
     response_tx: mpsc::Sender<Result<mqttv5pb::MqttStreamMessage, Status>>,
     session_id: String,
 ) {
-    let mut parser = MqttParser::new();
+    let mut parser = MqttParser::new(16384, 0);
     let mut sequence_counter = 1u64;
 
     loop {

@@ -119,19 +119,20 @@ impl MqttControlPacket for MqttConnect {
         // Variable Header
         let (proto_name, consumed) = parse_utf8_string(&buffer[offset..])?;
         offset += consumed;
-        if proto_name != "MQTT" {
-            return Err(ParseError::ParseError("Invalid protocol name".to_string()));
-        }
 
         if offset >= buffer.len() {
             return Err(ParseError::BufferTooShort);
         }
         let version = buffer[offset];
         offset += 1;
-        if version != 4 {
+        if version != 4 && version != 3 {
             return Err(ParseError::ParseError(
                 "Invalid protocol version".to_string(),
             ));
+        }
+
+        if !(proto_name == "MQTT" && version == 4) && (proto_name != "MQIsdp" && version == 3) {
+            return Err(ParseError::ParseError("Invalid protocol name".to_string()));
         }
 
         if offset >= buffer.len() {

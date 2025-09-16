@@ -75,7 +75,7 @@ async fn handle_new_streaming_tcp_conn(
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Split stream to read and write halves
     let (mut read_half, write_half) = incoming.into_split();
-    let mut parser: MqttParser = MqttParser::new();
+    let mut parser: MqttParser = MqttParser::new(16384, 0);
 
     // Wait for MQTT Connect packet
     // @TODO: with some timeout
@@ -147,8 +147,8 @@ async fn start_streaming_client_loop(
     mut inbound_stream: Streaming<mqttv5pb::MqttStreamMessage>,
     _state: Arc<RProxyState>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut parser = MqttParser::new();
-    let sequence_counter = Arc::new(AtomicU64::new(1));
+    let mut parser = MqttParser::new(16384, 0);
+    let sequence_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
 
     'outer: loop {
         tokio::select! {
@@ -238,6 +238,8 @@ async fn wait_for_mqtt_connect(
     stream: &mut OwnedReadHalf,
     parser: &mut MqttParser,
 ) -> Result<MqttConnect, Status> {
+    // init read hint for locate the vsn
+    let mut read_hint = 7;
     loop {
         let n = stream
             .read_buf(parser.buffer_mut())
@@ -245,6 +247,13 @@ async fn wait_for_mqtt_connect(
             .map_err(|e| Status::internal(e.to_string()))?;
         if n == 0 {
             return Err(Status::unavailable("Connection closed by the client"));
+        }
+
+        if n < read_hint {
+            read_hint -= n;
+            continue;
+        } else {
+            read_hint = 0;
         }
 
         match parser.next_packet() {
@@ -258,6 +267,10 @@ async fn wait_for_mqtt_connect(
             }
             Ok(None) => {
                 // Incomplete packet, continue reading
+            }
+            Err(ParseError::More(hint, _)) => {
+                // Need more data, continue reading
+                read_hint = hint;
             }
             Err(e) => {
                 error!("Error parsing CONNECT packet: {:?}", e);
