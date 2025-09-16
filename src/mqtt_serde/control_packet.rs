@@ -87,7 +87,7 @@ impl MqttPacket {
 
     pub fn from_bytes_with_version(buffer: &[u8], mqtt_version: u8) -> Result<ParseOk, ParseError> {
         match mqtt_version {
-            3 => Self::from_bytes_v3(buffer),
+            3 | 4 => Self::from_bytes_v3(buffer), // Both MQTT v3.1 and v3.1.1 use v3 parser
             5 => Self::from_bytes_v5(buffer),
             _ => Err(ParseError::InvalidPacketType),
         }
