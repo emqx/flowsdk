@@ -137,6 +137,7 @@ impl MqttRelayService for MyRelay {
                 stream,
                 response_tx,
                 session_id,
+                5,
             )
             .await;
         });
@@ -464,6 +465,7 @@ impl MqttRelayService for MyRelay {
                                                 stream,
                                                 response_tx_for_spawn,
                                                 session_id,
+                                                5,
                                             )
                                             .await;
                                         }
@@ -800,8 +802,9 @@ async fn mqtt_client_loop_simple(
     mut stream: tokio::net::TcpStream,
     response_tx: mpsc::Sender<Result<mqttv5pb::MqttStreamMessage, Status>>,
     session_id: String,
+    mqtt_version: u8,
 ) {
-    let mut parser = MqttParser::new(16384, 0);
+    let mut parser = MqttParser::new(16384, mqtt_version); // 16KB buffer
     let mut sequence_counter = 1u64;
 
     loop {
