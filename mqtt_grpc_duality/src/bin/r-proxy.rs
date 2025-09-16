@@ -137,7 +137,7 @@ async fn handle_new_streaming_tcp_conn(
     };
 
     // Start the message handling loops (ConnAck will be handled in the loop)
-    start_streaming_client_loop(streaming_conn, inbound_gstream, state).await?;
+    start_streaming_client_loop(streaming_conn, inbound_gstream, parser, state).await?;
 
     Ok(())
 }
@@ -145,9 +145,9 @@ async fn handle_new_streaming_tcp_conn(
 async fn start_streaming_client_loop(
     mut conn: StreamingClientConnection,
     mut inbound_stream: Streaming<mqttv5pb::MqttStreamMessage>,
+    mut parser: MqttParser,
     _state: Arc<RProxyState>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    let mut parser = MqttParser::new(16384, 0);
     let sequence_counter: Arc<AtomicU64> = Arc::new(AtomicU64::new(1));
 
     'outer: loop {
@@ -240,6 +240,7 @@ async fn wait_for_mqtt_connect(
 ) -> Result<MqttConnect, Status> {
     // init read hint for locate the vsn
     let mut read_hint = 7;
+
     loop {
         let n = stream
             .read_buf(parser.buffer_mut())
@@ -254,6 +255,19 @@ async fn wait_for_mqtt_connect(
             continue;
         } else {
             read_hint = 0;
+        }
+
+        match parser.set_mqtt_vsn(0) {
+            Ok(_) => {}
+            Err(ParseError::More(hint, _)) => {
+                read_hint = hint;
+                continue;
+            }
+            // @TODO: handle other errors properly, like empty buffer
+            Err(e) => {
+                error!("Failed to set MQTT version: {}", e);
+                return Err(Status::internal("Failed to set MQTT version"));
+            }
         }
 
         match parser.next_packet() {
