@@ -1,5 +1,14 @@
 #!/bin/bash
 
+# Integration test script for MQTT-gRPC duality proxy system
+# Tests MQTT v3.1.1 client and MQTT v5 compatibility
+#
+# Usage: ./run_integration_tests.sh [TEST_ARGUMENTS]
+# Examples:
+#   ./run_integration_tests.sh                    # Run all tests
+#   ./run_integration_tests.sh Test.testBasic     # Run specific test
+#   ./run_integration_tests.sh Test.test_keepalive # Run keepalive test
+#
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
@@ -85,7 +94,7 @@ sleep 5
 echo "--- Preparing and running Paho MQTT Test Suite ---"
 if [ ! -d "$PAHO_TEST_DIR" ]; then
     echo "Cloning Paho test suite..."
-    git clone https://github.com/eclipse-paho/paho.mqtt.testing.git "$PAHO_TEST_DIR"
+    git clone -b main https://github.com/qzhuyan/paho.mqtt.testing.git "$PAHO_TEST_DIR"
 fi
 
 cd "$PAHO_TEST_DIR"
@@ -111,7 +120,12 @@ python3 startbroker.py --port "$BROKER_PORT" &
 BROKER_PID=$!
 echo "Broker started with PID $BROKER_PID on port $BROKER_PORT."
 sleep 3 # Give broker time to initialize
+# Run the MQTT v5 client test with proper arguments
 python3 client_test5.py -p 1884 -v  $@ #Test.test_keepalive
+
+# Run the MQTT v3.1.1 client test with proper arguments
+echo "Running MQTT v3.1.1 client test against r-proxy on port 1884..."
+python3 client_test.py --hostname=localhost --port=1884
 TEST_RESULT=$?
 
 echo "Deactivating Python virtual environment..."
