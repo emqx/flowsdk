@@ -1,3 +1,0 @@
-[submodule "mqtt_grpc_duality/paho.mqtt.testing"]
-	path = mqtt_grpc_duality/paho.mqtt.testing
-	url = git@github.com:qzhuyan/paho.mqtt.testing.git
