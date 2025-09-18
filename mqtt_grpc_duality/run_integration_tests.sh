@@ -46,10 +46,6 @@ cleanup() {
 trap cleanup EXIT
 
 # --- Prerequisites Check ---
-if ! command -v mosquitto &> /dev/null; then
-    echo "Error: mosquitto could not be found. Please install it first."
-    exit 1
-fi
 if ! command -v cargo &> /dev/null; then
     echo "Error: cargo could not be found. Please install the Rust toolchain."
     exit 1
@@ -59,19 +55,12 @@ if ! command -v python3 &> /dev/null; then
     exit 1
 fi
 
-# --- Step 1: Start MQTT Broker ---
-echo "--- Starting local Mosquitto MQTT Broker ---"
-#mosquitto -p "$BROKER_PORT" -v &
-#BROKER_PID=$!
-echo "Broker started with PID $BROKER_PID on port $BROKER_PORT."
-sleep 3 # Give broker time to initialize
-
-# --- Step 2: Build Proxies ---
+# --- Step 1: Build Proxies ---
 echo "--- Building proxy binaries ---"
 cargo build --bin s-proxy
 cargo build --bin r-proxy
 
-# --- Step 3: Start Proxies ---
+# --- Step 2: Start Proxies ---
 if [ -n "$DEBUG" ]; then
     export RUST_LOG=debug
 fi
@@ -88,7 +77,7 @@ R_PROXY_PID=$!
 echo "r-proxy started with PID $R_PROXY_PID, listening on MQTT port $R_PROXY_MQTT_PORT."
 
 echo "Waiting for proxies to initialize..."
-sleep 5
+sleep 3
 
 # --- Step 4: Run Paho Test Suite ---
 echo "--- Preparing and running Paho MQTT Test Suite ---"
@@ -116,6 +105,7 @@ source "$VENV_DIR/bin/activate"
 #pytest --host "$BROKER_HOST" --port "$R_PROXY_MQTT_PORT"
 
 cd interoperability;
+echo "--- Starting local Mosquitto MQTT Broker ---"
 python3 startbroker.py --port "$BROKER_PORT" &
 BROKER_PID=$!
 echo "Broker started with PID $BROKER_PID on port $BROKER_PORT."
