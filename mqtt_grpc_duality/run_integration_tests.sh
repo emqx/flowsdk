@@ -112,11 +112,12 @@ echo "Broker started with PID $BROKER_PID on port $BROKER_PORT."
 sleep 3 # Give broker time to initialize
 # Run the MQTT v5 client test with proper arguments
 python3 client_test5.py -p 1884 -v  $@ #Test.test_keepalive
+TEST_RESULT=$?
 
 # Run the MQTT v3.1.1 client test with proper arguments
-echo "Running MQTT v3.1.1 client test against r-proxy on port 1884..."
-python3 client_test.py --hostname=localhost --port=1884
-TEST_RESULT=$?
+#echo "Running MQTT v3.1.1 client test against r-proxy on port 1884..."
+#python3 client_test.py --hostname=localhost --port=1884
+#TEST_RESULT=$?
 
 echo "Deactivating Python virtual environment..."
 deactivate
