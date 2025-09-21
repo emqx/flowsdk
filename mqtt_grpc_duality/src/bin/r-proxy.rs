@@ -56,7 +56,7 @@ async fn run_proxy(
         let state = proxy_state.clone();
         info!("Accepted connection from {}", addr);
         spawn(async move {
-            match handle_new_streaming_tcp_conn(incoming_stream, destination, state).await {
+            match handle_new_incoming_tcp(incoming_stream, destination, state).await {
                 Ok(_) => {
                     info!("Client connection handled successfully");
                 }
@@ -68,7 +68,7 @@ async fn run_proxy(
     }
 }
 
-async fn handle_new_streaming_tcp_conn(
+async fn handle_new_incoming_tcp(
     incoming: TcpStream,
     destination: SocketAddr,
     state: Arc<RProxyState>,
@@ -97,7 +97,6 @@ async fn handle_new_streaming_tcp_conn(
     let channel = tonic::transport::Channel::from_shared(format!("http://{}", destination))?
         .keep_alive_while_idle(true)
         .keep_alive_timeout(std::time::Duration::from_secs(30))
-        .keep_alive_while_idle(true)
         .connect()
         .await?;
 
