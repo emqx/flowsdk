@@ -35,6 +35,8 @@ pub struct StreamingClientConnection {
 // State management for r-proxy
 pub struct RProxyState {
     pub connections: Arc<DashMap<String, StreamingClientConnection>>,
+    // Atomic counter for unique session IDs
+    // @TODO: persist across restarts, maybe use timestamp
     pub sequence_counter: AtomicU64,
 }
 
@@ -68,31 +70,15 @@ async fn run_proxy(
     }
 }
 
-async fn handle_new_incoming_tcp(
-    incoming: TcpStream,
+async fn setup_grpc_connection(
     destination: SocketAddr,
-    state: Arc<RProxyState>,
-) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
-    // Split stream to read and write halves
-    let (mut read_half, write_half) = incoming.into_split();
-    let mut parser: MqttParser = MqttParser::new(16384, 0);
-
-    // Wait for MQTT Connect packet
-    // @TODO: with some timeout
-    let connect = wait_for_mqtt_connect(&mut read_half, &mut parser).await?;
-
-    let client_id: String = connect.client_id.clone();
-    let session_id: String = format!(
-        "{}-{}",
-        client_id,
-        state.sequence_counter.fetch_add(1, Ordering::SeqCst)
-    );
-
-    info!(
-        "New MQTT client connecting: {} (session: {})",
-        client_id, session_id
-    );
-
+) -> Result<
+    (
+        mpsc::Sender<mqttv5pb::MqttStreamMessage>,
+        Streaming<mqttv5pb::MqttStreamMessage>,
+    ),
+    Box<dyn std::error::Error + Send + Sync>,
+> {
     // Connect to s-proxy with streaming
     let channel = tonic::transport::Channel::from_shared(format!("http://{}", destination))?
         .keep_alive_while_idle(true)
@@ -106,18 +92,6 @@ async fn handle_new_incoming_tcp(
     // Create bidirectional streaming channels
     let (grpc_stream_sender, grpc_stream_receiver) = mpsc::channel(1000);
 
-    // Convert MQTT Connect to protobuf Connect and send directly
-    let connect_msg: mqttv5pb::MqttStreamMessage = mqttv5pb::MqttStreamMessage {
-        session_id: session_id.clone(),
-        sequence_id: 0,
-        direction: mqttv5pb::MessageDirection::ClientToBroker as i32,
-        payload: Some(mqttv5pb::mqtt_stream_message::Payload::Connect(
-            connect.into(), // Direct conversion from MQTT Connect to protobuf Connect
-        )),
-    };
-
-    grpc_stream_sender.send(connect_msg).await?;
-
     // Establish gRPC streaming connection
     let outbound_gstream = ReceiverStream::new(grpc_stream_receiver);
     let request = Request::new(outbound_gstream);
@@ -126,13 +100,62 @@ async fn handle_new_incoming_tcp(
         .await?
         .into_inner();
 
+    Ok((grpc_stream_sender, inbound_gstream))
+}
+
+fn create_connect_stream_message(
+    session_id: &str,
+    connect: &MqttConnect,
+) -> mqttv5pb::MqttStreamMessage {
+    mqttv5pb::MqttStreamMessage {
+        session_id: session_id.to_string(),
+        sequence_id: 0,
+        direction: mqttv5pb::MessageDirection::ClientToBroker as i32,
+        payload: Some(mqttv5pb::mqtt_stream_message::Payload::Connect(
+            connect.clone().into(), // Direct conversion from MQTT Connect to protobuf Connect
+        )),
+    }
+}
+
+async fn handle_new_incoming_tcp(
+    incoming: TcpStream,
+    destination: SocketAddr,
+    state: Arc<RProxyState>,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
+    // Split stream to read and write halves
+    let (mut in_read_half, out_write_half) = incoming.into_split();
+
+    // Wait for MQTT Connect packet
+    // @TODO: with some timeout
+    let mut parser: MqttParser = MqttParser::new(16384, 0);
+    let connect = wait_for_mqtt_connect(&mut in_read_half, &mut parser).await?;
+
+    let client_id: String = connect.client_id.clone();
+    let session_id: String = format!(
+        "{}-{}",
+        client_id,
+        state.sequence_counter.fetch_add(1, Ordering::SeqCst)
+    );
+
+    info!(
+        "New MQTT client connecting: {} (session: {})",
+        client_id, session_id
+    );
+
+    // Setup gRPC connection and streaming
+    let (gstream_sender, inbound_gstream) = setup_grpc_connection(destination).await?;
+
+    // Send initial Connect message
+    let connect_msg = create_connect_stream_message(&session_id, &connect);
+    gstream_sender.send(connect_msg).await?;
+
     // Store connection for management
     let streaming_conn = StreamingClientConnection {
         session_id: session_id.clone(),
         client_id: client_id.clone(),
-        write_h: write_half,
-        read_h: read_half,
-        grpc_stream_sender,
+        write_h: out_write_half,
+        read_h: in_read_half,
+        grpc_stream_sender: gstream_sender,
     };
 
     // Start the message handling loops (ConnAck will be handled in the loop)
