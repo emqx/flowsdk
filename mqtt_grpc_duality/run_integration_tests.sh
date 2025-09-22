@@ -3,11 +3,14 @@
 # Integration test script for MQTT-gRPC duality proxy system
 # Tests MQTT v3.1.1 client and MQTT v5 compatibility
 #
-# Usage: ./run_integration_tests.sh [TEST_ARGUMENTS]
+# Usage: ./run_integration_tests.sh [--mqtt-ver=v3|v5|both] [TEST_ARGUMENTS]
 # Examples:
-#   ./run_integration_tests.sh                    # Run all tests
-#   ./run_integration_tests.sh Test.testBasic     # Run specific test
-#   ./run_integration_tests.sh Test.test_keepalive # Run keepalive test
+#   ./run_integration_tests.sh                              # Run all V5 tests (default)
+#   ./run_integration_tests.sh --mqtt-ver=v3                 # Run V3 tests only
+#   ./run_integration_tests.sh --mqtt-ver=v5                 # Run V5 tests only
+#   ./run_integration_tests.sh --mqtt-ver=both               # Run both V3 and V5 tests
+#   ./run_integration_tests.sh --mqtt-ver=v5 Test.testBasic  # Run specific V5 test
+#   ./run_integration_tests.sh --mqtt-ver=v3 Test.test_keepalive # Run specific V3 test
 #
 # Exit immediately if a command exits with a non-zero status.
 set -e
@@ -22,6 +25,34 @@ BROKER_HOST="127.0.0.1"
 S_PROXY_TARGET_BROKER="$BROKER_HOST:$BROKER_PORT"
 R_PROXY_TARGET_S_PROXY="127.0.0.1:$S_PROXY_GRPC_PORT"
 PAHO_TEST_DIR="paho.mqtt.testing"
+
+# --- Parse Command Line Arguments ---
+MQTT_VERSION="v5"  # Default to v5
+TEST_ARGS=()
+
+for arg in "$@"; do
+    case $arg in
+        --mqtt-ver=*)
+            MQTT_VERSION="${arg#*=}"
+            shift
+            ;;
+        *)
+            TEST_ARGS+=("$arg")
+            shift
+            ;;
+    esac
+done
+
+# Validate version argument
+case $MQTT_VERSION in
+    v3|v5|both)
+        echo "Running tests for MQTT version: $MQTT_VERSION"
+        ;;
+    *)
+        echo "Error: Invalid version '$MQTT_VERSION'. Use v3, v5, or both."
+        exit 1
+        ;;
+esac
 
 # --- Cleanup Function ---
 cleanup() {
@@ -110,14 +141,37 @@ python3 startbroker.py --port "$BROKER_PORT" &
 BROKER_PID=$!
 echo "Broker started with PID $BROKER_PID on port $BROKER_PORT."
 sleep 3 # Give broker time to initialize
-# Run the MQTT v5 client test with proper arguments
-python3 client_test5.py -p 1884 -v  $@ #Test.test_keepalive
-TEST_RESULT=$?
 
-# Run the MQTT v3.1.1 client test with proper arguments
-#echo "Running MQTT v3.1.1 client test against r-proxy on port 1884..."
-#python3 client_test.py --hostname=localhost --port=1884
-#TEST_RESULT=$?
+# Run tests based on version selection
+TEST_RESULT=0
+
+case $MQTT_VERSION in
+    v5)
+        echo "Running MQTT v5 client test against r-proxy on port $R_PROXY_MQTT_PORT..."
+        python3 client_test5.py -p "$R_PROXY_MQTT_PORT" -v "${TEST_ARGS[@]}"
+        TEST_RESULT=$?
+        ;;
+    v3)
+        echo "Running MQTT v3.1.1 client test against r-proxy on port $R_PROXY_MQTT_PORT..."
+        python3 client_test.py --hostname=localhost --port="$R_PROXY_MQTT_PORT" "${TEST_ARGS[@]}"
+        TEST_RESULT=$?
+        ;;
+    both)
+        echo "Running MQTT v5 client test against r-proxy on port $R_PROXY_MQTT_PORT..."
+        python3 client_test5.py -p "$R_PROXY_MQTT_PORT" -v "${TEST_ARGS[@]}"
+        V5_RESULT=$?
+        
+        echo "Running MQTT v3.1.1 client test against r-proxy on port $R_PROXY_MQTT_PORT..."
+        python3 client_test.py --hostname=localhost --port="$R_PROXY_MQTT_PORT" "${TEST_ARGS[@]}"
+        V3_RESULT=$?
+        
+        # Return non-zero if either test failed
+        if [ $V5_RESULT -ne 0 ] || [ $V3_RESULT -ne 0 ]; then
+            TEST_RESULT=1
+            echo "V5 test result: $V5_RESULT, V3 test result: $V3_RESULT"
+        fi
+        ;;
+esac
 
 echo "Deactivating Python virtual environment..."
 deactivate
@@ -126,9 +180,9 @@ cd ..
 
 # --- Exit ---
 if [ $TEST_RESULT -eq 0 ]; then
-    echo "--- All tests passed successfully! ---"
+    echo "--- All MQTT $MQTT_VERSION tests passed successfully! ---"
 else
-    echo "--- Some tests failed. ---"
+    echo "--- Some MQTT $MQTT_VERSION tests failed. ---"
 fi
 
 exit $TEST_RESULT
