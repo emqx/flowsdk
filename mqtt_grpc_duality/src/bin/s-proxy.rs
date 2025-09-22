@@ -65,7 +65,6 @@ impl MqttRelayService for MyRelay {
 
         let token = CancellationToken::new();
 
-        // @FIXME: This is a one green thread per request, which is not ideal for scalability
         // Handle the bidirectional stream
         tokio::spawn(async move {
             loop {
@@ -141,8 +140,14 @@ impl MqttRelayService for MyRelay {
                                 ) => {
                                     // Handle session control messages
                                     match control.control_type {
-                                        x if x == mqtt_unified_pb::session_control::ControlType::Establish as i32 => {
+                                        x if (x == mqtt_unified_pb::session_control::ControlType::Establishv3 as i32)
+                                                || (x == mqtt_unified_pb::session_control::ControlType::Establishv5 as i32) => {
                                             let client_id = control.client_id.clone();
+                                            let mqtt_version = match x {
+                                                y if y == mqtt_unified_pb::session_control::ControlType::Establishv3 as i32 => 3,
+                                                y if y == mqtt_unified_pb::session_control::ControlType::Establishv5 as i32 => 5,
+                                                _ => 0, //@TODO: handle error
+                                            };
                                             info!("Received Establish from client: {}", client_id);
 
                                             // Create broker connection for this client
@@ -179,7 +184,7 @@ impl MqttRelayService for MyRelay {
                                                             stream,
                                                             response_tx_for_spawn,
                                                             session_id,
-                                                            5, // @TODO: get from connect packet
+                                                            mqtt_version,
                                                         )
                                                         .await;
                                                     }

@@ -25,9 +25,10 @@ message MqttStreamMessage {
 
 message SessionControl {
   enum ControlType {
-    ESTABLISH = 0;
-    TERMINATE = 1;
-    HEARTBEAT = 2;
+    ESTABLISHV3 = 0;
+    ESTABLISHV5 = 1;
+    TERMINATE = 2;
+    HEARTBEAT = 3;
   }
   ControlType control_type = 1;
   string client_id = 2;
