@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package mqtt;
+
+import "mqttv3.proto";
+import "mqttv5.proto";
+
+// Unified gRPC service for relaying MQTT packets.
+service MqttRelayService {
+  // Bidirectional streaming - one stream per MQTT connection
+  rpc StreamMqttMessages(stream MqttStreamMessage) returns (stream MqttStreamMessage);
+}
+
+// Unified streaming message wrapper for MQTT
+message MqttStreamMessage {
+  string session_id = 1;      // Unique identifier for this MQTT session
+  uint64 sequence_id = 2;     // For message ordering within session
+  MessageDirection direction = 3;
+  oneof payload {
+    mqttv3.MqttPacket mqtt_v3_packet = 4;
+    mqttv5.MqttPacket mqtt_v5_packet = 5;
+    SessionControl session_control = 50;
+  }
+}
+
+message SessionControl {
+  enum ControlType {
+    ESTABLISH = 0;
+    TERMINATE = 1;
+    HEARTBEAT = 2;
+  }
+  ControlType control_type = 1;
+  string client_id = 2;
+}
+
+enum MessageDirection {
+  CLIENT_TO_BROKER = 0;
+  BROKER_TO_CLIENT = 1;
+}
