@@ -1,3 +1,57 @@
+//! # MQTT Protocol Buffer Conversion Library
+//!
+//! This library provides bidirectional conversion between MQTT packets and Protocol Buffer
+//! messages for both MQTT v3.1.1 and MQTT v5.0 protocols.
+//!
+//! ## Features
+//!
+//! - **Bidirectional Conversions**: Convert between MQTT packets and protobuf messages in both directions
+//! - **Multi-Version Support**: Supports both MQTT v3.1.1 and MQTT v5.0 protocols
+//! - **Stream Payload Handling**: Unified interface for handling different MQTT versions in streaming contexts
+//! - **Version Detection**: Automatic detection of MQTT protocol version from packets
+//! - **Byte Serialization**: Direct conversion from protobuf messages to MQTT byte streams
+//!
+//! ## Examples
+//!
+//! ### Converting MQTT v3 packets to protobuf:
+//! ```rust
+//! use mqtt_grpc_proxy::*;
+//! use flowsdk::mqtt_serde::mqttv3::connect::MqttConnect;
+//!
+//! let mqtt_connect = MqttConnect::new("client_id".to_string(), 60, true);
+//! let pb_connect: mqttv3pb::Connect = mqtt_connect.into();
+//! ```
+//!
+//! ### Converting protobuf back to MQTT v3:
+//! ```rust
+//! # use mqtt_grpc_proxy::*;
+//! let pb_connect = mqttv3pb::Connect::default();
+//! let mqtt_connect: flowsdk::mqtt_serde::mqttv3::connect::MqttConnect = pb_connect.into();
+//! ```
+//!
+//! ### Version detection and unified handling:
+//! ```rust
+//! # use mqtt_grpc_proxy::*;
+//! # use flowsdk::mqtt_serde::control_packet::MqttPacket;
+//! # use flowsdk::mqtt_serde::mqttv3::connect::MqttConnect;
+//! # let mqtt_connect = MqttConnect::new("test".to_string(), 60, true);
+//! # let packet = MqttPacket::Connect3(mqtt_connect);
+//! let version = detect_mqtt_version(&packet);
+//! let payload = convert_mqtt_to_stream_payload(&packet);
+//!
+//! match payload {
+//!     Some(MqttStreamPayload::V3(v3_payload)) => {
+//!         println!("MQTT v3.1.1 packet detected");
+//!         // Handle v3 payload
+//!     }
+//!     Some(MqttStreamPayload::V5(v5_payload)) => {
+//!         println!("MQTT v5.0 packet detected");
+//!         // Handle v5 payload
+//!     }
+//!     None => println!("Unsupported packet type"),
+//! }
+//! ```
+
 // Shared gRPC conversion logic for mqtt-grpc-proxy
 // This module provides shared conversion implementations between MQTT and protobuf types
 // Used by both r-proxy and s-proxy to eliminate code duplication
@@ -897,6 +951,76 @@ pub fn convert_stream_payload_to_mqtt_bytes(
     }
 }
 
+// Enhanced helper functions and utility methods
+impl MqttStreamPayload {
+    pub fn is_v3(&self) -> bool {
+        matches!(self, MqttStreamPayload::V3(_))
+    }
+
+    pub fn is_v5(&self) -> bool {
+        matches!(self, MqttStreamPayload::V5(_))
+    }
+
+    pub fn to_bytes(&self) -> Option<Vec<u8>> {
+        match self {
+            MqttStreamPayload::V3(payload) => convert_v3_stream_payload_to_mqtt_bytes(payload),
+            MqttStreamPayload::V5(payload) => convert_stream_payload_to_mqtt_bytes(payload),
+        }
+    }
+}
+
+// Unified conversion function that handles both versions
+pub fn convert_mqtt_to_stream_payload(packet: &MqttPacket) -> Option<MqttStreamPayload> {
+    if let Some(v5_payload) = convert_mqtt_v5_to_stream_payload(packet) {
+        Some(MqttStreamPayload::V5(v5_payload))
+    } else if let Some(v3_payload) = convert_mqtt_v3_to_stream_payload(packet) {
+        Some(MqttStreamPayload::V3(v3_payload))
+    } else {
+        None
+    }
+}
+
+// Version detection helper
+pub fn detect_mqtt_version(packet: &MqttPacket) -> u8 {
+    match packet {
+        MqttPacket::Connect3(_)
+        | MqttPacket::ConnAck3(_)
+        | MqttPacket::Publish3(_)
+        | MqttPacket::Subscribe3(_)
+        | MqttPacket::SubAck3(_)
+        | MqttPacket::Unsubscribe3(_)
+        | MqttPacket::UnsubAck3(_)
+        | MqttPacket::PubAck3(_)
+        | MqttPacket::PubRec3(_)
+        | MqttPacket::PubRel3(_)
+        | MqttPacket::PubComp3(_)
+        | MqttPacket::PingReq3(_)
+        | MqttPacket::PingResp3(_)
+        | MqttPacket::Disconnect3(_) => 3,
+
+        MqttPacket::Connect5(_)
+        | MqttPacket::ConnAck5(_)
+        | MqttPacket::Publish5(_)
+        | MqttPacket::Subscribe5(_)
+        | MqttPacket::SubAck5(_)
+        | MqttPacket::Unsubscribe5(_)
+        | MqttPacket::UnsubAck5(_)
+        | MqttPacket::PubAck5(_)
+        | MqttPacket::PubRec5(_)
+        | MqttPacket::PubRel5(_)
+        | MqttPacket::PubComp5(_)
+        | MqttPacket::PingReq5(_)
+        | MqttPacket::PingResp5(_)
+        | MqttPacket::Disconnect5(_)
+        | MqttPacket::Auth(_) => 5,
+    }
+}
+
+// Unified stream payload to bytes conversion
+pub fn convert_stream_payload_to_bytes(payload: &MqttStreamPayload) -> Option<Vec<u8>> {
+    payload.to_bytes()
+}
+
 // MQTT v3 From trait implementations
 impl From<MqttConnectV3> for mqttv3pb::Connect {
     fn from(connect: MqttConnectV3) -> Self {
@@ -1018,5 +1142,324 @@ impl From<MqttDisconnectV3> for mqttv3pb::Disconnect {
     fn from(_disconnect: MqttDisconnectV3) -> Self {
         // MQTT v3 DISCONNECT is an empty packet
         mqttv3pb::Disconnect {}
+    }
+}
+
+// MQTT v3 Reverse conversions: protobuf → MQTT v3
+impl From<mqttv3pb::Connect> for MqttConnectV3 {
+    fn from(connect: mqttv3pb::Connect) -> Self {
+        use flowsdk::mqtt_serde::mqttv3::connect::Will;
+
+        let will = connect.will.map(|w| Will {
+            qos: w.qos as u8,
+            retain: w.retain,
+            topic: w.topic,
+            message: w.payload,
+        });
+
+        MqttConnectV3 {
+            client_id: connect.client_id,
+            clean_session: connect.clean_session,
+            keep_alive: connect.keep_alive as u16,
+            username: if connect.username.is_empty() {
+                None
+            } else {
+                Some(connect.username)
+            },
+            password: if connect.password.is_empty() {
+                None
+            } else {
+                Some(connect.password)
+            },
+            will,
+        }
+    }
+}
+
+impl From<mqttv3pb::Connack> for MqttConnAckV3 {
+    fn from(connack: mqttv3pb::Connack) -> Self {
+        MqttConnAckV3 {
+            session_present: connack.session_present,
+            return_code: connack.return_code as u8,
+        }
+    }
+}
+
+impl From<mqttv3pb::Publish> for MqttPublishV3 {
+    fn from(publish: mqttv3pb::Publish) -> Self {
+        MqttPublishV3 {
+            topic_name: publish.topic,
+            payload: publish.payload,
+            qos: publish.qos as u8,
+            retain: publish.retain,
+            dup: publish.dup,
+            message_id: if publish.message_id == 0 {
+                None
+            } else {
+                Some(publish.message_id as u16)
+            },
+        }
+    }
+}
+
+impl From<mqttv3pb::Subscribe> for MqttSubscribeV3 {
+    fn from(subscribe: mqttv3pb::Subscribe) -> Self {
+        use flowsdk::mqtt_serde::mqttv3::subscribe::SubscriptionTopic;
+
+        let subscriptions = subscribe
+            .subscriptions
+            .into_iter()
+            .map(|sub| SubscriptionTopic {
+                topic_filter: sub.topic_filter,
+                qos: sub.qos as u8,
+            })
+            .collect();
+
+        MqttSubscribeV3 {
+            message_id: subscribe.message_id as u16,
+            subscriptions,
+        }
+    }
+}
+
+impl From<mqttv3pb::Suback> for MqttSubAckV3 {
+    fn from(suback: mqttv3pb::Suback) -> Self {
+        MqttSubAckV3 {
+            message_id: suback.message_id as u16,
+            return_codes: suback.return_codes.into_iter().map(|c| c as u8).collect(),
+        }
+    }
+}
+
+impl From<mqttv3pb::Unsubscribe> for MqttUnsubscribeV3 {
+    fn from(unsubscribe: mqttv3pb::Unsubscribe) -> Self {
+        MqttUnsubscribeV3 {
+            message_id: unsubscribe.message_id as u16,
+            topic_filters: unsubscribe.topic_filters,
+        }
+    }
+}
+
+impl From<mqttv3pb::Unsuback> for MqttUnsubAckV3 {
+    fn from(unsuback: mqttv3pb::Unsuback) -> Self {
+        MqttUnsubAckV3 {
+            message_id: unsuback.message_id as u16,
+        }
+    }
+}
+
+impl From<mqttv3pb::Puback> for MqttPubAckV3 {
+    fn from(puback: mqttv3pb::Puback) -> Self {
+        MqttPubAckV3 {
+            message_id: puback.message_id as u16,
+        }
+    }
+}
+
+impl From<mqttv3pb::Pubrec> for MqttPubRecV3 {
+    fn from(pubrec: mqttv3pb::Pubrec) -> Self {
+        MqttPubRecV3 {
+            message_id: pubrec.message_id as u16,
+        }
+    }
+}
+
+impl From<mqttv3pb::Pubrel> for MqttPubRelV3 {
+    fn from(pubrel: mqttv3pb::Pubrel) -> Self {
+        MqttPubRelV3 {
+            message_id: pubrel.message_id as u16,
+        }
+    }
+}
+
+impl From<mqttv3pb::Pubcomp> for MqttPubCompV3 {
+    fn from(pubcomp: mqttv3pb::Pubcomp) -> Self {
+        MqttPubCompV3 {
+            message_id: pubcomp.message_id as u16,
+        }
+    }
+}
+
+impl From<mqttv3pb::Disconnect> for MqttDisconnectV3 {
+    fn from(_disconnect: mqttv3pb::Disconnect) -> Self {
+        // MQTT v3 DISCONNECT is an empty packet
+        MqttDisconnectV3::new()
+    }
+}
+
+// MQTT v3 Stream payload to bytes conversion function
+pub fn convert_v3_stream_payload_to_mqtt_bytes(
+    payload: &mqttv3pb::mqtt_stream_message::Payload,
+) -> Option<Vec<u8>> {
+    use flowsdk::mqtt_serde::control_packet::MqttControlPacket;
+
+    match payload {
+        mqttv3pb::mqtt_stream_message::Payload::Connect(connect) => {
+            let mqtt_connect: MqttConnectV3 = connect.clone().into();
+            mqtt_connect.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Connack(connack) => {
+            let mqtt_connack: MqttConnAckV3 = connack.clone().into();
+            mqtt_connack.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Publish(publish) => {
+            let mqtt_publish: MqttPublishV3 = publish.clone().into();
+            mqtt_publish.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Subscribe(subscribe) => {
+            let mqtt_subscribe: MqttSubscribeV3 = subscribe.clone().into();
+            mqtt_subscribe.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Suback(suback) => {
+            let mqtt_suback: MqttSubAckV3 = suback.clone().into();
+            mqtt_suback.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Unsubscribe(unsubscribe) => {
+            let mqtt_unsubscribe: MqttUnsubscribeV3 = unsubscribe.clone().into();
+            mqtt_unsubscribe.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Unsuback(unsuback) => {
+            let mqtt_unsuback: MqttUnsubAckV3 = unsuback.clone().into();
+            mqtt_unsuback.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Puback(puback) => {
+            let mqtt_puback: MqttPubAckV3 = puback.clone().into();
+            mqtt_puback.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Pubrec(pubrec) => {
+            let mqtt_pubrec: MqttPubRecV3 = pubrec.clone().into();
+            mqtt_pubrec.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Pubrel(pubrel) => {
+            let mqtt_pubrel: MqttPubRelV3 = pubrel.clone().into();
+            mqtt_pubrel.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Pubcomp(pubcomp) => {
+            let mqtt_pubcomp: MqttPubCompV3 = pubcomp.clone().into();
+            mqtt_pubcomp.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Pingreq(_) => {
+            use flowsdk::mqtt_serde::mqttv3::pingreq::MqttPingReq;
+            let mqtt_pingreq = MqttPingReq;
+            mqtt_pingreq.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Pingresp(_) => {
+            use flowsdk::mqtt_serde::mqttv3::pingresp::MqttPingResp;
+            let mqtt_pingresp = MqttPingResp;
+            mqtt_pingresp.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::Disconnect(disconnect) => {
+            let mqtt_disconnect: MqttDisconnectV3 = disconnect.clone().into();
+            mqtt_disconnect.to_bytes().ok()
+        }
+        mqttv3pb::mqtt_stream_message::Payload::SessionControl(_) => {
+            // SessionControl is not a standard MQTT packet, return None
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+pub mod test_helpers {
+    use super::*;
+
+    pub fn create_test_v3_connect() -> MqttConnectV3 {
+        use flowsdk::mqtt_serde::mqttv3::connect::Will;
+
+        MqttConnectV3 {
+            client_id: "test_client_v3".to_string(),
+            clean_session: true,
+            keep_alive: 60,
+            username: Some("test_user".to_string()),
+            password: Some(b"test_pass".to_vec()),
+            will: Some(Will {
+                retain: false,
+                qos: 1,
+                topic: "test/will".to_string(),
+                message: b"will message".to_vec(),
+            }),
+        }
+    }
+
+    pub fn create_test_v5_connect() -> MqttConnect {
+        MqttConnect {
+            client_id: "test_client_v5".to_string(),
+            protocol_name: "MQTT".to_string(),
+            protocol_version: 5,
+            clean_start: true,
+            keep_alive: 60,
+            username: Some("test_user".to_string()),
+            password: Some(b"test_pass".to_vec()),
+            will: None, // Simplified for test
+            properties: Default::default(),
+        }
+    }
+
+    pub fn validate_v3_conversion(packet: &MqttPacket) -> bool {
+        detect_mqtt_version(packet) == 3 && convert_mqtt_v3_to_stream_payload(packet).is_some()
+    }
+
+    pub fn validate_v5_conversion(packet: &MqttPacket) -> bool {
+        detect_mqtt_version(packet) == 5 && convert_mqtt_v5_to_stream_payload(packet).is_some()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flowsdk::mqtt_serde::control_packet::MqttPacket;
+
+    #[test]
+    fn test_v3_connect_bidirectional_conversion() {
+        let original_connect = test_helpers::create_test_v3_connect();
+
+        // Convert to protobuf
+        let pb_connect: mqttv3pb::Connect = original_connect.clone().into();
+
+        // Convert back to MQTT
+        let converted_back: MqttConnectV3 = pb_connect.into();
+
+        assert_eq!(original_connect.client_id, converted_back.client_id);
+        assert_eq!(original_connect.clean_session, converted_back.clean_session);
+        assert_eq!(original_connect.keep_alive, converted_back.keep_alive);
+        assert_eq!(original_connect.username, converted_back.username);
+        assert_eq!(original_connect.password, converted_back.password);
+    }
+
+    #[test]
+    fn test_version_detection() {
+        let v3_connect = test_helpers::create_test_v3_connect();
+        let v5_connect = test_helpers::create_test_v5_connect();
+
+        let v3_packet = MqttPacket::Connect3(v3_connect);
+        let v5_packet = MqttPacket::Connect5(v5_connect);
+
+        assert_eq!(detect_mqtt_version(&v3_packet), 3);
+        assert_eq!(detect_mqtt_version(&v5_packet), 5);
+    }
+
+    #[test]
+    fn test_stream_payload_utility_methods() {
+        let v3_connect = test_helpers::create_test_v3_connect();
+        let v3_packet = MqttPacket::Connect3(v3_connect);
+
+        if let Some(payload) = convert_mqtt_to_stream_payload(&v3_packet) {
+            assert!(payload.is_v3());
+            assert!(!payload.is_v5());
+            assert!(payload.to_bytes().is_some());
+        } else {
+            panic!("Failed to convert v3 packet to stream payload");
+        }
+    }
+
+    #[test]
+    fn test_v3_stream_payload_to_bytes() {
+        let connect = test_helpers::create_test_v3_connect();
+        let pb_connect: mqttv3pb::Connect = connect.into();
+        let payload = mqttv3pb::mqtt_stream_message::Payload::Connect(pb_connect);
+
+        let bytes = convert_v3_stream_payload_to_mqtt_bytes(&payload);
+        assert!(bytes.is_some());
+        assert!(!bytes.unwrap().is_empty());
     }
 }
