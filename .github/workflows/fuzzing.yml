@@ -1,0 +1,32 @@
+name: Fuzzing
+on: [push, pull_request]
+jobs:
+  fuzzing:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Build Fuzzers
+      id: build
+      uses: google/clusterfuzzlite/actions/build_fuzzers@v1
+      with:
+        language: rust
+    - name: Run Fuzzers
+      id: run
+      uses: google/clusterfuzzlite/actions/run_fuzzers@v1
+      with:
+        fuzz-seconds: 600
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+        language: rust
+  pr-comment:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'pull_request' }}
+    steps:
+      - name: Comment on PR
+        uses: actions/github-script@v6
+        with:
+          script: |
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: 'Fuzzing report: https://storage.googleapis.com/clusterfuzzlite-builds-public/mqtt-grpc-duality/reports/latest/index.html'
+            })
