@@ -735,8 +735,8 @@ impl From<MqttConnectV3> for mqttv3pb::Connect {
     fn from(connect: MqttConnectV3) -> Self {
         mqttv3pb::Connect {
             client_id: connect.client_id.clone(),
-            protocol_name: "MQTT".to_string(), // Default for v3.1.1
-            protocol_version: 4,               // MQTT v3.1.1 uses protocol version 4
+            protocol_name: connect.protocol_name.clone(),
+            protocol_version: connect.protocol_version as u32,
             clean_session: connect.clean_session,
             keep_alive: connect.keep_alive as u32,
             username: connect.username.unwrap_or_default(),
@@ -867,6 +867,8 @@ impl From<mqttv3pb::Connect> for MqttConnectV3 {
         });
 
         MqttConnectV3 {
+            protocol_name: connect.protocol_name,
+            protocol_version: connect.protocol_version as u8,
             client_id: connect.client_id,
             clean_session: connect.clean_session,
             keep_alive: connect.keep_alive as u16,
