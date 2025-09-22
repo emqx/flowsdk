@@ -36,4 +36,4 @@ jobs:
     - name: Run integration 
       timeout-minutes: 20
       working-directory: mqtt_grpc_duality
-      run: RUST_BACKTRACE=full ./run_integration_tests.sh
+      run: RUST_BACKTRACE=full ./run_integration_tests.sh --mqtt-ver=both

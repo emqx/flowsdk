@@ -11,23 +11,6 @@
 //! - **Version Detection**: Automatic detection of MQTT protocol version from packets
 //! - **Byte Serialization**: Direct conversion from protobuf messages to MQTT byte streams
 //!
-//! ## Examples
-//!
-//! ### Converting MQTT v3 packets to protobuf:
-//! ```rust
-//! use mqtt_grpc_duality::*;
-//! use flowsdk::mqtt_serde::mqttv3::connect::MqttConnect;
-//!
-//! let mqtt_connect = MqttConnect::new("client_id".to_string(), 60, true);
-//! let pb_connect: mqttv3pb::Connect = mqtt_connect.into();
-//! ```
-//!
-//! ### Converting protobuf back to MQTT v3:
-//! ```rust
-//! # use mqtt_grpc_duality::*;
-//! let pb_connect = mqttv3pb::Connect::default();
-//! let mqtt_connect: flowsdk::mqtt_serde::mqttv3::connect::MqttConnect = pb_connect.into();
-//! ```
 
 // Shared gRPC conversion logic for mqtt-grpc-proxy
 // This module provides shared conversion implementations between MQTT and protobuf types

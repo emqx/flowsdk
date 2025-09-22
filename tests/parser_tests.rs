@@ -608,7 +608,7 @@ fn test_stream_v3() {
     } else {
         panic!("Expected ConnAck3 packet, got {:?}", result);
     }
-    // following 8 packets should be publish3
+    // following 9 packets should be publish3
     for n in 0..9 {
         let result = parser.next_packet().unwrap();
         if let Some(MqttPacket::Publish3(publish)) = result {

@@ -19,7 +19,7 @@ use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_stream::StreamExt;
 use tonic::{Request, Status, Streaming};
-use tracing::{debug, error, info, Level};
+use tracing::{debug, error, info};
 
 use dashmap::DashMap;
 
@@ -172,7 +172,7 @@ async fn handle_new_incoming_tcp(
         0,
         mqtt_unified_pb::MessageDirection::ClientToBroker,
     )
-    .ok_or_else(|| "Failed to convert connect packet to stream message")?;
+    .ok_or("Failed to convert connect packet to stream message")?;
 
     gstream_sender.send(msg).await?;
 
