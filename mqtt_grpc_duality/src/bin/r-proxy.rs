@@ -136,9 +136,18 @@ async fn handle_new_incoming_tcp(
     // Setup gRPC connection and streaming
     let (gstream_sender, inbound_gstream) = setup_grpc_connection(destination).await?;
 
+    let control_type = match mqtt_version {
+        5 => mqtt_unified_pb::session_control::ControlType::Establishv5,
+        3 => mqtt_unified_pb::session_control::ControlType::Establishv3,
+        _ => {
+            error!("Unsupported MQTT version: {}", mqtt_version);
+            return Err("Unsupported MQTT version".into());
+        }
+    };
+
     // Send initial session control message to establish the session
-    let session_control = mqtt_unified_pb::SessionControl {
-        control_type: mqtt_unified_pb::session_control::ControlType::Establish as i32,
+    let session_control: mqtt_unified_pb::SessionControl = mqtt_unified_pb::SessionControl {
+        control_type: control_type as i32,
         client_id: client_id.clone(),
     };
     let session_control_msg = MqttStreamMessage {
@@ -178,12 +187,12 @@ async fn handle_new_incoming_tcp(
     };
 
     // Start the message handling loops (ConnAck will be handled in the loop)
-    start_streaming_client_loop(streaming_conn, inbound_gstream, parser, state).await?;
+    start_streaming_loop(streaming_conn, inbound_gstream, parser, state).await?;
 
     Ok(())
 }
 
-async fn start_streaming_client_loop(
+async fn start_streaming_loop(
     mut conn: StreamingClientConnection,
     mut inbound_stream: Streaming<MqttStreamMessage>,
     mut parser: MqttParser,
