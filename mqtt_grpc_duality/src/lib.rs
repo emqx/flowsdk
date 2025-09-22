@@ -15,7 +15,7 @@
 //!
 //! ### Converting MQTT v3 packets to protobuf:
 //! ```rust
-//! use mqtt_grpc_proxy::*;
+//! use mqtt_grpc_duality::*;
 //! use flowsdk::mqtt_serde::mqttv3::connect::MqttConnect;
 //!
 //! let mqtt_connect = MqttConnect::new("client_id".to_string(), 60, true);
@@ -24,32 +24,9 @@
 //!
 //! ### Converting protobuf back to MQTT v3:
 //! ```rust
-//! # use mqtt_grpc_proxy::*;
+//! # use mqtt_grpc_duality::*;
 //! let pb_connect = mqttv3pb::Connect::default();
 //! let mqtt_connect: flowsdk::mqtt_serde::mqttv3::connect::MqttConnect = pb_connect.into();
-//! ```
-//!
-//! ### Version detection and unified handling:
-//! ```rust
-//! # use mqtt_grpc_proxy::*;
-//! # use flowsdk::mqtt_serde::control_packet::MqttPacket;
-//! # use flowsdk::mqtt_serde::mqttv3::connect::MqttConnect;
-//! # let mqtt_connect = MqttConnect::new("test".to_string(), 60, true);
-//! # let packet = MqttPacket::Connect3(mqtt_connect);
-//! let version = detect_mqtt_version(&packet);
-//! let payload = convert_mqtt_to_stream_payload(&packet);
-//!
-//! match payload {
-//!     Some(MqttStreamPayload::V3(v3_payload)) => {
-//!         println!("MQTT v3.1.1 packet detected");
-//!         // Handle v3 payload
-//!     }
-//!     Some(MqttStreamPayload::V5(v5_payload)) => {
-//!         println!("MQTT v5.0 packet detected");
-//!         // Handle v5 payload
-//!     }
-//!     None => println!("Unsupported packet type"),
-//! }
 //! ```
 
 // Shared gRPC conversion logic for mqtt-grpc-proxy
@@ -92,6 +69,10 @@ pub mod mqttv5pb {
 
 pub mod mqttv3pb {
     tonic::include_proto!("mqttv3");
+}
+
+pub mod mqtt_unified_pb {
+    tonic::include_proto!("mqtt");
 }
 
 // Helper function to convert WillProperties to protobuf properties
@@ -749,278 +730,6 @@ impl From<mqttv5pb::Unsuback> for MqttUnsubAck {
 // Additional imports needed for the helper functions
 use flowsdk::mqtt_serde::control_packet::MqttPacket;
 
-pub enum MqttStreamPayload {
-    V3(mqttv3pb::mqtt_stream_message::Payload),
-    V5(mqttv5pb::mqtt_stream_message::Payload),
-}
-
-// Helper function to convert MQTT packets to V3 stream payloads
-pub fn convert_mqtt_v3_to_stream_payload(
-    packet: &MqttPacket,
-) -> Option<mqttv3pb::mqtt_stream_message::Payload> {
-    match packet {
-        MqttPacket::Connect3(connect) => Some(mqttv3pb::mqtt_stream_message::Payload::Connect(
-            connect.clone().into(),
-        )),
-        MqttPacket::ConnAck3(connack) => Some(mqttv3pb::mqtt_stream_message::Payload::Connack(
-            connack.clone().into(),
-        )),
-        MqttPacket::Publish3(publish) => Some(mqttv3pb::mqtt_stream_message::Payload::Publish(
-            publish.clone().into(),
-        )),
-        MqttPacket::Subscribe3(subscribe) => Some(
-            mqttv3pb::mqtt_stream_message::Payload::Subscribe(subscribe.clone().into()),
-        ),
-        MqttPacket::SubAck3(suback) => Some(mqttv3pb::mqtt_stream_message::Payload::Suback(
-            suback.clone().into(),
-        )),
-        MqttPacket::Unsubscribe3(unsubscribe) => Some(
-            mqttv3pb::mqtt_stream_message::Payload::Unsubscribe(unsubscribe.clone().into()),
-        ),
-        MqttPacket::UnsubAck3(unsuback) => Some(mqttv3pb::mqtt_stream_message::Payload::Unsuback(
-            unsuback.clone().into(),
-        )),
-        MqttPacket::PubAck3(puback) => Some(mqttv3pb::mqtt_stream_message::Payload::Puback(
-            puback.clone().into(),
-        )),
-        MqttPacket::PubRec3(pubrec) => Some(mqttv3pb::mqtt_stream_message::Payload::Pubrec(
-            pubrec.clone().into(),
-        )),
-        MqttPacket::PubRel3(pubrel) => Some(mqttv3pb::mqtt_stream_message::Payload::Pubrel(
-            pubrel.clone().into(),
-        )),
-        MqttPacket::PubComp3(pubcomp) => Some(mqttv3pb::mqtt_stream_message::Payload::Pubcomp(
-            pubcomp.clone().into(),
-        )),
-        MqttPacket::PingReq3(_) => Some(mqttv3pb::mqtt_stream_message::Payload::Pingreq(
-            mqttv3pb::Pingreq {},
-        )),
-        MqttPacket::PingResp3(_) => Some(mqttv3pb::mqtt_stream_message::Payload::Pingresp(
-            mqttv3pb::Pingresp {},
-        )),
-        MqttPacket::Disconnect3(disconnect) => Some(
-            mqttv3pb::mqtt_stream_message::Payload::Disconnect(disconnect.clone().into()),
-        ),
-        // V5 packets not supported in V3 stream
-        _ => None,
-    }
-}
-
-// Helper function to convert MQTT packets to stream payloads
-pub fn convert_mqtt_v5_to_stream_payload(
-    packet: &MqttPacket,
-) -> Option<mqttv5pb::mqtt_stream_message::Payload> {
-    match packet {
-        MqttPacket::Connect5(connect) => Some(mqttv5pb::mqtt_stream_message::Payload::Connect(
-            connect.clone().into(),
-        )),
-        MqttPacket::ConnAck5(connack) => Some(mqttv5pb::mqtt_stream_message::Payload::Connack(
-            connack.clone().into(),
-        )),
-        MqttPacket::Publish5(publish) => Some(mqttv5pb::mqtt_stream_message::Payload::Publish(
-            publish.clone().into(),
-        )),
-        MqttPacket::Subscribe5(subscribe) => Some(
-            mqttv5pb::mqtt_stream_message::Payload::Subscribe(subscribe.clone().into()),
-        ),
-        MqttPacket::SubAck5(suback) => Some(mqttv5pb::mqtt_stream_message::Payload::Suback(
-            suback.clone().into(),
-        )),
-        MqttPacket::Unsubscribe5(unsubscribe) => Some(
-            mqttv5pb::mqtt_stream_message::Payload::Unsubscribe(unsubscribe.clone().into()),
-        ),
-        MqttPacket::UnsubAck5(unsuback) => Some(mqttv5pb::mqtt_stream_message::Payload::Unsuback(
-            unsuback.clone().into(),
-        )),
-        MqttPacket::PubAck5(puback) => Some(mqttv5pb::mqtt_stream_message::Payload::Puback(
-            puback.clone().into(),
-        )),
-        MqttPacket::PubRec5(pubrec) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubrec(
-            pubrec.clone().into(),
-        )),
-        MqttPacket::PubRel5(pubrel) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubrel(
-            pubrel.clone().into(),
-        )),
-        MqttPacket::PubComp5(pubcomp) => Some(mqttv5pb::mqtt_stream_message::Payload::Pubcomp(
-            pubcomp.clone().into(),
-        )),
-        MqttPacket::PingReq5(_) => Some(mqttv5pb::mqtt_stream_message::Payload::Pingreq(
-            mqttv5pb::Pingreq {},
-        )),
-        MqttPacket::PingResp5(_) => Some(mqttv5pb::mqtt_stream_message::Payload::Pingresp(
-            mqttv5pb::Pingresp {},
-        )),
-        MqttPacket::Disconnect5(disconnect) => Some(
-            mqttv5pb::mqtt_stream_message::Payload::Disconnect(disconnect.clone().into()),
-        ),
-        MqttPacket::Auth(auth) => Some(mqttv5pb::mqtt_stream_message::Payload::Auth(
-            auth.clone().into(),
-        )),
-
-        // V3 packets - Not supported in V5 stream, use convert_mqtt_to_v3_stream_payload instead
-        MqttPacket::Connect3(_)
-        | MqttPacket::ConnAck3(_)
-        | MqttPacket::Publish3(_)
-        | MqttPacket::Subscribe3(_)
-        | MqttPacket::SubAck3(_)
-        | MqttPacket::Unsubscribe3(_)
-        | MqttPacket::UnsubAck3(_)
-        | MqttPacket::PubAck3(_)
-        | MqttPacket::PubRec3(_)
-        | MqttPacket::PubRel3(_)
-        | MqttPacket::PubComp3(_)
-        | MqttPacket::PingReq3(_)
-        | MqttPacket::PingResp3(_)
-        | MqttPacket::Disconnect3(_) => None,
-    }
-}
-
-// Helper function to convert stream payloads to MQTT bytes
-pub fn convert_stream_payload_to_mqtt_bytes(
-    payload: &mqttv5pb::mqtt_stream_message::Payload,
-) -> Option<Vec<u8>> {
-    use flowsdk::mqtt_serde::control_packet::MqttControlPacket;
-    use flowsdk::mqtt_serde::mqttv5;
-
-    match payload {
-        mqttv5pb::mqtt_stream_message::Payload::Connect(connect) => {
-            let mqtt_connect: MqttConnect = connect.clone().into();
-            mqtt_connect.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Connack(connack) => {
-            let mqtt_connack: MqttConnAck = connack.clone().into();
-            mqtt_connack.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Publish(publish) => {
-            let mqtt_publish: mqttv5::publish::MqttPublish = publish.clone().into();
-            mqtt_publish.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Subscribe(subscribe) => {
-            let mqtt_subscribe: MqttSubscribe = subscribe.clone().into();
-            mqtt_subscribe.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Suback(suback) => {
-            let mqtt_suback: MqttSubAck = suback.clone().into();
-            mqtt_suback.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Unsubscribe(unsubscribe) => {
-            let mqtt_unsubscribe: MqttUnsubscribe = unsubscribe.clone().into();
-            mqtt_unsubscribe.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Unsuback(unsuback) => {
-            let mqtt_unsuback: mqttv5::unsuback::MqttUnsubAck = unsuback.clone().into();
-            mqtt_unsuback.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Puback(puback) => {
-            let mqtt_puback: mqttv5::puback::MqttPubAck = puback.clone().into();
-            mqtt_puback.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Pubrec(pubrec) => {
-            let mqtt_pubrec: mqttv5::pubrec::MqttPubRec = pubrec.clone().into();
-            mqtt_pubrec.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Pubrel(pubrel) => {
-            let mqtt_pubrel: mqttv5::pubrel::MqttPubRel = pubrel.clone().into();
-            mqtt_pubrel.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Pubcomp(pubcomp) => {
-            let mqtt_pubcomp: mqttv5::pubcomp::MqttPubComp = pubcomp.clone().into();
-            mqtt_pubcomp.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Pingreq(_) => {
-            let mqtt_pingreq = mqttv5::pingreq::MqttPingReq::new();
-            mqtt_pingreq.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Pingresp(_) => {
-            let mqtt_pingresp = mqttv5::pingresp::MqttPingResp::new();
-            mqtt_pingresp.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Disconnect(disconnect) => {
-            let mqtt_disconnect: mqttv5::disconnect::MqttDisconnect = disconnect.clone().into();
-            mqtt_disconnect.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::Auth(auth) => {
-            let mqtt_auth: mqttv5::auth::MqttAuth = auth.clone().into();
-            mqtt_auth.to_bytes().ok()
-        }
-        mqttv5pb::mqtt_stream_message::Payload::SessionControl(_) => {
-            // SessionControl is a gRPC-specific message that doesn't have an MQTT equivalent
-            // This is used for connection management, not actual MQTT protocol messages
-            None
-        }
-    }
-}
-
-// Enhanced helper functions and utility methods
-impl MqttStreamPayload {
-    pub fn is_v3(&self) -> bool {
-        matches!(self, MqttStreamPayload::V3(_))
-    }
-
-    pub fn is_v5(&self) -> bool {
-        matches!(self, MqttStreamPayload::V5(_))
-    }
-
-    pub fn to_bytes(&self) -> Option<Vec<u8>> {
-        match self {
-            MqttStreamPayload::V3(payload) => convert_v3_stream_payload_to_mqtt_bytes(payload),
-            MqttStreamPayload::V5(payload) => convert_stream_payload_to_mqtt_bytes(payload),
-        }
-    }
-}
-
-// Unified conversion function that handles both versions
-pub fn convert_mqtt_to_stream_payload(packet: &MqttPacket) -> Option<MqttStreamPayload> {
-    if let Some(v5_payload) = convert_mqtt_v5_to_stream_payload(packet) {
-        Some(MqttStreamPayload::V5(v5_payload))
-    } else if let Some(v3_payload) = convert_mqtt_v3_to_stream_payload(packet) {
-        Some(MqttStreamPayload::V3(v3_payload))
-    } else {
-        None
-    }
-}
-
-// Version detection helper
-pub fn detect_mqtt_version(packet: &MqttPacket) -> u8 {
-    match packet {
-        MqttPacket::Connect3(_)
-        | MqttPacket::ConnAck3(_)
-        | MqttPacket::Publish3(_)
-        | MqttPacket::Subscribe3(_)
-        | MqttPacket::SubAck3(_)
-        | MqttPacket::Unsubscribe3(_)
-        | MqttPacket::UnsubAck3(_)
-        | MqttPacket::PubAck3(_)
-        | MqttPacket::PubRec3(_)
-        | MqttPacket::PubRel3(_)
-        | MqttPacket::PubComp3(_)
-        | MqttPacket::PingReq3(_)
-        | MqttPacket::PingResp3(_)
-        | MqttPacket::Disconnect3(_) => 3,
-
-        MqttPacket::Connect5(_)
-        | MqttPacket::ConnAck5(_)
-        | MqttPacket::Publish5(_)
-        | MqttPacket::Subscribe5(_)
-        | MqttPacket::SubAck5(_)
-        | MqttPacket::Unsubscribe5(_)
-        | MqttPacket::UnsubAck5(_)
-        | MqttPacket::PubAck5(_)
-        | MqttPacket::PubRec5(_)
-        | MqttPacket::PubRel5(_)
-        | MqttPacket::PubComp5(_)
-        | MqttPacket::PingReq5(_)
-        | MqttPacket::PingResp5(_)
-        | MqttPacket::Disconnect5(_)
-        | MqttPacket::Auth(_) => 5,
-    }
-}
-
-// Unified stream payload to bytes conversion
-pub fn convert_stream_payload_to_bytes(payload: &MqttStreamPayload) -> Option<Vec<u8>> {
-    payload.to_bytes()
-}
-
 // MQTT v3 From trait implementations
 impl From<MqttConnectV3> for mqttv3pb::Connect {
     fn from(connect: MqttConnectV3) -> Self {
@@ -1287,179 +996,258 @@ impl From<mqttv3pb::Disconnect> for MqttDisconnectV3 {
     }
 }
 
-// MQTT v3 Stream payload to bytes conversion function
-pub fn convert_v3_stream_payload_to_mqtt_bytes(
-    payload: &mqttv3pb::mqtt_stream_message::Payload,
-) -> Option<Vec<u8>> {
-    use flowsdk::mqtt_serde::control_packet::MqttControlPacket;
+// New unified stream message logic
 
-    match payload {
-        mqttv3pb::mqtt_stream_message::Payload::Connect(connect) => {
-            let mqtt_connect: MqttConnectV3 = connect.clone().into();
-            mqtt_connect.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Connack(connack) => {
-            let mqtt_connack: MqttConnAckV3 = connack.clone().into();
-            mqtt_connack.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Publish(publish) => {
-            let mqtt_publish: MqttPublishV3 = publish.clone().into();
-            mqtt_publish.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Subscribe(subscribe) => {
-            let mqtt_subscribe: MqttSubscribeV3 = subscribe.clone().into();
-            mqtt_subscribe.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Suback(suback) => {
-            let mqtt_suback: MqttSubAckV3 = suback.clone().into();
-            mqtt_suback.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Unsubscribe(unsubscribe) => {
-            let mqtt_unsubscribe: MqttUnsubscribeV3 = unsubscribe.clone().into();
-            mqtt_unsubscribe.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Unsuback(unsuback) => {
-            let mqtt_unsuback: MqttUnsubAckV3 = unsuback.clone().into();
-            mqtt_unsuback.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Puback(puback) => {
-            let mqtt_puback: MqttPubAckV3 = puback.clone().into();
-            mqtt_puback.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Pubrec(pubrec) => {
-            let mqtt_pubrec: MqttPubRecV3 = pubrec.clone().into();
-            mqtt_pubrec.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Pubrel(pubrel) => {
-            let mqtt_pubrel: MqttPubRelV3 = pubrel.clone().into();
-            mqtt_pubrel.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Pubcomp(pubcomp) => {
-            let mqtt_pubcomp: MqttPubCompV3 = pubcomp.clone().into();
-            mqtt_pubcomp.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Pingreq(_) => {
-            use flowsdk::mqtt_serde::mqttv3::pingreq::MqttPingReq;
-            let mqtt_pingreq = MqttPingReq;
-            mqtt_pingreq.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Pingresp(_) => {
-            use flowsdk::mqtt_serde::mqttv3::pingresp::MqttPingResp;
-            let mqtt_pingresp = MqttPingResp;
-            mqtt_pingresp.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::Disconnect(disconnect) => {
-            let mqtt_disconnect: MqttDisconnectV3 = disconnect.clone().into();
-            mqtt_disconnect.to_bytes().ok()
-        }
-        mqttv3pb::mqtt_stream_message::Payload::SessionControl(_) => {
-            // SessionControl is not a standard MQTT packet, return None
-            None
-        }
-    }
-}
-
-#[cfg(test)]
-pub mod test_helpers {
-    use super::*;
-
-    pub fn create_test_v3_connect() -> MqttConnectV3 {
-        use flowsdk::mqtt_serde::mqttv3::connect::Will;
-
-        MqttConnectV3 {
-            client_id: "test_client_v3".to_string(),
-            clean_session: true,
-            keep_alive: 60,
-            username: Some("test_user".to_string()),
-            password: Some(b"test_pass".to_vec()),
-            will: Some(Will {
-                retain: false,
-                qos: 1,
-                topic: "test/will".to_string(),
-                message: b"will message".to_vec(),
+pub fn convert_mqtt_to_stream_message(
+    packet: &MqttPacket,
+    session_id: String,
+    sequence_id: u64,
+    direction: mqtt_unified_pb::MessageDirection,
+) -> Option<mqtt_unified_pb::MqttStreamMessage> {
+    let payload = match packet {
+        MqttPacket::Connect3(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Connect(p.clone().into())),
             }),
+        ),
+        MqttPacket::ConnAck3(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Connack(p.clone().into())),
+            }),
+        ),
+        MqttPacket::Publish3(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Publish(p.clone().into())),
+            }),
+        ),
+        MqttPacket::PubAck3(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Puback(p.clone().into())),
+            }),
+        ),
+        MqttPacket::PubRec3(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Pubrec(p.clone().into())),
+            }),
+        ),
+        MqttPacket::PubRel3(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Pubrel(p.clone().into())),
+            }),
+        ),
+        MqttPacket::PubComp3(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Pubcomp(p.clone().into())),
+            }),
+        ),
+        MqttPacket::Subscribe3(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Subscribe(p.clone().into())),
+            }),
+        ),
+        MqttPacket::SubAck3(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Suback(p.clone().into())),
+            }),
+        ),
+        MqttPacket::Unsubscribe3(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Unsubscribe(p.clone().into())),
+            }),
+        ),
+        MqttPacket::UnsubAck3(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Unsuback(p.clone().into())),
+            }),
+        ),
+        MqttPacket::PingReq3(_) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Pingreq(mqttv3pb::Pingreq {})),
+            }),
+        ),
+        MqttPacket::PingResp3(_) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Pingresp(
+                    mqttv3pb::Pingresp {},
+                )),
+            }),
+        ),
+        MqttPacket::Disconnect3(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(mqttv3pb::MqttPacket {
+                packet: Some(mqttv3pb::mqtt_packet::Packet::Disconnect(p.clone().into())),
+            }),
+        ),
+
+        MqttPacket::Connect5(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Connect(p.clone().into())),
+            }),
+        ),
+        MqttPacket::ConnAck5(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Connack(p.clone().into())),
+            }),
+        ),
+        MqttPacket::Publish5(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Publish(p.clone().into())),
+            }),
+        ),
+        MqttPacket::PubAck5(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Puback(p.clone().into())),
+            }),
+        ),
+        MqttPacket::PubRec5(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Pubrec(p.clone().into())),
+            }),
+        ),
+        MqttPacket::PubRel5(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Pubrel(p.clone().into())),
+            }),
+        ),
+        MqttPacket::PubComp5(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Pubcomp(p.clone().into())),
+            }),
+        ),
+        MqttPacket::Subscribe5(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Subscribe(p.clone().into())),
+            }),
+        ),
+        MqttPacket::SubAck5(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Suback(p.clone().into())),
+            }),
+        ),
+        MqttPacket::Unsubscribe5(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Unsubscribe(p.clone().into())),
+            }),
+        ),
+        MqttPacket::UnsubAck5(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Unsuback(p.clone().into())),
+            }),
+        ),
+        MqttPacket::PingReq5(_) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Pingreq(mqttv5pb::Pingreq {})),
+            }),
+        ),
+        MqttPacket::PingResp5(_) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Pingresp(
+                    mqttv5pb::Pingresp {},
+                )),
+            }),
+        ),
+        MqttPacket::Disconnect5(p) => Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Disconnect(p.clone().into())),
+            }),
+        ),
+        MqttPacket::Auth(p) => Some(mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(
+            mqttv5pb::MqttPacket {
+                packet: Some(mqttv5pb::mqtt_packet::Packet::Auth(p.clone().into())),
+            },
+        )),
+    };
+
+    payload.map(|p| mqtt_unified_pb::MqttStreamMessage {
+        session_id,
+        sequence_id,
+        direction: direction as i32,
+        payload: Some(p),
+    })
+}
+
+pub fn convert_stream_message_to_mqtt_packet(
+    msg: mqtt_unified_pb::MqttStreamMessage,
+) -> Option<MqttPacket> {
+    match msg.payload {
+        Some(mqtt_unified_pb::mqtt_stream_message::Payload::MqttV3Packet(v3_packet)) => {
+            v3_packet.packet.map(|p| p.into())
         }
-    }
-
-    pub fn create_test_v5_connect() -> MqttConnect {
-        MqttConnect {
-            client_id: "test_client_v5".to_string(),
-            protocol_name: "MQTT".to_string(),
-            protocol_version: 5,
-            clean_start: true,
-            keep_alive: 60,
-            username: Some("test_user".to_string()),
-            password: Some(b"test_pass".to_vec()),
-            will: None, // Simplified for test
-            properties: Default::default(),
+        Some(mqtt_unified_pb::mqtt_stream_message::Payload::MqttV5Packet(v5_packet)) => {
+            v5_packet.packet.map(|p| p.into())
         }
-    }
-
-    pub fn validate_v3_conversion(packet: &MqttPacket) -> bool {
-        detect_mqtt_version(packet) == 3 && convert_mqtt_v3_to_stream_payload(packet).is_some()
-    }
-
-    pub fn validate_v5_conversion(packet: &MqttPacket) -> bool {
-        detect_mqtt_version(packet) == 5 && convert_mqtt_v5_to_stream_payload(packet).is_some()
+        _ => None,
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flowsdk::mqtt_serde::control_packet::MqttPacket;
-
-    #[test]
-    fn test_v3_connect_bidirectional_conversion() {
-        let original_connect = test_helpers::create_test_v3_connect();
-
-        // Convert to protobuf
-        let pb_connect: mqttv3pb::Connect = original_connect.clone().into();
-
-        // Convert back to MQTT
-        let converted_back: MqttConnectV3 = pb_connect.into();
-
-        assert_eq!(original_connect.client_id, converted_back.client_id);
-        assert_eq!(original_connect.clean_session, converted_back.clean_session);
-        assert_eq!(original_connect.keep_alive, converted_back.keep_alive);
-        assert_eq!(original_connect.username, converted_back.username);
-        assert_eq!(original_connect.password, converted_back.password);
+impl From<mqttv3pb::mqtt_packet::Packet> for MqttPacket {
+    fn from(packet: mqttv3pb::mqtt_packet::Packet) -> Self {
+        match packet {
+            mqttv3pb::mqtt_packet::Packet::Connect(p) => MqttPacket::Connect3(p.into()),
+            mqttv3pb::mqtt_packet::Packet::Connack(p) => MqttPacket::ConnAck3(p.into()),
+            mqttv3pb::mqtt_packet::Packet::Publish(p) => MqttPacket::Publish3(p.into()),
+            mqttv3pb::mqtt_packet::Packet::Puback(p) => MqttPacket::PubAck3(p.into()),
+            mqttv3pb::mqtt_packet::Packet::Pubrec(p) => MqttPacket::PubRec3(p.into()),
+            mqttv3pb::mqtt_packet::Packet::Pubrel(p) => MqttPacket::PubRel3(p.into()),
+            mqttv3pb::mqtt_packet::Packet::Pubcomp(p) => MqttPacket::PubComp3(p.into()),
+            mqttv3pb::mqtt_packet::Packet::Subscribe(p) => MqttPacket::Subscribe3(p.into()),
+            mqttv3pb::mqtt_packet::Packet::Suback(p) => MqttPacket::SubAck3(p.into()),
+            mqttv3pb::mqtt_packet::Packet::Unsubscribe(p) => MqttPacket::Unsubscribe3(p.into()),
+            mqttv3pb::mqtt_packet::Packet::Unsuback(p) => MqttPacket::UnsubAck3(p.into()),
+            mqttv3pb::mqtt_packet::Packet::Pingreq(_) => {
+                MqttPacket::PingReq3(flowsdk::mqtt_serde::mqttv3::pingreq::MqttPingReq {})
+            }
+            mqttv3pb::mqtt_packet::Packet::Pingresp(_) => {
+                MqttPacket::PingResp3(flowsdk::mqtt_serde::mqttv3::pingresp::MqttPingResp {})
+            }
+            mqttv3pb::mqtt_packet::Packet::Disconnect(p) => MqttPacket::Disconnect3(p.into()),
+        }
     }
+}
 
-    #[test]
-    fn test_version_detection() {
-        let v3_connect = test_helpers::create_test_v3_connect();
-        let v5_connect = test_helpers::create_test_v5_connect();
-
-        let v3_packet = MqttPacket::Connect3(v3_connect);
-        let v5_packet = MqttPacket::Connect5(v5_connect);
-
-        assert_eq!(detect_mqtt_version(&v3_packet), 3);
-        assert_eq!(detect_mqtt_version(&v5_packet), 5);
+impl From<mqttv5pb::mqtt_packet::Packet> for MqttPacket {
+    fn from(packet: mqttv5pb::mqtt_packet::Packet) -> Self {
+        match packet {
+            mqttv5pb::mqtt_packet::Packet::Connect(p) => MqttPacket::Connect5(p.into()),
+            mqttv5pb::mqtt_packet::Packet::Connack(p) => MqttPacket::ConnAck5(p.into()),
+            mqttv5pb::mqtt_packet::Packet::Publish(p) => MqttPacket::Publish5(p.into()),
+            mqttv5pb::mqtt_packet::Packet::Puback(p) => MqttPacket::PubAck5(p.into()),
+            mqttv5pb::mqtt_packet::Packet::Pubrec(p) => MqttPacket::PubRec5(p.into()),
+            mqttv5pb::mqtt_packet::Packet::Pubrel(p) => MqttPacket::PubRel5(p.into()),
+            mqttv5pb::mqtt_packet::Packet::Pubcomp(p) => MqttPacket::PubComp5(p.into()),
+            mqttv5pb::mqtt_packet::Packet::Subscribe(p) => MqttPacket::Subscribe5(p.into()),
+            mqttv5pb::mqtt_packet::Packet::Suback(p) => MqttPacket::SubAck5(p.into()),
+            mqttv5pb::mqtt_packet::Packet::Unsubscribe(p) => MqttPacket::Unsubscribe5(p.into()),
+            mqttv5pb::mqtt_packet::Packet::Unsuback(p) => MqttPacket::UnsubAck5(p.into()),
+            mqttv5pb::mqtt_packet::Packet::Pingreq(_) => {
+                MqttPacket::PingReq5(flowsdk::mqtt_serde::mqttv5::pingreq::MqttPingReq::new())
+            }
+            mqttv5pb::mqtt_packet::Packet::Pingresp(_) => {
+                MqttPacket::PingResp5(flowsdk::mqtt_serde::mqttv5::pingresp::MqttPingResp::new())
+            }
+            mqttv5pb::mqtt_packet::Packet::Disconnect(p) => MqttPacket::Disconnect5(p.into()),
+            mqttv5pb::mqtt_packet::Packet::Auth(p) => MqttPacket::Auth(p.into()),
+        }
     }
+}
 
-    #[test]
-    fn test_stream_payload_utility_methods() {
-        let v3_connect = test_helpers::create_test_v3_connect();
-        let v3_packet = MqttPacket::Connect3(v3_connect);
+#[derive(Debug)]
+pub enum MqttConnectPacket {
+    V3(MqttConnectV3),
+    V5(MqttConnect),
+}
 
-        if let Some(payload) = convert_mqtt_to_stream_payload(&v3_packet) {
-            assert!(payload.is_v3());
-            assert!(!payload.is_v5());
-            assert!(payload.to_bytes().is_some());
-        } else {
-            panic!("Failed to convert v3 packet to stream payload");
+impl MqttConnectPacket {
+    pub fn client_id(&self) -> &str {
+        match self {
+            MqttConnectPacket::V3(p) => &p.client_id,
+            MqttConnectPacket::V5(p) => &p.client_id,
         }
     }
 
-    #[test]
-    fn test_v3_stream_payload_to_bytes() {
-        let connect = test_helpers::create_test_v3_connect();
-        let pb_connect: mqttv3pb::Connect = connect.into();
-        let payload = mqttv3pb::mqtt_stream_message::Payload::Connect(pb_connect);
-
-        let bytes = convert_v3_stream_payload_to_mqtt_bytes(&payload);
-        assert!(bytes.is_some());
-        assert!(!bytes.unwrap().is_empty());
+    pub fn version(&self) -> u8 {
+        match self {
+            MqttConnectPacket::V3(_) => 3,
+            MqttConnectPacket::V5(_) => 5,
+        }
     }
 }
