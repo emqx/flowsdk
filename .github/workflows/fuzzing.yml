@@ -3,6 +3,8 @@ on: [push, pull_request]
 jobs:
   fuzzing:
     runs-on: ubuntu-latest
+    env:
+      GITHUB_REPOSITORY: "git@github.com:emqx/flowsdk.git"
     steps:
     - name: Build Fuzzers
       id: build
