@@ -4,32 +4,36 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use flowsdk::mqtt_serde::control_packet::MqttPacket;
-use flowsdk::mqtt_serde::mqttv5::connect::MqttConnect;
+
 use flowsdk::mqtt_serde::parser::stream::MqttParser;
 use flowsdk::mqtt_serde::parser::ParseError;
-// Import shared conversions and protobuf types
-use mqtt_grpc_proxy::mqttv5pb;
-use mqtt_grpc_proxy::mqttv5pb::mqtt_relay_service_client::MqttRelayServiceClient;
-use mqtt_grpc_proxy::{convert_mqtt_v5_to_stream_payload, convert_stream_payload_to_mqtt_bytes};
+use mqtt_grpc_proxy::{
+    convert_mqtt_to_stream_message, convert_stream_message_to_mqtt_packet, mqtt_unified_pb,
+    MqttConnectPacket,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::spawn;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info};
-
-use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tokio_stream::wrappers::ReceiverStream;
+use tokio_stream::StreamExt;
 use tonic::{Request, Status, Streaming};
+use tracing::{debug, error, info, Level};
 
 use dashmap::DashMap;
+
+use mqtt_grpc_proxy::mqtt_unified_pb::mqtt_relay_service_client::MqttRelayServiceClient;
+use mqtt_grpc_proxy::mqtt_unified_pb::MqttStreamMessage;
 
 // Enhanced connection structure for streaming
 pub struct StreamingClientConnection {
     pub session_id: String,
     pub client_id: String,
+    pub mqtt_version: u8,
     pub write_h: OwnedWriteHalf,
     pub read_h: OwnedReadHalf,
-    pub grpc_stream_sender: mpsc::Sender<mqttv5pb::MqttStreamMessage>,
+    pub grpc_stream_sender: mpsc::Sender<MqttStreamMessage>, // Can handle both V3 and V5
 }
 
 // State management for r-proxy
@@ -74,8 +78,8 @@ async fn setup_grpc_connection(
     destination: SocketAddr,
 ) -> Result<
     (
-        mpsc::Sender<mqttv5pb::MqttStreamMessage>,
-        Streaming<mqttv5pb::MqttStreamMessage>,
+        mpsc::Sender<MqttStreamMessage>,
+        Streaming<MqttStreamMessage>,
     ),
     Box<dyn std::error::Error + Send + Sync>,
 > {
@@ -103,20 +107,6 @@ async fn setup_grpc_connection(
     Ok((grpc_stream_sender, inbound_gstream))
 }
 
-fn create_connect_stream_message(
-    session_id: &str,
-    connect: &MqttConnect,
-) -> mqttv5pb::MqttStreamMessage {
-    mqttv5pb::MqttStreamMessage {
-        session_id: session_id.to_string(),
-        sequence_id: 0,
-        direction: mqttv5pb::MessageDirection::ClientToBroker as i32,
-        payload: Some(mqttv5pb::mqtt_stream_message::Payload::Connect(
-            connect.clone().into(), // Direct conversion from MQTT Connect to protobuf Connect
-        )),
-    }
-}
-
 async fn handle_new_incoming_tcp(
     incoming: TcpStream,
     destination: SocketAddr,
@@ -130,7 +120,8 @@ async fn handle_new_incoming_tcp(
     let mut parser: MqttParser = MqttParser::new(16384, 0);
     let connect = wait_for_mqtt_connect(&mut in_read_half, &mut parser).await?;
 
-    let client_id: String = connect.client_id.clone();
+    let client_id: String = connect.client_id().to_string();
+    let mqtt_version = connect.version();
     let session_id: String = format!(
         "{}-{}",
         client_id,
@@ -145,17 +136,45 @@ async fn handle_new_incoming_tcp(
     // Setup gRPC connection and streaming
     let (gstream_sender, inbound_gstream) = setup_grpc_connection(destination).await?;
 
-    // Send initial Connect message
-    let connect_msg = create_connect_stream_message(&session_id, &connect);
-    gstream_sender.send(connect_msg).await?;
+    // Send initial session control message to establish the session
+    let session_control = mqtt_unified_pb::SessionControl {
+        control_type: mqtt_unified_pb::session_control::ControlType::Establish as i32,
+        client_id: client_id.clone(),
+    };
+    let session_control_msg = MqttStreamMessage {
+        session_id: session_id.clone(),
+        sequence_id: 0,
+        direction: mqtt_unified_pb::MessageDirection::ClientToBroker as i32,
+        payload: Some(
+            mqtt_unified_pb::mqtt_stream_message::Payload::SessionControl(session_control),
+        ),
+    };
+    gstream_sender.send(session_control_msg).await?;
+
+    // Send initial Connect message based on the version
+    let connect_packet = match connect {
+        MqttConnectPacket::V5(v5_connect) => MqttPacket::Connect5(v5_connect),
+        MqttConnectPacket::V3(v3_connect) => MqttPacket::Connect3(v3_connect),
+    };
+
+    let msg = convert_mqtt_to_stream_message(
+        &connect_packet,
+        session_id.clone(),
+        0,
+        mqtt_unified_pb::MessageDirection::ClientToBroker,
+    )
+    .ok_or_else(|| "Failed to convert connect packet to stream message")?;
+
+    gstream_sender.send(msg).await?;
 
     // Store connection for management
     let streaming_conn = StreamingClientConnection {
         session_id: session_id.clone(),
         client_id: client_id.clone(),
+        mqtt_version,
         write_h: out_write_half,
         read_h: in_read_half,
-        grpc_stream_sender: gstream_sender,
+        grpc_stream_sender: gstream_sender, // Unified sender for both V3 and V5
     };
 
     // Start the message handling loops (ConnAck will be handled in the loop)
@@ -166,7 +185,7 @@ async fn handle_new_incoming_tcp(
 
 async fn start_streaming_client_loop(
     mut conn: StreamingClientConnection,
-    mut inbound_stream: Streaming<mqttv5pb::MqttStreamMessage>,
+    mut inbound_stream: Streaming<MqttStreamMessage>,
     mut parser: MqttParser,
     _state: Arc<RProxyState>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
@@ -181,22 +200,25 @@ async fn start_streaming_client_loop(
                     match parser.next_packet() {
                         Ok(Some(packet)) => {
                             debug!("Parsed MQTT packet from client {}: {:?}", conn.client_id, packet);
-                            // Convert MQTT packet to gRPC stream message
-                            if let Some(payload) = convert_mqtt_v5_to_stream_payload(&packet) {
-                                let stream_msg = mqttv5pb::MqttStreamMessage {
-                                    session_id: conn.session_id.clone(),
-                                    sequence_id: sequence_counter.fetch_add(1, Ordering::SeqCst),
-                                    direction: mqttv5pb::MessageDirection::ClientToBroker as i32,
-                                    payload: Some(payload),
-                                };
+                            // Convert MQTT packet to gRPC stream message using unified approach
+                            let stream_msg = convert_mqtt_to_stream_message(
+                                &packet,
+                                conn.session_id.clone(),
+                                sequence_counter.fetch_add(1, Ordering::SeqCst),
+                                mqtt_unified_pb::MessageDirection::ClientToBroker,
+                            );
 
-                                if let Err(e) = conn.grpc_stream_sender.send(stream_msg).await {
+                            if let Some(msg) = stream_msg {
+                                if let Err(e) = conn.grpc_stream_sender.send(msg).await {
                                     error!("Failed to send MQTT packet to gRPC stream for client {}: {}", conn.client_id, e);
                                     break;
                                 } else {
                                     debug!("MQTT packet forwarded to s-proxy for client {}: {:?}", conn.client_id, packet);
                                 }
+                            } else {
+                                error!("Failed to convert MQTT packet to stream message for client {}: {:?}", conn.client_id, packet);
                             }
+
                             // Continue parsing more packets from the same buffer
                             if parser.buffer_mut().is_empty() {
                                 break; // No more data to parse, exit inner loop
@@ -223,17 +245,18 @@ async fn start_streaming_client_loop(
             msg = inbound_stream.next() => {
                 match msg {
                     Some(Ok(stream_msg)) => {
-                        if let Some(payload) = &stream_msg.payload {
-                            // Convert all payloads (including ConnAck) to MQTT bytes and forward
-                            if let Some(mqtt_bytes) = convert_stream_payload_to_mqtt_bytes(payload) {
+                        if let Some(packet) = convert_stream_message_to_mqtt_packet(stream_msg) {
+                            if let Ok(mqtt_bytes) = packet.to_bytes() {
                                 if let Err(e) = conn.write_h.write_all(&mqtt_bytes).await {
-                                    error!("Failed to write MQTT response to client {}: {}, grpc payload: {:?}", conn.client_id, e, payload);
+                                    error!("Failed to write MQTT response to client {}: {}, grpc payload: {:?}", conn.client_id, e, packet);
                                     break;
                                 }
-                                debug!("Forwarded gRPC message to MQTT client {}: {:?}", conn.client_id, payload);
+                                debug!("Forwarded gRPC message to MQTT client {}: {:?}", conn.client_id, packet);
                             } else {
-                                error!("Failed to convert payload to MQTT bytes for client {}: {:?}", conn.client_id, payload);
+                                error!("Failed to convert payload to MQTT bytes for client {}: {:?}", conn.client_id, packet);
                             }
+                        } else {
+                            error!("Failed to convert stream message to MQTT packet");
                         }
                     }
                     Some(Err(e)) => {
@@ -259,7 +282,7 @@ async fn start_streaming_client_loop(
 async fn wait_for_mqtt_connect(
     stream: &mut OwnedReadHalf,
     parser: &mut MqttParser,
-) -> Result<MqttConnect, Status> {
+) -> Result<MqttConnectPacket, Status> {
     // init read hint for locate the vsn
     let mut read_hint = 7;
 
@@ -294,7 +317,10 @@ async fn wait_for_mqtt_connect(
 
         match parser.next_packet() {
             Ok(Some(MqttPacket::Connect5(connect))) => {
-                return Ok(connect);
+                return Ok(MqttConnectPacket::V5(connect));
+            }
+            Ok(Some(MqttPacket::Connect3(connect))) => {
+                return Ok(MqttConnectPacket::V3(connect));
             }
             Ok(Some(_)) => {
                 return Err(Status::invalid_argument(
