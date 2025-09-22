@@ -20,6 +20,8 @@ pub struct Will {
 #[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
 #[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
 pub struct MqttConnect {
+    pub protocol_name: String,
+    pub protocol_version: u8,
     pub clean_session: bool,
     pub keep_alive: u16,
     pub client_id: String,
@@ -31,6 +33,8 @@ pub struct MqttConnect {
 impl MqttConnect {
     pub fn new(client_id: String, keep_alive: u16, clean_session: bool) -> Self {
         Self {
+            protocol_name: "MQTT".to_string(),
+            protocol_version: 4,
             clean_session,
             keep_alive,
             client_id,
@@ -49,9 +53,9 @@ impl MqttControlPacket for MqttConnect {
     fn variable_header(&self) -> Result<Vec<u8>, ParseError> {
         let mut vh = Vec::new();
         // Protocol Name
-        vh.extend(Utf8String::encode("MQTT"));
+        vh.extend(Utf8String::encode(&self.protocol_name));
         // Protocol Version
-        vh.push(4);
+        vh.push(self.protocol_version);
 
         // Connect Flags
         let mut flags = 0u8;
@@ -216,6 +220,8 @@ impl MqttControlPacket for MqttConnect {
 
         Ok(ParseOk::Packet(
             MqttPacket::Connect3(MqttConnect {
+                protocol_name: proto_name,
+                protocol_version: version,
                 clean_session,
                 keep_alive,
                 client_id,
