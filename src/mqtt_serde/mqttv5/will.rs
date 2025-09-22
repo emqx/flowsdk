@@ -72,9 +72,7 @@ impl Will {
                 }
                 // MQTT 5.0: 3.1.3.2.4 Message Expiry Interval
                 Property::MessageExpiryInterval(value) => {
-                    if will.properties.message_expiry_interval.is_none() {
-                        will.properties.message_expiry_interval = Some(value);
-                    }
+                    will.properties.message_expiry_interval = Some(value);
                 }
                 // MQTT 5.0: 3.1.3.2.5 Content Type
                 Property::ContentType(value) => will.properties.content_type = Some(value),

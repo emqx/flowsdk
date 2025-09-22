@@ -135,7 +135,7 @@ impl MqttControlPacket for MqttConnect {
             ));
         }
 
-        if !(proto_name == "MQTT" && version == 4) && (proto_name != "MQIsdp" && version == 3) {
+        if !((proto_name == "MQTT" && version == 4) || (proto_name == "MQIsdp" && version == 3)) {
             return Err(ParseError::ParseError("Invalid protocol name".to_string()));
         }
 

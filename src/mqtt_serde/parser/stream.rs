@@ -73,7 +73,10 @@ impl MqttParser {
     /// - If the buffer does not contain a full packet, it returns `Ok(None)`.
     /// - If the data in the buffer is malformed, it returns `Err(ParseError)`.
     pub fn next_packet(&mut self) -> Result<Option<MqttPacket>, ParseError> {
-        assert!(self.mqtt_version != 0);
+        assert!(
+            self.mqtt_version != 0,
+            "MQTT version must be set before parsing packets"
+        );
         match MqttPacket::from_bytes_with_version(&self.buffer, self.mqtt_version) {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 // A full packet was parsed, advance the buffer

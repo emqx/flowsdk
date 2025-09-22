@@ -4,7 +4,7 @@ use std::{env, net::SocketAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Status};
-use tracing::{debug, error, info, Level};
+use tracing::{debug, error, info};
 
 // Import shared conversions and protobuf types from the proxy workspace
 use mqtt_grpc_proxy::convert_mqtt_to_stream_message;
