@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/mqtt_serde/mqttv5/disconnect.rs`."><title>disconnect.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-84e720fa.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="flowsdk" data-themes="" data-resource-suffix="" data-rustdoc-version="1.89.0 (29483883e 2025-08-04)" data-channel="1.89.0" data-search-js="search-92309212.js" data-settings-js="settings-5514c975.js" ><script src="../../../../static.files/storage-4e99c027.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-fd3af306.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">flowsdk/mqtt_serde/mqttv5/</div>disconnect.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>serde::{Deserialize, Serialize};
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/mqtt_serde/mqttv5/disconnect.rs`."><title>disconnect.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-aa0817cf.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="flowsdk" data-themes="" data-resource-suffix="" data-rustdoc-version="1.90.0 (1159e78c4 2025-09-14)" data-channel="1.90.0" data-search-js="search-fa3e91e5.js" data-settings-js="settings-5514c975.js" ><script src="../../../../static.files/storage-68b7e25d.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-eebb9057.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">flowsdk/mqtt_serde/mqttv5/</div>disconnect.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span><span class="kw">crate</span>::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span><span class="kw">crate</span>::mqtt_serde::mqttv5::common::properties::{
@@ -231,7 +231,7 @@
 <a href=#231 id=231 data-nosnippet>231</a>
 <a href=#232 id=232 data-nosnippet>232</a>        <span class="kw">let </span>disconnect = MqttDisconnect::new(reason_code, properties);
 <a href=#233 id=233 data-nosnippet>233</a>        <span class="prelude-val">Ok</span>(ParseOk::Packet(
-<a href=#234 id=234 data-nosnippet>234</a>            MqttPacket::Disconnect(disconnect),
+<a href=#234 id=234 data-nosnippet>234</a>            MqttPacket::Disconnect5(disconnect),
 <a href=#235 id=235 data-nosnippet>235</a>            total_len,
 <a href=#236 id=236 data-nosnippet>236</a>        ))
 <a href=#237 id=237 data-nosnippet>237</a>    }
@@ -327,7 +327,7 @@
 <a href=#327 id=327 data-nosnippet>327</a>        <span class="kw">let </span>bytes = <span class="macro">vec!</span>[<span class="number">0xE0</span>, <span class="number">0x00</span>]; <span class="comment">// DISCONNECT with remaining length 0
 <a href=#328 id=328 data-nosnippet>328</a>
 <a href=#329 id=329 data-nosnippet>329</a>        </span><span class="kw">match </span>MqttDisconnect::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#330 id=330 data-nosnippet>330</a>            ParseOk::Packet(MqttPacket::Disconnect(disconnect), consumed) =&gt; {
+<a href=#330 id=330 data-nosnippet>330</a>            ParseOk::Packet(MqttPacket::Disconnect5(disconnect), consumed) =&gt; {
 <a href=#331 id=331 data-nosnippet>331</a>                <span class="macro">assert_eq!</span>(consumed, <span class="number">2</span>);
 <a href=#332 id=332 data-nosnippet>332</a>                <span class="macro">assert_eq!</span>(disconnect.reason_code, <span class="number">0x00</span>);
 <a href=#333 id=333 data-nosnippet>333</a>                <span class="macro">assert!</span>(disconnect.properties.is_empty());
@@ -341,7 +341,7 @@
 <a href=#341 id=341 data-nosnippet>341</a>        <span class="kw">let </span>bytes = <span class="macro">vec!</span>[<span class="number">0xE0</span>, <span class="number">0x02</span>, <span class="number">0x81</span>, <span class="number">0x00</span>]; <span class="comment">// DISCONNECT with reason code 0x81, no properties
 <a href=#342 id=342 data-nosnippet>342</a>
 <a href=#343 id=343 data-nosnippet>343</a>        </span><span class="kw">match </span>MqttDisconnect::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#344 id=344 data-nosnippet>344</a>            ParseOk::Packet(MqttPacket::Disconnect(disconnect), consumed) =&gt; {
+<a href=#344 id=344 data-nosnippet>344</a>            ParseOk::Packet(MqttPacket::Disconnect5(disconnect), consumed) =&gt; {
 <a href=#345 id=345 data-nosnippet>345</a>                <span class="macro">assert_eq!</span>(consumed, <span class="number">4</span>);
 <a href=#346 id=346 data-nosnippet>346</a>                <span class="macro">assert_eq!</span>(disconnect.reason_code, <span class="number">0x81</span>);
 <a href=#347 id=347 data-nosnippet>347</a>                <span class="macro">assert!</span>(disconnect.properties.is_empty());
@@ -356,7 +356,7 @@
 <a href=#356 id=356 data-nosnippet>356</a>        <span class="kw">let </span>bytes = original.to_bytes().unwrap();
 <a href=#357 id=357 data-nosnippet>357</a>
 <a href=#358 id=358 data-nosnippet>358</a>        <span class="kw">match </span>MqttDisconnect::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#359 id=359 data-nosnippet>359</a>            ParseOk::Packet(MqttPacket::Disconnect(parsed), <span class="kw">_</span>) =&gt; {
+<a href=#359 id=359 data-nosnippet>359</a>            ParseOk::Packet(MqttPacket::Disconnect5(parsed), <span class="kw">_</span>) =&gt; {
 <a href=#360 id=360 data-nosnippet>360</a>                <span class="macro">assert_eq!</span>(original, parsed);
 <a href=#361 id=361 data-nosnippet>361</a>            }
 <a href=#362 id=362 data-nosnippet>362</a>            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"Expected DISCONNECT packet"</span>),
@@ -369,7 +369,7 @@
 <a href=#369 id=369 data-nosnippet>369</a>        <span class="kw">let </span>bytes = original.to_bytes().unwrap();
 <a href=#370 id=370 data-nosnippet>370</a>
 <a href=#371 id=371 data-nosnippet>371</a>        <span class="kw">match </span>MqttDisconnect::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#372 id=372 data-nosnippet>372</a>            ParseOk::Packet(MqttPacket::Disconnect(parsed), <span class="kw">_</span>) =&gt; {
+<a href=#372 id=372 data-nosnippet>372</a>            ParseOk::Packet(MqttPacket::Disconnect5(parsed), <span class="kw">_</span>) =&gt; {
 <a href=#373 id=373 data-nosnippet>373</a>                <span class="macro">assert_eq!</span>(original, parsed);
 <a href=#374 id=374 data-nosnippet>374</a>            }
 <a href=#375 id=375 data-nosnippet>375</a>            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"Expected DISCONNECT packet"</span>),
@@ -456,7 +456,7 @@
 <a href=#456 id=456 data-nosnippet>456</a>            <span class="kw">let </span>bytes = disconnect.to_bytes().unwrap();
 <a href=#457 id=457 data-nosnippet>457</a>
 <a href=#458 id=458 data-nosnippet>458</a>            <span class="kw">match </span>MqttDisconnect::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#459 id=459 data-nosnippet>459</a>                ParseOk::Packet(MqttPacket::Disconnect(parsed), <span class="kw">_</span>) =&gt; {
+<a href=#459 id=459 data-nosnippet>459</a>                ParseOk::Packet(MqttPacket::Disconnect5(parsed), <span class="kw">_</span>) =&gt; {
 <a href=#460 id=460 data-nosnippet>460</a>                    <span class="macro">assert_eq!</span>(parsed.reason_code, reason_code);
 <a href=#461 id=461 data-nosnippet>461</a>                }
 <a href=#462 id=462 data-nosnippet>462</a>                <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(
@@ -477,7 +477,7 @@
 <a href=#477 id=477 data-nosnippet>477</a>        <span class="kw">let </span>bytes = disconnect.to_bytes().unwrap();
 <a href=#478 id=478 data-nosnippet>478</a>
 <a href=#479 id=479 data-nosnippet>479</a>        <span class="kw">match </span>MqttDisconnect::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#480 id=480 data-nosnippet>480</a>            ParseOk::Packet(MqttPacket::Disconnect(parsed), <span class="kw">_</span>) =&gt; {
+<a href=#480 id=480 data-nosnippet>480</a>            ParseOk::Packet(MqttPacket::Disconnect5(parsed), <span class="kw">_</span>) =&gt; {
 <a href=#481 id=481 data-nosnippet>481</a>                <span class="macro">assert_eq!</span>(parsed.reason_code, <span class="number">0x8B</span>);
 <a href=#482 id=482 data-nosnippet>482</a>                <span class="macro">assert_eq!</span>(parsed.properties, properties);
 <a href=#483 id=483 data-nosnippet>483</a>            }

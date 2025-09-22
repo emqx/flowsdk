@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/mqtt_serde/mqttv5/unsubscribe.rs`."><title>unsubscribe.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-84e720fa.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="flowsdk" data-themes="" data-resource-suffix="" data-rustdoc-version="1.89.0 (29483883e 2025-08-04)" data-channel="1.89.0" data-search-js="search-92309212.js" data-settings-js="settings-5514c975.js" ><script src="../../../../static.files/storage-4e99c027.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-fd3af306.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">flowsdk/mqtt_serde/mqttv5/</div>unsubscribe.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>serde::{Deserialize, Serialize};
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/mqtt_serde/mqttv5/unsubscribe.rs`."><title>unsubscribe.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-aa0817cf.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="flowsdk" data-themes="" data-resource-suffix="" data-rustdoc-version="1.90.0 (1159e78c4 2025-09-14)" data-channel="1.90.0" data-search-js="search-fa3e91e5.js" data-settings-js="settings-5514c975.js" ><script src="../../../../static.files/storage-68b7e25d.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-eebb9057.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">flowsdk/mqtt_serde/mqttv5/</div>unsubscribe.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span><span class="kw">crate</span>::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span><span class="kw">crate</span>::mqtt_serde::encode_utf8_string;
@@ -176,7 +176,7 @@
 <a href=#176 id=176 data-nosnippet>176</a>        };
 <a href=#177 id=177 data-nosnippet>177</a>
 <a href=#178 id=178 data-nosnippet>178</a>        <span class="prelude-val">Ok</span>(ParseOk::Packet(
-<a href=#179 id=179 data-nosnippet>179</a>            MqttPacket::Unsubscribe(unsubscribe),
+<a href=#179 id=179 data-nosnippet>179</a>            MqttPacket::Unsubscribe5(unsubscribe),
 <a href=#180 id=180 data-nosnippet>180</a>            offset,
 <a href=#181 id=181 data-nosnippet>181</a>        ))
 <a href=#182 id=182 data-nosnippet>182</a>    }
@@ -201,7 +201,7 @@
 <a href=#201 id=201 data-nosnippet>201</a>
 <a href=#202 id=202 data-nosnippet>202</a>        // Test round-trip parsing
 <a href=#203 id=203 data-nosnippet>203</a>        </span><span class="kw">match </span>MqttUnsubscribe::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#204 id=204 data-nosnippet>204</a>            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), consumed) =&gt; {
+<a href=#204 id=204 data-nosnippet>204</a>            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), consumed) =&gt; {
 <a href=#205 id=205 data-nosnippet>205</a>                <span class="macro">assert_eq!</span>(consumed, bytes.len());
 <a href=#206 id=206 data-nosnippet>206</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.packet_id, <span class="number">1234</span>);
 <a href=#207 id=207 data-nosnippet>207</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.topic_filters, <span class="macro">vec!</span>[<span class="string">"test/topic"</span>]);
@@ -225,7 +225,7 @@
 <a href=#225 id=225 data-nosnippet>225</a>        <span class="kw">let </span>bytes = unsubscribe.to_bytes().unwrap();
 <a href=#226 id=226 data-nosnippet>226</a>
 <a href=#227 id=227 data-nosnippet>227</a>        <span class="kw">match </span>MqttUnsubscribe::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#228 id=228 data-nosnippet>228</a>            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
+<a href=#228 id=228 data-nosnippet>228</a>            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
 <a href=#229 id=229 data-nosnippet>229</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.packet_id, <span class="number">5678</span>);
 <a href=#230 id=230 data-nosnippet>230</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.topic_filters, topic_filters);
 <a href=#231 id=231 data-nosnippet>231</a>            }
@@ -246,7 +246,7 @@
 <a href=#246 id=246 data-nosnippet>246</a>        <span class="kw">let </span>bytes = unsubscribe.to_bytes().unwrap();
 <a href=#247 id=247 data-nosnippet>247</a>
 <a href=#248 id=248 data-nosnippet>248</a>        <span class="kw">match </span>MqttUnsubscribe::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#249 id=249 data-nosnippet>249</a>            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
+<a href=#249 id=249 data-nosnippet>249</a>            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
 <a href=#250 id=250 data-nosnippet>250</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.packet_id, <span class="number">9999</span>);
 <a href=#251 id=251 data-nosnippet>251</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.topic_filters, topic_filters);
 <a href=#252 id=252 data-nosnippet>252</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.properties.len(), <span class="number">2</span>);
@@ -269,7 +269,7 @@
 <a href=#269 id=269 data-nosnippet>269</a>        <span class="kw">let </span>bytes = unsubscribe.to_bytes().unwrap();
 <a href=#270 id=270 data-nosnippet>270</a>
 <a href=#271 id=271 data-nosnippet>271</a>        <span class="kw">match </span>MqttUnsubscribe::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#272 id=272 data-nosnippet>272</a>            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
+<a href=#272 id=272 data-nosnippet>272</a>            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
 <a href=#273 id=273 data-nosnippet>273</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.topic_filters, topic_filters);
 <a href=#274 id=274 data-nosnippet>274</a>            }
 <a href=#275 id=275 data-nosnippet>275</a>            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"Expected UNSUBSCRIBE packet"</span>),
@@ -320,7 +320,7 @@
 <a href=#320 id=320 data-nosnippet>320</a>        <span class="kw">let </span>bytes = unsubscribe.to_bytes().unwrap();
 <a href=#321 id=321 data-nosnippet>321</a>
 <a href=#322 id=322 data-nosnippet>322</a>        <span class="kw">match </span>MqttUnsubscribe::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#323 id=323 data-nosnippet>323</a>            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
+<a href=#323 id=323 data-nosnippet>323</a>            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
 <a href=#324 id=324 data-nosnippet>324</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.topic_filters, unsubscribe.topic_filters);
 <a href=#325 id=325 data-nosnippet>325</a>            }
 <a href=#326 id=326 data-nosnippet>326</a>            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"Expected UNSUBSCRIBE packet"</span>),
@@ -341,7 +341,7 @@
 <a href=#341 id=341 data-nosnippet>341</a>        <span class="kw">let </span>bytes = unsubscribe.to_bytes().unwrap();
 <a href=#342 id=342 data-nosnippet>342</a>
 <a href=#343 id=343 data-nosnippet>343</a>        <span class="kw">match </span>MqttUnsubscribe::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#344 id=344 data-nosnippet>344</a>            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
+<a href=#344 id=344 data-nosnippet>344</a>            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
 <a href=#345 id=345 data-nosnippet>345</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.topic_filters, topic_filters);
 <a href=#346 id=346 data-nosnippet>346</a>            }
 <a href=#347 id=347 data-nosnippet>347</a>            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"Expected UNSUBSCRIBE packet"</span>),
@@ -366,7 +366,7 @@
 <a href=#366 id=366 data-nosnippet>366</a>        <span class="kw">let </span>bytes = original_unsubscribe.to_bytes().unwrap();
 <a href=#367 id=367 data-nosnippet>367</a>
 <a href=#368 id=368 data-nosnippet>368</a>        <span class="kw">match </span>MqttUnsubscribe::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#369 id=369 data-nosnippet>369</a>            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), consumed) =&gt; {
+<a href=#369 id=369 data-nosnippet>369</a>            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), consumed) =&gt; {
 <a href=#370 id=370 data-nosnippet>370</a>                <span class="macro">assert_eq!</span>(consumed, bytes.len());
 <a href=#371 id=371 data-nosnippet>371</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.packet_id, original_unsubscribe.packet_id);
 <a href=#372 id=372 data-nosnippet>372</a>                <span class="macro">assert_eq!</span>(
@@ -391,7 +391,7 @@
 <a href=#391 id=391 data-nosnippet>391</a>        <span class="kw">let </span>bytes = unsubscribe.to_bytes().unwrap();
 <a href=#392 id=392 data-nosnippet>392</a>
 <a href=#393 id=393 data-nosnippet>393</a>        <span class="kw">match </span>MqttUnsubscribe::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#394 id=394 data-nosnippet>394</a>            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
+<a href=#394 id=394 data-nosnippet>394</a>            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
 <a href=#395 id=395 data-nosnippet>395</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.topic_filters, topic_filters);
 <a href=#396 id=396 data-nosnippet>396</a>            }
 <a href=#397 id=397 data-nosnippet>397</a>            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"Expected UNSUBSCRIBE packet"</span>),
@@ -413,7 +413,7 @@
 <a href=#413 id=413 data-nosnippet>413</a>        <span class="kw">let </span>bytes = unsubscribe.to_bytes().unwrap();
 <a href=#414 id=414 data-nosnippet>414</a>
 <a href=#415 id=415 data-nosnippet>415</a>        <span class="kw">match </span>MqttUnsubscribe::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#416 id=416 data-nosnippet>416</a>            ParseOk::Packet(MqttPacket::Unsubscribe(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
+<a href=#416 id=416 data-nosnippet>416</a>            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), <span class="kw">_</span>) =&gt; {
 <a href=#417 id=417 data-nosnippet>417</a>                <span class="macro">assert_eq!</span>(parsed_unsubscribe.topic_filters, topic_filters);
 <a href=#418 id=418 data-nosnippet>418</a>            }
 <a href=#419 id=419 data-nosnippet>419</a>            <span class="kw">_ </span>=&gt; <span class="macro">panic!</span>(<span class="string">"Expected UNSUBSCRIBE packet"</span>),
@@ -436,7 +436,7 @@
 <a href=#436 id=436 data-nosnippet>436</a>        <span class="macro">assert_eq!</span>(offset, packet.len());
 <a href=#437 id=437 data-nosnippet>437</a>        <span class="macro">assert_eq!</span>(
 <a href=#438 id=438 data-nosnippet>438</a>            parsed_packet,
-<a href=#439 id=439 data-nosnippet>439</a>            MqttPacket::Unsubscribe(MqttUnsubscribe::new(
+<a href=#439 id=439 data-nosnippet>439</a>            MqttPacket::Unsubscribe5(MqttUnsubscribe::new(
 <a href=#440 id=440 data-nosnippet>440</a>                <span class="number">29196</span>,
 <a href=#441 id=441 data-nosnippet>441</a>                <span class="macro">vec!</span>[<span class="string">"testtopic/#"</span>.to_string()],
 <a href=#442 id=442 data-nosnippet>442</a>                <span class="macro">vec!</span>[]

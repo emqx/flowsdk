@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["convert_mqtt_to_stream_payload","convert_stream_payload_to_mqtt_bytes"],"mod":["mqttv5pb"]};
+window.SIDEBAR_ITEMS = {"enum":["MqttConnectPacket"],"fn":["convert_mqtt_to_stream_message","convert_stream_message_to_mqtt_packet"],"mod":["mqtt_unified_pb","mqttv3pb","mqttv5pb"]};

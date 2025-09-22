@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["Will"]};
+window.SIDEBAR_ITEMS = {"struct":["Will","WillProperties"]};

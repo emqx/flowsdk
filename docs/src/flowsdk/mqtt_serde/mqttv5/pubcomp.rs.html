@@ -1,4 +1,4 @@
-<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/mqtt_serde/mqttv5/pubcomp.rs`."><title>pubcomp.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-84e720fa.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="flowsdk" data-themes="" data-resource-suffix="" data-rustdoc-version="1.89.0 (29483883e 2025-08-04)" data-channel="1.89.0" data-search-js="search-92309212.js" data-settings-js="settings-5514c975.js" ><script src="../../../../static.files/storage-4e99c027.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-fd3af306.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">flowsdk/mqtt_serde/mqttv5/</div>pubcomp.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>serde::{Deserialize, Serialize};
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Source of the Rust file `src/mqtt_serde/mqttv5/pubcomp.rs`."><title>pubcomp.rs - source</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2" crossorigin href="../../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../../static.files/rustdoc-aa0817cf.css"><meta name="rustdoc-vars" data-root-path="../../../../" data-static-root-path="../../../../static.files/" data-current-crate="flowsdk" data-themes="" data-resource-suffix="" data-rustdoc-version="1.90.0 (1159e78c4 2025-09-14)" data-channel="1.90.0" data-search-js="search-fa3e91e5.js" data-settings-js="settings-5514c975.js" ><script src="../../../../static.files/storage-68b7e25d.js"></script><script defer src="../../../../static.files/src-script-813739b1.js"></script><script defer src="../../../../src-files.js"></script><script defer src="../../../../static.files/main-eebb9057.js"></script><noscript><link rel="stylesheet" href="../../../../static.files/noscript-32bb7600.css"></noscript><link rel="alternate icon" type="image/png" href="../../../../static.files/favicon-32x32-6580c154.png"><link rel="icon" type="image/svg+xml" href="../../../../static.files/favicon-044be391.svg"></head><body class="rustdoc src"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><nav class="sidebar"><div class="src-sidebar-title"><h2>Files</h2></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><rustdoc-search></rustdoc-search><section id="main-content" class="content"><div class="main-heading"><h1><div class="sub-heading">flowsdk/mqtt_serde/mqttv5/</div>pubcomp.rs</h1><rustdoc-toolbar></rustdoc-toolbar></div><div class="example-wrap digits-3"><pre class="rust"><code><a href=#1 id=1 data-nosnippet>1</a><span class="kw">use </span>serde::{Deserialize, Serialize};
 <a href=#2 id=2 data-nosnippet>2</a>
 <a href=#3 id=3 data-nosnippet>3</a><span class="kw">use </span><span class="kw">crate</span>::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
 <a href=#4 id=4 data-nosnippet>4</a><span class="kw">use </span><span class="kw">crate</span>::mqtt_serde::mqttv5::common::properties::{
@@ -134,7 +134,7 @@
 <a href=#134 id=134 data-nosnippet>134</a>            properties,
 <a href=#135 id=135 data-nosnippet>135</a>        };
 <a href=#136 id=136 data-nosnippet>136</a>
-<a href=#137 id=137 data-nosnippet>137</a>        <span class="prelude-val">Ok</span>(ParseOk::Packet(MqttPacket::PubComp(pubcomp), offset))
+<a href=#137 id=137 data-nosnippet>137</a>        <span class="prelude-val">Ok</span>(ParseOk::Packet(MqttPacket::PubComp5(pubcomp), offset))
 <a href=#138 id=138 data-nosnippet>138</a>    }
 <a href=#139 id=139 data-nosnippet>139</a>}
 <a href=#140 id=140 data-nosnippet>140</a>
@@ -157,7 +157,7 @@
 <a href=#157 id=157 data-nosnippet>157</a>
 <a href=#158 id=158 data-nosnippet>158</a>        <span class="comment">// Test round-trip parsing
 <a href=#159 id=159 data-nosnippet>159</a>        </span><span class="kw">match </span>MqttPubComp::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#160 id=160 data-nosnippet>160</a>            ParseOk::Packet(MqttPacket::PubComp(parsed_pubcomp), consumed) =&gt; {
+<a href=#160 id=160 data-nosnippet>160</a>            ParseOk::Packet(MqttPacket::PubComp5(parsed_pubcomp), consumed) =&gt; {
 <a href=#161 id=161 data-nosnippet>161</a>                <span class="macro">assert_eq!</span>(consumed, <span class="number">4</span>);
 <a href=#162 id=162 data-nosnippet>162</a>                <span class="macro">assert_eq!</span>(parsed_pubcomp.packet_id, <span class="number">0x1234</span>);
 <a href=#163 id=163 data-nosnippet>163</a>                <span class="macro">assert_eq!</span>(parsed_pubcomp.reason_code, <span class="number">0x00</span>);
@@ -184,7 +184,7 @@
 <a href=#184 id=184 data-nosnippet>184</a>
 <a href=#185 id=185 data-nosnippet>185</a>        <span class="comment">// Test parsing
 <a href=#186 id=186 data-nosnippet>186</a>        </span><span class="kw">match </span>MqttPubComp::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#187 id=187 data-nosnippet>187</a>            ParseOk::Packet(MqttPacket::PubComp(parsed_pubcomp), consumed) =&gt; {
+<a href=#187 id=187 data-nosnippet>187</a>            ParseOk::Packet(MqttPacket::PubComp5(parsed_pubcomp), consumed) =&gt; {
 <a href=#188 id=188 data-nosnippet>188</a>                <span class="macro">assert_eq!</span>(consumed, <span class="number">6</span>);
 <a href=#189 id=189 data-nosnippet>189</a>                <span class="macro">assert_eq!</span>(parsed_pubcomp.packet_id, <span class="number">0x5678</span>);
 <a href=#190 id=190 data-nosnippet>190</a>                <span class="macro">assert_eq!</span>(parsed_pubcomp.reason_code, <span class="number">0x92</span>);
@@ -206,7 +206,7 @@
 <a href=#206 id=206 data-nosnippet>206</a>
 <a href=#207 id=207 data-nosnippet>207</a>        <span class="comment">// Test that it can be parsed back
 <a href=#208 id=208 data-nosnippet>208</a>        </span><span class="kw">match </span>MqttPubComp::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#209 id=209 data-nosnippet>209</a>            ParseOk::Packet(MqttPacket::PubComp(parsed_pubcomp), <span class="kw">_</span>) =&gt; {
+<a href=#209 id=209 data-nosnippet>209</a>            ParseOk::Packet(MqttPacket::PubComp5(parsed_pubcomp), <span class="kw">_</span>) =&gt; {
 <a href=#210 id=210 data-nosnippet>210</a>                <span class="macro">assert_eq!</span>(parsed_pubcomp.packet_id, <span class="number">0xABCD</span>);
 <a href=#211 id=211 data-nosnippet>211</a>                <span class="macro">assert_eq!</span>(parsed_pubcomp.reason_code, <span class="number">0x00</span>);
 <a href=#212 id=212 data-nosnippet>212</a>                <span class="macro">assert_eq!</span>(parsed_pubcomp.properties.len(), <span class="number">2</span>);
@@ -221,7 +221,7 @@
 <a href=#221 id=221 data-nosnippet>221</a>        </span><span class="kw">let </span>bytes = <span class="macro">vec!</span>[<span class="number">0x70</span>, <span class="number">0x02</span>, <span class="number">0x00</span>, <span class="number">0x01</span>]; <span class="comment">// packet ID = 1
 <a href=#222 id=222 data-nosnippet>222</a>
 <a href=#223 id=223 data-nosnippet>223</a>        </span><span class="kw">match </span>MqttPubComp::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#224 id=224 data-nosnippet>224</a>            ParseOk::Packet(MqttPacket::PubComp(pubcomp), consumed) =&gt; {
+<a href=#224 id=224 data-nosnippet>224</a>            ParseOk::Packet(MqttPacket::PubComp5(pubcomp), consumed) =&gt; {
 <a href=#225 id=225 data-nosnippet>225</a>                <span class="macro">assert_eq!</span>(consumed, <span class="number">4</span>);
 <a href=#226 id=226 data-nosnippet>226</a>                <span class="macro">assert_eq!</span>(pubcomp.packet_id, <span class="number">1</span>);
 <a href=#227 id=227 data-nosnippet>227</a>                <span class="macro">assert_eq!</span>(pubcomp.reason_code, <span class="number">0x00</span>); <span class="comment">// Default success
@@ -245,7 +245,7 @@
 <a href=#245 id=245 data-nosnippet>245</a>            <span class="kw">let </span>bytes = pubcomp.to_bytes().unwrap();
 <a href=#246 id=246 data-nosnippet>246</a>
 <a href=#247 id=247 data-nosnippet>247</a>            <span class="kw">match </span>MqttPubComp::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#248 id=248 data-nosnippet>248</a>                ParseOk::Packet(MqttPacket::PubComp(parsed), <span class="kw">_</span>) =&gt; {
+<a href=#248 id=248 data-nosnippet>248</a>                ParseOk::Packet(MqttPacket::PubComp5(parsed), <span class="kw">_</span>) =&gt; {
 <a href=#249 id=249 data-nosnippet>249</a>                    <span class="macro">assert_eq!</span>(parsed.packet_id, <span class="number">0x3000</span>);
 <a href=#250 id=250 data-nosnippet>250</a>                    <span class="macro">assert_eq!</span>(parsed.reason_code, error_code);
 <a href=#251 id=251 data-nosnippet>251</a>                }
@@ -262,7 +262,7 @@
 <a href=#262 id=262 data-nosnippet>262</a>        <span class="macro">assert!</span>(result.is_ok());
 <a href=#263 id=263 data-nosnippet>263</a>
 <a href=#264 id=264 data-nosnippet>264</a>        <span class="kw">match </span>result.unwrap() {
-<a href=#265 id=265 data-nosnippet>265</a>            ParseOk::Packet(MqttPacket::PubComp(pubcomp), consumed) =&gt; {
+<a href=#265 id=265 data-nosnippet>265</a>            ParseOk::Packet(MqttPacket::PubComp5(pubcomp), consumed) =&gt; {
 <a href=#266 id=266 data-nosnippet>266</a>                <span class="macro">assert_eq!</span>(consumed, <span class="number">6</span>);
 <a href=#267 id=267 data-nosnippet>267</a>                <span class="macro">assert_eq!</span>(pubcomp.packet_id, <span class="number">5</span>);
 <a href=#268 id=268 data-nosnippet>268</a>                <span class="macro">assert_eq!</span>(pubcomp.reason_code, <span class="number">0x00</span>); <span class="comment">// Success
@@ -309,7 +309,7 @@
 <a href=#309 id=309 data-nosnippet>309</a>        <span class="kw">let </span>bytes = original_pubcomp.to_bytes().unwrap();
 <a href=#310 id=310 data-nosnippet>310</a>
 <a href=#311 id=311 data-nosnippet>311</a>        <span class="kw">match </span>MqttPubComp::from_bytes(<span class="kw-2">&amp;</span>bytes).unwrap() {
-<a href=#312 id=312 data-nosnippet>312</a>            ParseOk::Packet(MqttPacket::PubComp(parsed_pubcomp), <span class="kw">_</span>) =&gt; {
+<a href=#312 id=312 data-nosnippet>312</a>            ParseOk::Packet(MqttPacket::PubComp5(parsed_pubcomp), <span class="kw">_</span>) =&gt; {
 <a href=#313 id=313 data-nosnippet>313</a>                <span class="macro">assert_eq!</span>(parsed_pubcomp.packet_id, original_pubcomp.packet_id);
 <a href=#314 id=314 data-nosnippet>314</a>                <span class="macro">assert_eq!</span>(parsed_pubcomp.reason_code, original_pubcomp.reason_code);
 <a href=#315 id=315 data-nosnippet>315</a>                <span class="macro">assert_eq!</span>(
@@ -326,7 +326,7 @@
 <a href=#326 id=326 data-nosnippet>326</a>        <span class="kw">let </span>packet = <span class="macro">vec!</span>[<span class="number">0x70</span>, <span class="number">0x03</span>, <span class="number">0x00</span>, <span class="number">0x0A</span>, <span class="number">0x00</span>, <span class="number">0x00</span>, <span class="number">0x00</span>, <span class="number">0x00</span>];
 <a href=#327 id=327 data-nosnippet>327</a>        <span class="kw">let </span>result = MqttPubComp::from_bytes(<span class="kw-2">&amp;</span>packet);
 <a href=#328 id=328 data-nosnippet>328</a>        <span class="kw">match </span>result {
-<a href=#329 id=329 data-nosnippet>329</a>            <span class="prelude-val">Ok</span>(ParseOk::Packet(MqttPacket::PubComp(pubcomp), _consumed)) =&gt; {
+<a href=#329 id=329 data-nosnippet>329</a>            <span class="prelude-val">Ok</span>(ParseOk::Packet(MqttPacket::PubComp5(pubcomp), _consumed)) =&gt; {
 <a href=#330 id=330 data-nosnippet>330</a>                <span class="macro">assert_eq!</span>(pubcomp.reason_code, <span class="number">0</span>);
 <a href=#331 id=331 data-nosnippet>331</a>                <span class="macro">assert_eq!</span>(pubcomp.properties, <span class="macro">vec!</span>[]);
 <a href=#332 id=332 data-nosnippet>332</a>            }
@@ -340,7 +340,7 @@
 <a href=#340 id=340 data-nosnippet>340</a>
 <a href=#341 id=341 data-nosnippet>341</a>        <span class="kw">let </span>result = MqttPubComp::from_bytes(<span class="kw-2">&amp;</span>packet_bytes);
 <a href=#342 id=342 data-nosnippet>342</a>        <span class="kw">match </span>result {
-<a href=#343 id=343 data-nosnippet>343</a>            <span class="prelude-val">Ok</span>(ParseOk::Packet(MqttPacket::PubComp(pubcomp), _consumed)) =&gt; {
+<a href=#343 id=343 data-nosnippet>343</a>            <span class="prelude-val">Ok</span>(ParseOk::Packet(MqttPacket::PubComp5(pubcomp), _consumed)) =&gt; {
 <a href=#344 id=344 data-nosnippet>344</a>                <span class="macro">assert_eq!</span>(pubcomp.packet_id, <span class="number">2</span>);
 <a href=#345 id=345 data-nosnippet>345</a>                <span class="macro">assert_eq!</span>(pubcomp.reason_code, <span class="number">0</span>);
 <a href=#346 id=346 data-nosnippet>346</a>                <span class="macro">assert_eq!</span>(pubcomp.properties, <span class="macro">vec!</span>[]);
