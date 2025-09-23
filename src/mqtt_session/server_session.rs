@@ -52,7 +52,8 @@ impl ServerSession {
 
     pub fn handle_incoming_subscribe(&mut self, subscribe: MqttSubscribe) {
         for subscription in subscribe.subscriptions {
-            self.subscriptions.insert(subscription.topic_filter.clone(), subscription);
+            self.subscriptions
+                .insert(subscription.topic_filter.clone(), subscription);
         }
     }
 
@@ -70,18 +71,20 @@ impl ServerSession {
         }
 
         match publish.qos {
-            1 => Some(MqttPacket::PubAck(crate::mqtt_serde::mqttv5::puback::MqttPubAck {
-                packet_id: publish.packet_id.unwrap(),
-                reason_code: 0,
-                properties: Vec::new(),
-            })),
+            1 => Some(MqttPacket::PubAck5(
+                crate::mqtt_serde::mqttv5::puback::MqttPubAck {
+                    packet_id: publish.packet_id.unwrap(),
+                    reason_code: 0,
+                    properties: Vec::new(),
+                },
+            )),
             2 => {
                 let pubrec = MqttPubRec {
                     packet_id: publish.packet_id.unwrap(),
                     reason_code: 0,
                     properties: Vec::new(),
                 };
-                Some(MqttPacket::PubRec(pubrec))
+                Some(MqttPacket::PubRec5(pubrec))
             }
             _ => None,
         }
@@ -101,7 +104,8 @@ impl ServerSession {
                 reason_code: 0,
                 properties: Vec::new(),
             };
-            self.unacknowledged_pubrels.insert(pubrec.packet_id, pubrel.clone());
+            self.unacknowledged_pubrels
+                .insert(pubrec.packet_id, pubrel.clone());
             self.unacknowledged_publishes.remove(&pubrec.packet_id);
             Some(pubrel)
         } else {
@@ -135,7 +139,7 @@ impl ServerSession {
                 if available_slots == 0 {
                     break;
                 }
-                packets_to_resend.push(MqttPacket::Publish(publish.clone()));
+                packets_to_resend.push(MqttPacket::Publish5(publish.clone()));
                 available_slots -= 1;
             }
         }
@@ -145,7 +149,7 @@ impl ServerSession {
             if available_slots == 0 {
                 break;
             }
-            packets_to_resend.push(MqttPacket::PubRel(pubrel.clone()));
+            packets_to_resend.push(MqttPacket::PubRel5(pubrel.clone()));
             available_slots -= 1;
         }
 
@@ -153,7 +157,7 @@ impl ServerSession {
         let mut i = 0;
         while i < self.pending_publishes.len() && available_slots > 0 {
             let publish = self.pending_publishes.remove(i);
-            packets_to_resend.push(MqttPacket::Publish(publish));
+            packets_to_resend.push(MqttPacket::Publish5(publish));
             available_slots -= 1;
             i += 1;
         }
