@@ -14,6 +14,8 @@ pub struct ClientSession {
     // QoS 2 PUBREL messages that have been sent but not yet acknowledged with PUBCOMP.
     // The key is the packet identifier.
     unacknowledged_pubrels: HashMap<u16, MqttPubRel>,
+
+    packet_id_counter: u16,
 }
 
 impl Default for ClientSession {
@@ -27,6 +29,21 @@ impl ClientSession {
         ClientSession {
             unacknowledged_publishes: HashMap::new(),
             unacknowledged_pubrels: HashMap::new(),
+            packet_id_counter: 1,
+        }
+    }
+
+    pub fn clear(&mut self) {
+        self.unacknowledged_publishes.clear();
+        self.unacknowledged_pubrels.clear();
+    }
+
+    pub fn next_packet_id(&self) -> u16 {
+        let next_id = self.packet_id_counter;
+        if next_id == u16::MAX {
+            1
+        } else {
+            next_id + 1
         }
     }
 
@@ -319,5 +336,17 @@ mod tests {
         session.handle_outgoing_publish(qos0_publish);
         let packets_to_resend = session.resend_pending_messages();
         assert!(packets_to_resend.is_empty());
+    }
+
+    #[test]
+    fn test_clear_session() {
+        let mut session = ClientSession::new();
+        let publish1 = create_qos1_publish(1);
+        let publish2 = create_qos2_publish(2);
+        session.handle_outgoing_publish(publish1);
+        session.handle_outgoing_publish(publish2);
+        session.clear();
+        assert!(session.unacknowledged_publishes.is_empty());
+        assert!(session.unacknowledged_pubrels.is_empty());
     }
 }

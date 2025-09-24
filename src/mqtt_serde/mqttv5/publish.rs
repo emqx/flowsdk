@@ -1,5 +1,5 @@
 use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
-use crate::mqtt_serde::mqttv5::common::properties::{encode_properities_hdr, Property};
+use crate::mqtt_serde::mqttv5::common::properties::{self, encode_properities_hdr, Property};
 use crate::mqtt_serde::parser;
 use crate::mqtt_serde::parser::{
     packet_type, parse_packet_id, parse_remaining_length, parse_topic_name, ParseError, ParseOk,
@@ -38,9 +38,24 @@ impl MqttPublish {
         }
     }
 
-    pub fn properties(&self) -> Vec<u8> {
-        //@TODO: implement properties
-        Vec::new()
+    pub fn new_with_prop(
+        qos: u8,
+        topic_name: String,
+        packet_id: Option<u16>,
+        payload: Vec<u8>,
+        retain: bool,
+        dup: bool,
+        properties: Vec<Property>,
+    ) -> Self {
+        MqttPublish {
+            topic_name,
+            packet_id,
+            payload,
+            qos,
+            dup,
+            retain,
+            properties,
+        }
     }
 
     fn qos(flags: u8) -> u8 {
