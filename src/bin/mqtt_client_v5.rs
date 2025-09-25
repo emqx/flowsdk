@@ -26,17 +26,17 @@ fn main() {
         Err(e) => eprintln!("Error subscribing to topic: {}", e),
     }
 
-    match client.published("example/qos0", b"Hello, MQTT!", 0, false) {
+    match client.published("example/topic", b"Hello, MQTT!", 0, false) {
         Ok(_) => println!("Message Qos0 published"),
         Err(e) => eprintln!("Error publishing message: {}", e),
     }
 
-    match client.published("example/qos1", b"Hello, MQTT!", 1, false) {
+    match client.published("example/topic", b"Hello, MQTT!", 1, false) {
         Ok(_) => println!("Message Qos1 published"),
         Err(e) => eprintln!("Error publishing message: {}", e),
     }
 
-    match client.published("example/qos2", b"Hello, MQTT!", 2, false) {
+    match client.published("example/topic", b"Hello, MQTT!", 2, false) {
         Ok(_) => println!("Message Qos2 published"),
         Err(e) => eprintln!("Error publishing message: {}", e),
     }

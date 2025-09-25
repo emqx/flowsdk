@@ -102,3 +102,69 @@ impl MqttParser {
         &mut self.buffer
     }
 }
+
+pub struct MqttStream<T> {
+    parser: MqttParser,
+    stream: T,
+}
+
+impl<T> MqttStream<T>
+where
+    T: std::io::Read,
+{
+    pub fn new(stream: T, buffer_size: usize, mqtt_version: u8) -> Self {
+        MqttStream {
+            parser: MqttParser::new(buffer_size, mqtt_version),
+            stream,
+        }
+    }
+
+    pub fn mut_stream(&mut self) -> &mut T {
+        &mut self.stream
+    }
+
+    pub fn write(&mut self, data: &[u8]) -> std::io::Result<usize>
+    where
+        T: std::io::Write,
+    {
+        self.stream.write(data)
+    }
+}
+
+impl<T> Iterator for MqttStream<T>
+where
+    T: std::io::Read,
+{
+    type Item = Result<MqttPacket, ParseError>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        match self.parser.next_packet() {
+            Ok(Some(packet)) => Some(Ok(packet)),
+            Err(ParseError::BufferEmpty) | Ok(None) => {
+                // Reserve space in the parser's buffer for reading
+                let buffer = self.parser.buffer_mut();
+                let initial_len = buffer.len();
+                buffer.resize(initial_len + 1024, 0);
+
+                match self.stream.read(&mut buffer[initial_len..]) {
+                    Ok(0) => {
+                        // End of stream - remove the unused space we reserved
+                        buffer.truncate(initial_len);
+                        None
+                    }
+                    Ok(n) => {
+                        // Adjust buffer to actual bytes read
+                        buffer.truncate(initial_len + n);
+                        self.next() // Try to parse again
+                    }
+                    Err(e) => {
+                        // Remove the unused space we reserved
+                        buffer.truncate(initial_len);
+                        Some(Err(ParseError::IoError(e)))
+                    }
+                }
+            }
+            Err(e) => Some(Err(e)),
+        }
+    }
+}

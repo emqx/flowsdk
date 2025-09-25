@@ -5,19 +5,14 @@ use crate::mqtt_serde::control_packet::MqttPacket;
 use crate::mqtt_serde::mqttv5::connectv5;
 use crate::mqtt_serde::mqttv5::disconnectv5;
 use crate::mqtt_serde::mqttv5::pingreqv5;
-use crate::mqtt_serde::mqttv5::pingrespv5;
-use crate::mqtt_serde::mqttv5::pubackv5;
-use crate::mqtt_serde::mqttv5::pubcompv5;
 use crate::mqtt_serde::mqttv5::publishv5;
-use crate::mqtt_serde::mqttv5::pubrecv5;
 use crate::mqtt_serde::mqttv5::pubrelv5;
 use crate::mqtt_serde::mqttv5::subscribev5;
-use crate::mqtt_serde::mqttv5::unsubscribev5;
+
+use crate::mqtt_serde::MqttStream;
 
 use super::MqttClientOptions;
-use crate::mqtt_serde::parser::stream::MqttParser;
 use std::io;
-use std::io::{Read, Write};
 use std::net::TcpStream;
 
 pub struct Subscription {
@@ -26,34 +21,34 @@ pub struct Subscription {
 }
 pub struct Context {
     peer: String,
-    stream: Option<TcpStream>,
     session: Option<ClientSession>,
-    parser: MqttParser,
+    mqtt_stream: Option<MqttStream<TcpStream>>,
     // Update when subscribed to topics and session is not None
     subscribed_topics: Vec<Subscription>,
     session_present: bool,
+    mqtt_buffer: Vec<MqttPacket>,
 }
 
 impl Context {
     pub fn new(peer: String) -> Self {
         Context {
             peer,
-            stream: None,
             session: None,
             session_present: false,
             subscribed_topics: Vec::new(),
-            parser: MqttParser::new(16384, 5),
+            mqtt_stream: None,
+            mqtt_buffer: Vec::new(),
         }
     }
 
     pub fn new_with_sess(peer: String, session: ClientSession) -> Self {
         Context {
             peer,
-            stream: None,
             session: Some(session),
             session_present: false,
             subscribed_topics: Vec::new(),
-            parser: MqttParser::new(16384, 5),
+            mqtt_stream: None,
+            mqtt_buffer: Vec::new(),
         }
     }
 }
@@ -81,7 +76,7 @@ impl MqttClient {
     // Connect to the MQTT broker and wait for CONNACK
     pub fn connected(&mut self) -> io::Result<()> {
         // Establish connection to the MQTT broker
-        if let Ok(mut stream) = TcpStream::connect(self.context.peer.clone()) {
+        if let Ok(stream) = TcpStream::connect(self.context.peer.clone()) {
             // Connection established
 
             // Initialize ClientSession
@@ -103,20 +98,14 @@ impl MqttClient {
                 vec![], // Add properties as needed
             );
 
-            let conn_bytes = connect_packet.to_bytes().unwrap();
-
-            stream.write(&conn_bytes).unwrap();
-
-            // Wait for CONNACK
-            let mut buffer = [0; 4096];
-            let n = stream.read(&mut buffer).unwrap();
-
             // stream used, now save it
-            self.context.stream = Some(stream);
+            let mqtt_stream = MqttStream::new(stream, 16384, 5);
+            self.context.mqtt_stream = Some(mqtt_stream);
 
-            self.context.parser.feed(&buffer[..n]);
+            // Send CONNECT packet
+            self.send_packet(connect_packet)?;
 
-            if let Some(packet) = self.context.parser.next_packet().unwrap() {
+            if let Some(packet) = self.recv_packet()? {
                 match packet {
                     MqttPacket::ConnAck5(connack) => {
                         if connack.reason_code == 0 {
@@ -149,15 +138,6 @@ impl MqttClient {
     // Subscribe to a topic and wait for SUBACK
     pub fn subscribed(&mut self, topic: &str, qos: u8) -> io::Result<()> {
         if let Some(session) = &mut self.context.session {
-            let stream = match &mut self.context.stream {
-                Some(s) => s,
-                None => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::NotConnected,
-                        "No active connection",
-                    ));
-                }
-            };
             let subscription = subscribev5::TopicSubscription {
                 topic_filter: topic.to_string(),
                 qos,
@@ -173,31 +153,16 @@ impl MqttClient {
                 vec![], // Add properties as needed
             );
             // Send SUBSCRIBE packet
-            // Assume stream is available here
-            stream.write(&subscribe_packet.to_bytes().unwrap()).unwrap();
-            // Handle SUBACK response similarly to CONNACK
-            let mut buf = [0; 4096];
-            let n: usize = stream.read(&mut buf).unwrap();
-
-            self.context.parser.feed(&buf[..n]);
-
-            if let Some(packet) = self.context.parser.next_packet().unwrap() {
+            self.send_packet(subscribe_packet)?;
+            // Wait for SUBACK with matching packet ID
+            if let Some(packet) = self.recv_for_packet(
+                |p| matches!(p, MqttPacket::SubAck5(suback) if suback.packet_id == packet_id),
+            )? {
                 match packet {
-                    MqttPacket::SubAck5(suback) => {
-                        if suback.packet_id != packet_id {
-                            return Err(io::Error::new(
-                                io::ErrorKind::Other,
-                                "Mismatched SUBACK packet ID",
-                            ));
-                        }
+                    MqttPacket::SubAck5(_suback) => {
                         // Process suback.reason_codes as needed
                     }
-                    _ => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            "Expected SUBACK packet",
-                        ));
-                    }
+                    _ => unreachable!(), // receive_for guarantees we get the right packet type
                 }
             }
         } else {
@@ -214,15 +179,6 @@ impl MqttClient {
         retain: bool,
     ) -> io::Result<()> {
         if let Some(session) = &mut self.context.session {
-            let stream = match &mut self.context.stream {
-                Some(s) => s,
-                None => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::NotConnected,
-                        "No active connection",
-                    ));
-                }
-            };
             let packet_id = if qos > 0 {
                 Some(session.next_packet_id())
             } else {
@@ -237,89 +193,53 @@ impl MqttClient {
                 false,
             );
             // Send PUBLISH packet
-            stream.write(&publish_packet.to_bytes().unwrap()).unwrap();
+            self.send_packet(publish_packet)?;
             // Handle PUBACK/PUBREC response for QoS 1/2 if needed
             match qos {
                 1 => {
-                    let mut buf = [0; 4096];
-                    let n: usize = stream.read(&mut buf).unwrap();
-                    self.context.parser.feed(&buf[..n]);
-                    if let Some(packet) = self.context.parser.next_packet().unwrap() {
+                    let expected_packet_id = packet_id.unwrap();
+                    if let Some(packet) = self.recv_for_packet(|p| {
+                        matches!(p, MqttPacket::PubAck5(puback) if puback.packet_id == expected_packet_id)
+                    })? {
                         match packet {
-                            MqttPacket::PubAck5(puback) => {
-                                // @TODO may be packet_id is different, we should wait for more.
-                                if packet_id.unwrap() != puback.packet_id {
-                                    return Err(io::Error::new(
-                                        io::ErrorKind::Other,
-                                        "Mismatched PUBACK packet ID",
-                                    ));
-                                }
+                            MqttPacket::PubAck5(_puback) => {
                                 // Process puback.reason_code as needed
                             }
-                            _ => {
-                                println!("Received unexpected packet: {:?}", packet);
-                                return Err(io::Error::new(
-                                    io::ErrorKind::Other,
-                                    "Expected PUBACK packet",
-                                ));
-                            }
+                            _ => unreachable!(), // receive_for guarantees we get the right packet type
                         }
                     }
                 }
                 2 => {
                     // Handle QoS 2 flow (PUBREC, PUBREL, PUBCOMP)
-                    // This is a simplified version and may need more robust handling
-                    let mut buf = [0; 4096];
-                    let n: usize = stream.read(&mut buf).unwrap();
-                    self.context.parser.feed(&buf[..n]);
-                    if let Some(packet) = self.context.parser.next_packet().unwrap() {
+                    let expected_packet_id = packet_id.unwrap();
+
+                    // Wait for PUBREC
+                    if let Some(packet) = self.recv_for_packet(|p| {
+                        matches!(p, MqttPacket::PubRec5(pubrec) if pubrec.packet_id == expected_packet_id)
+                    })? {
                         match packet {
                             MqttPacket::PubRec5(pubrec) => {
-                                if pubrec.packet_id != packet_id.unwrap() {
-                                    return Err(io::Error::new(
-                                        io::ErrorKind::Other,
-                                        "Mismatched PUBREC packet ID",
-                                    ));
-                                }
                                 // Send PUBREL
                                 let pubrel_packet = pubrelv5::MqttPubRel::new(
                                     pubrec.packet_id,
                                     0,      // reason code
                                     vec![], // properties
                                 );
-
-                                // @TODO: check return type
-                                stream.write(&pubrel_packet.to_bytes().unwrap()).unwrap();
+                                self.send_packet(pubrel_packet)?;
 
                                 // Wait for PUBCOMP
-                                let n: usize = stream.read(&mut buf).unwrap();
-                                self.context.parser.feed(&buf[..n]);
-                                if let Some(packet) = self.context.parser.next_packet().unwrap() {
+                                if let Some(packet) = self.recv_for_packet(|p| {
+                                    matches!(p, MqttPacket::PubComp5(pubcomp) if pubcomp.packet_id == expected_packet_id)
+                                })? {
                                     match packet {
-                                        MqttPacket::PubComp5(pubcomp) => {
-                                            if pubcomp.packet_id != packet_id.unwrap() {
-                                                return Err(io::Error::new(
-                                                    io::ErrorKind::Other,
-                                                    "Mismatched PUBCOMP packet ID",
-                                                ));
-                                            }
+                                        MqttPacket::PubComp5(_pubcomp) => {
                                             // Process pubcomp.reason_code as needed
                                         }
-                                        _ => {
-                                            return Err(io::Error::new(
-                                                io::ErrorKind::Other,
-                                                "Expected PUBCOMP packet",
-                                            ));
-                                        }
+                                        _ => unreachable!(), // receive_for guarantees we get the right packet type
                                     }
                                 }
                             }
-                            _ => {
-                                return Err(io::Error::new(
-                                    io::ErrorKind::Other,
-                                    "Expected PUBREC packet",
-                                ));
-                            }
+                            _ => unreachable!(), // receive_for guarantees we get the right packet type
                         }
                     }
                 }
@@ -332,59 +252,99 @@ impl MqttClient {
     }
 
     pub fn disconnected(&mut self) -> io::Result<()> {
-        if let Some(stream) = &mut self.context.stream {
-            let disconnect_packet = disconnectv5::MqttDisconnect::new(0, vec![]); // reason code 0, no properties
-            stream
-                .write(&disconnect_packet.to_bytes().unwrap())
-                .unwrap();
-        }
-        Ok(())
+        let disconnect_packet = disconnectv5::MqttDisconnect::new(0, vec![]); // reason code 0, no properties
+        self.send_packet(disconnect_packet)
     }
 
     pub fn pingd(&mut self) -> io::Result<()> {
-        if let Some(stream) = &mut self.context.stream {
-            let pingreq_packet = pingreqv5::MqttPingReq::new();
-            stream.write(&pingreq_packet.to_bytes().unwrap()).unwrap();
-            // Wait for PINGRESP
-            let mut buf = [0; 4096];
-            let n: usize = stream.read(&mut buf).unwrap();
-            self.context.parser.feed(&buf[..n]);
-            if let Some(packet) = self.context.parser.next_packet().unwrap() {
-                match packet {
-                    MqttPacket::PingResp5(_) => {
-                        // Successfully received PINGRESP
-                    }
-                    _ => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
-                            format!("Expected PINGRESP packet, got {:?}", packet),
-                        ));
-                    }
+        let pingreq_packet = pingreqv5::MqttPingReq::new();
+        self.send_packet(pingreq_packet)?;
+        // Wait for PINGRESP
+        if let Some(packet) = self.recv_for_packet(|p| matches!(p, MqttPacket::PingResp5(_)))? {
+            match packet {
+                MqttPacket::PingResp5(_) => {
+                    // Successfully received PINGRESP
                 }
+                _ => unreachable!(), // receive_for guarantees we get the right packet type
             }
-        } else {
-            return Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "No active connection",
-            ));
         }
+
+        Ok(())
+    }
+
+    fn send_packet<T>(&mut self, packet: T) -> io::Result<()>
+    where
+        T: MqttControlPacket,
+    {
+        let stream = match &mut self.context.mqtt_stream {
+            Some(s) => s,
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "No active MQTT stream connection",
+                ));
+            }
+        };
+
+        let packet_bytes = packet.to_bytes().map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to serialize packet: {:?}", e),
+            )
+        })?;
+
+        stream.write(&packet_bytes).map_err(|e| {
+            io::Error::new(
+                io::ErrorKind::WriteZero,
+                format!("Failed to write packet: {}", e),
+            )
+        })?;
+
         Ok(())
     }
 
     pub fn recv_packet(&mut self) -> io::Result<Option<MqttPacket>> {
-        if let Some(stream) = &mut self.context.stream {
-            let mut buf = [0; 4096];
-            let n: usize = stream.read(&mut buf)?;
-            if n == 0 {
-                // Connection closed
-                self.context.stream = None;
-                return Ok(None);
+        let stream = match &mut self.context.mqtt_stream {
+            Some(s) => s,
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "No active MQTT stream connection",
+                ));
             }
-            self.context.parser.feed(&buf[..n]);
-            if let Some(packet) = self.context.parser.next_packet().unwrap() {
-                return Ok(Some(packet));
-            }
+        };
+
+        match stream.next() {
+            Some(Ok(packet)) => Ok(Some(packet)),
+            Some(Err(parse_error)) => Err(io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("Failed to parse MQTT packet: {:?}", parse_error),
+            )),
+            None => Ok(None), // End of stream
         }
-        Ok(None)
+    }
+
+    pub fn recv_for_packet<F>(&mut self, mut f: F) -> io::Result<Option<MqttPacket>>
+    where
+        F: FnMut(&MqttPacket) -> bool,
+    {
+        let stream = match &mut self.context.mqtt_stream {
+            Some(s) => s,
+            None => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "No active MQTT stream connection",
+                ));
+            }
+        };
+
+        // find_map handles errors and applies the predicate only to successful packets
+        stream
+            .find_map(|result| match result {
+                Ok(packet) if f(&packet) => Some(Ok(packet)),
+                Ok(_) => None,
+                Err(parse_err) => Some(Err(io::Error::new(io::ErrorKind::InvalidData, parse_err))),
+            })
+            .transpose() // Convert Option<Result<T, E>> to Result<Option<T>, E>
     }
 }
