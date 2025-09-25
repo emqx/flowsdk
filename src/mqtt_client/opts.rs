@@ -18,4 +18,5 @@ pub struct MqttClientOptions {
     pub sessionless: bool,
     // subscription topics to subscribe to on connect if not subscribed.
     pub subscription_topics: Vec<subscribev5::TopicSubscription>,
+    pub auto_ack: bool, // if true, automatically acknowledge incoming QoS 1 and QoS 2 messages
 }

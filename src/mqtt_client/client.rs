@@ -8,6 +8,7 @@ use crate::mqtt_serde::mqttv5::pingreqv5;
 use crate::mqtt_serde::mqttv5::publishv5;
 use crate::mqtt_serde::mqttv5::pubrelv5;
 use crate::mqtt_serde::mqttv5::subscribev5;
+use crate::mqtt_serde::mqttv5::unsubscribev5;
 
 use crate::mqtt_serde::MqttStream;
 
@@ -169,6 +170,43 @@ impl MqttClient {
             return Err(io::Error::new(io::ErrorKind::Other, "No active session"));
         }
         Ok(())
+    }
+
+    // Unsubscribe from topics and wait for UNSUBACK
+    pub fn unsubscribed(&mut self, topics: Vec<&str>) -> io::Result<()> {
+        if let Some(session) = &mut self.context.session {
+            let topic_filters: Vec<String> = topics.iter().map(|&s| s.to_string()).collect();
+            let packet_id = session.next_packet_id();
+
+            let unsubscribe_packet = unsubscribev5::MqttUnsubscribe::new(
+                packet_id,
+                topic_filters,
+                vec![], // Add properties as needed
+            );
+
+            // Send UNSUBSCRIBE packet
+            self.send_packet(unsubscribe_packet)?;
+
+            // Wait for UNSUBACK with matching packet ID
+            if let Some(packet) = self.recv_for_packet(
+                |p| matches!(p, MqttPacket::UnsubAck5(unsuback) if unsuback.packet_id == packet_id),
+            )? {
+                match packet {
+                    MqttPacket::UnsubAck5(_unsuback) => {
+                        // Process unsuback.reason_codes as needed
+                    }
+                    _ => unreachable!(), // recv_for_packet guarantees we get the right packet type
+                }
+            }
+        } else {
+            return Err(io::Error::new(io::ErrorKind::Other, "No active session"));
+        }
+        Ok(())
+    }
+
+    // Convenience method to unsubscribe from a single topic
+    pub fn unsubscribed_single(&mut self, topic: &str) -> io::Result<()> {
+        self.unsubscribed(vec![topic])
     }
 
     pub fn published(

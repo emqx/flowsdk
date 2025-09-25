@@ -11,6 +11,7 @@ fn main() {
         reconnect: true,
         sessionless: false,
         subscription_topics: vec![],
+        auto_ack: false,
     };
     // Example usage of MqttClient
     let mut client = MqttClient::new("localhost:1883".to_string(), opts);
@@ -63,8 +64,29 @@ fn main() {
         Err(e) => eprintln!("Error receiving packet: {}", e),
     }
 
+    match client.unsubscribed_single("example/topic") {
+        Ok(_) => println!("Unsubscribed from topic"),
+        Err(e) => eprintln!("Error unsubscribing from topic: {}", e),
+    }
+
+    match client.published("example/topic", b"Hello again, MQTT!", 1, false) {
+        Ok(_) => println!("Message Qos1 published"),
+        Err(e) => eprintln!("Error publishing message: {}", e),
+    }
+
     match client.disconnected() {
         Ok(_) => println!("Disconnected successfully"),
         Err(e) => eprintln!("Error disconnecting: {}", e),
+    }
+
+    match client.recv_packet() {
+        Ok(Some(packet)) => println!(
+            "Received packet: {}",
+            serde_json::to_string(&packet).unwrap()
+        ),
+        Ok(None) => {
+            println!("Connection Closed without receiving any packets due to unsubscribed topics")
+        }
+        Err(e) => eprintln!("Error receiving packet: {}", e),
     }
 }
