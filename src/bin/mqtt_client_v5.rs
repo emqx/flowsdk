@@ -62,4 +62,9 @@ fn main() {
         Ok(None) => println!("Connection Closed"),
         Err(e) => eprintln!("Error receiving packet: {}", e),
     }
+
+    match client.disconnected() {
+        Ok(_) => println!("Disconnected successfully"),
+        Err(e) => eprintln!("Error disconnecting: {}", e),
+    }
 }
