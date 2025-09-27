@@ -55,7 +55,7 @@ fn main() {
         Err(e) => eprintln!("Error subscribing to topic: {}", e),
     }
 
-    match client.published("example/topic", b"Hello, MQTT!", 0, false) {
+    match client.published("example/topic", b"Hello, MQTT 0!", 0, false) {
         Ok(result) => {
             if result.is_success() {
                 println!("Message QoS {} published successfully", result.qos);
@@ -69,7 +69,7 @@ fn main() {
         Err(e) => eprintln!("Error publishing message: {}", e),
     }
 
-    match client.published("example/topic", b"Hello, MQTT!", 1, false) {
+    match client.published("example/topic", b"Hello, MQTT 1!", 1, false) {
         Ok(result) => {
             if result.is_success() {
                 println!(
@@ -86,7 +86,7 @@ fn main() {
         Err(e) => eprintln!("Error publishing message: {}", e),
     }
 
-    match client.published("example/topic", b"Hello, MQTT!", 2, false) {
+    match client.published("example/topic", b"Hello, MQTT 2!", 2, false) {
         Ok(result) => {
             if result.is_success() {
                 println!(
@@ -176,6 +176,22 @@ fn main() {
         Err(e) => eprintln!("Error disconnecting: {}", e),
     }
 
+    client.unhandled_packets_mut().iter().for_each(|packet| {
+        println!(
+            "Unhandled packet: {}",
+            serde_json::to_string(packet).unwrap()
+        )
+    });
+
+    client.clear_unhandled_packets();
+
+    client.unhandled_packets_mut().iter().for_each(|packet| {
+        println!(
+            "Unhandled packet: {}",
+            serde_json::to_string(packet).unwrap()
+        )
+    });
+    
     match client.recv_packet() {
         Ok(Some(packet)) => println!(
             "Received packet: {}",

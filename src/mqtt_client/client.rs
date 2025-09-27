@@ -206,6 +206,19 @@ impl MqttClient {
         }
     }
 
+    // methods for unhandled packets
+    pub fn unhandled_packets_mut(&mut self) -> &mut Vec<MqttPacket> {
+        &mut self.context.unhandled_packets
+    }
+
+    pub fn peek_unhandled_packets(&self) -> &Vec<MqttPacket> {
+        &self.context.unhandled_packets
+    }
+
+    pub fn clear_unhandled_packets(&mut self) {
+        self.context.unhandled_packets.clear();
+    }   
+
     // Connect to the MQTT broker and wait for CONNACK
     pub fn connected(&mut self) -> io::Result<ConnectionResult> {
         // Establish connection to the MQTT broker
