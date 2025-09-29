@@ -150,7 +150,7 @@ pub struct Context {
     pending_unsubscribes: std::collections::HashMap<u16, Vec<String>>, // packet_id -> topics
     pending_publishes: std::collections::HashMap<u16, (String, u8)>, // packet_id -> (topic, qos)
 
-    // Track unhandled incoming packets
+    // Track unhandled incoming packet during a blocking call
     unhandled_packets: Vec<MqttPacket>,
 }
 
@@ -213,6 +213,14 @@ impl MqttClient {
 
     pub fn peek_unhandled_packets(&self) -> &Vec<MqttPacket> {
         &self.context.unhandled_packets
+    }
+
+    pub fn pop_unhandled_packet(&mut self) -> Option<MqttPacket> {
+        if !self.context.unhandled_packets.is_empty() {
+            Some(self.context.unhandled_packets.remove(0))
+        } else {
+            None
+        }
     }
 
     pub fn clear_unhandled_packets(&mut self) {
