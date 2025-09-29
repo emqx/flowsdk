@@ -225,7 +225,7 @@ impl MqttClient {
 
     pub fn clear_unhandled_packets(&mut self) {
         self.context.unhandled_packets.clear();
-    }   
+    }
 
     // Connect to the MQTT broker and wait for CONNACK
     pub fn connected(&mut self) -> io::Result<ConnectionResult> {

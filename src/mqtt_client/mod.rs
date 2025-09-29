@@ -1,6 +1,8 @@
-mod client;
-mod opts;
+pub mod async_client;
+pub mod client;
+pub mod opts;
 
+pub use async_client::{AsyncClientConfig, AsyncMqttClient, MqttEvent, MqttEventHandler};
 pub use client::MqttClient;
 pub use client::Subscription;
 pub use opts::MqttClientOptions;

@@ -27,3 +27,7 @@ strict-protocol-compliance = []
 [[bin]]
 name = "mqtt_client_v5"
 path = "bin/examples/mqtt_client_v5.rs"
+
+[[bin]]
+name = "async_mqtt_client_example"
+path = "bin/examples/async_mqtt_client_example.rs"

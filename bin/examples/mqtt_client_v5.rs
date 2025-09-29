@@ -191,7 +191,7 @@ fn main() {
             serde_json::to_string(packet).unwrap()
         )
     });
-    
+
     match client.recv_packet() {
         Ok(Some(packet)) => println!(
             "Received packet: {}",
