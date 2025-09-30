@@ -6,7 +6,8 @@ A thread-safe, event-driven MQTT client that runs in a background thread and com
 
 - **Thread-Safe**: Can be used from multiple threads safely
 - **Event-Driven**: All MQTT operations trigger callbacks
-- **Non-Blocking**: API calls return immediately, events come via callbacks
+- **Non-Blocking**: API calls return immediately, responses come via callbacks
+- **Truly Async**: Uses fire-and-forget MQTT operations internally (no blocking calls)
 - **Auto-Reconnection**: Automatic reconnection with exponential backoff
 - **Message Buffering**: Buffer messages during disconnection
 - **Clean Shutdown**: Graceful thread termination
@@ -54,6 +55,7 @@ impl MqttEventHandler for MyHandler {
 ```rust
 // MQTT configuration
 let mqtt_options = MqttClientOptions {
+    peer: "localhost:1883".to_string(),
     client_id: "my_async_client".to_string(),
     clean_start: true,
     keep_alive: 60,

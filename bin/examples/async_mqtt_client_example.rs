@@ -137,13 +137,14 @@ fn main() -> io::Result<()> {
 
     // Configure MQTT client options
     let mqtt_options = MqttClientOptions {
+        peer: "localhost:1883".to_string(),
         client_id: "async_example_client".to_string(),
         clean_start: true,
         keep_alive: 60,
         username: None,
         password: None,
         will: None,
-        reconnect: true,
+        reconnect: false,
         sessionless: false,
         subscription_topics: vec![],
         auto_ack: false,
@@ -170,14 +171,14 @@ fn main() -> io::Result<()> {
     client.connect()?;
 
     // Wait a bit for connection
-    std::thread::sleep(Duration::from_millis(2000));
+    //std::thread::sleep(Duration::from_millis(2000));
 
     println!("📋 Subscribing to topics...");
     client.subscribe("async/test/+", 1)?;
     client.subscribe("async/demo/#", 2)?;
 
     // Wait a bit for subscriptions
-    std::thread::sleep(Duration::from_millis(1000));
+    //std::thread::sleep(Duration::from_millis(1000));
 
     println!("📤 Publishing test messages...");
     client.publish("async/test/qos0", b"Hello QoS 0!", 0, false)?;
@@ -185,25 +186,25 @@ fn main() -> io::Result<()> {
     client.publish("async/demo/retained", b"Hello Retained!", 1, true)?;
 
     // Wait for message processing
-    std::thread::sleep(Duration::from_millis(2000));
+    //std::thread::sleep(Duration::from_millis(2000));
 
     println!("🏓 Sending ping...");
     client.ping()?;
 
     // Wait for ping response
-    std::thread::sleep(Duration::from_millis(1000));
+    //std::thread::sleep(Duration::from_millis(1000));
 
     println!("📤 Unsubscribing from topics...");
     client.unsubscribe(vec!["async/test/+", "async/demo/#"])?;
 
     // Wait for unsubscription
-    std::thread::sleep(Duration::from_millis(1000));
+    //std::thread::sleep(Duration::from_millis(1000));
 
     println!("👋 Disconnecting...");
     client.disconnect()?;
 
     // Wait for disconnect
-    std::thread::sleep(Duration::from_millis(1000));
+    //std::thread::sleep(Duration::from_millis(1000));
 
     println!("🛑 Shutting down client...");
     client.shutdown()?;

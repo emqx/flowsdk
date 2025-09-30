@@ -312,7 +312,7 @@ impl ClientWorker {
         command_rx: Receiver<ClientCommand>,
         config: AsyncClientConfig,
     ) -> Self {
-        let client = MqttClient::new(mqtt_options.client_id.clone(), mqtt_options);
+        let client = MqttClient::new(mqtt_options);
 
         ClientWorker {
             client,
@@ -381,7 +381,6 @@ impl ClientWorker {
                 self.handle_disconnect();
             }
             ClientCommand::Shutdown => {
-                self.handle_disconnect();
                 return false; // Exit worker loop
             }
             ClientCommand::SetAutoReconnect { enabled } => {
@@ -394,18 +393,9 @@ impl ClientWorker {
 
     /// Handle connect command
     fn handle_connect(&mut self) {
-        match self.client.connected() {
-            Ok(result) => {
-                self.is_connected = result.is_success();
-                self.reconnect_attempts = 0;
-                self.event_handler.on_connected(&result);
-
-                if self.is_connected {
-                    // Process any buffered messages
-                    self.process_buffered_messages();
-                    // Re-subscribe to pending subscriptions
-                    self.resubscribe_pending();
-                }
+        match self.client.connect_send() {
+            Ok(_) => {
+                // Connect packet sent, will wait for CONNACK in handle_incoming_messages
             }
             Err(e) => {
                 self.event_handler.on_error(&e);
@@ -418,98 +408,88 @@ impl ClientWorker {
 
     /// Handle subscribe command
     fn handle_subscribe(&mut self, topic: &str, qos: u8) {
-        if self.is_connected {
-            match self.client.subscribed(topic, qos) {
-                Ok(result) => {
-                    if result.is_success() {
-                        self.pending_subscribes.remove(topic);
-                    }
-                    self.event_handler.on_subscribed(&result);
-                }
-                Err(e) => {
-                    self.event_handler.on_error(&e);
-                    self.pending_subscribes.insert(topic.to_string(), qos);
-                }
+        match self.client.subscribe_send(topic, qos) {
+            Ok(_packet_id) => {
+                // Subscribe packet sent, will wait for SUBACK in handle_incoming_messages
+                // Track pending subscription
+                self.pending_subscribes.insert(topic.to_string(), qos);
             }
-        } else {
-            // Store for later when connected
-            self.pending_subscribes.insert(topic.to_string(), qos);
+            Err(e) => {
+                self.event_handler.on_error(&e);
+                // Still track as pending in case we want to retry later
+                self.pending_subscribes.insert(topic.to_string(), qos);
+            }
         }
     }
 
     /// Handle publish command
     fn handle_publish(&mut self, topic: &str, payload: &[u8], qos: u8, retain: bool) {
-        if self.is_connected {
-            match self.client.published(topic, payload, qos, retain) {
-                Ok(result) => {
+        match self.client.publish_send(topic, payload, qos, retain) {
+            Ok(packet_id) => {
+                // For QoS 0, publish is complete immediately
+                if qos == 0 {
+                    let result = PublishResult {
+                        packet_id,
+                        reason_code: None,
+                        properties: None,
+                        qos,
+                    };
                     self.event_handler.on_published(&result);
                 }
-                Err(e) => {
-                    self.event_handler.on_error(&e);
-                    // Buffer message if enabled and connection lost
-                    if self.config.buffer_messages {
-                        self.buffer_message(topic, payload, qos, retain);
-                    }
+                // For QoS 1/2, will wait for PUBACK/PUBCOMP in handle_incoming_messages
+            }
+            Err(e) => {
+                self.event_handler.on_error(&e);
+                // Buffer message if enabled for retry
+                if self.config.buffer_messages {
+                    self.buffer_message(topic, payload, qos, retain);
                 }
             }
-        } else if self.config.buffer_messages {
-            // Buffer message for later
-            self.buffer_message(topic, payload, qos, retain);
         }
     }
 
     /// Handle unsubscribe command
     fn handle_unsubscribe(&mut self, topics: &[String]) {
-        if self.is_connected {
-            let topic_refs: Vec<&str> = topics.iter().map(|s| s.as_str()).collect();
-            match self.client.unsubscribed(topic_refs) {
-                Ok(result) => {
-                    // Remove from pending subscriptions
-                    for topic in topics {
-                        self.pending_subscribes.remove(topic);
-                    }
-                    self.event_handler.on_unsubscribed(&result);
-                }
-                Err(e) => {
-                    self.event_handler.on_error(&e);
-                }
+        let topic_refs: Vec<&str> = topics.iter().map(|s| s.as_str()).collect();
+        match self.client.unsubscribe_send(topic_refs) {
+            Ok(_packet_id) => {
+                // Unsubscribe packet sent, will wait for UNSUBACK in handle_incoming_messages
             }
-        } else {
-            // Remove from pending subscriptions even if not connected
-            for topic in topics {
-                self.pending_subscribes.remove(topic);
+            Err(e) => {
+                self.event_handler.on_error(&e);
             }
+        }
+        
+        // Remove from pending subscriptions regardless of connection state
+        for topic in topics {
+            self.pending_subscribes.remove(topic);
         }
     }
 
     /// Handle ping command
     fn handle_ping(&mut self) {
-        if self.is_connected {
-            match self.client.pingd() {
-                Ok(result) => {
-                    self.event_handler.on_ping_response(&result);
-                }
-                Err(e) => {
-                    self.event_handler.on_error(&e);
-                    self.handle_connection_lost();
-                }
+        match self.client.ping_send() {
+            Ok(_) => {
+                // Ping packet sent, will wait for PINGRESP in handle_incoming_messages
+            }
+            Err(e) => {
+                self.event_handler.on_error(&e);
+                self.handle_connection_lost();
             }
         }
     }
 
     /// Handle disconnect command
     fn handle_disconnect(&mut self) {
-        if self.is_connected {
-            match self.client.disconnected() {
-                Ok(_) => {
-                    self.is_connected = false;
-                    self.event_handler.on_disconnected(Some(0)); // Normal disconnect
-                }
-                Err(e) => {
-                    self.is_connected = false;
-                    self.event_handler.on_error(&e);
-                    self.event_handler.on_disconnected(None);
-                }
+        match self.client.disconnect_send() {
+            Ok(_) => {
+                self.is_connected = false;
+                self.event_handler.on_disconnected(Some(0)); // Normal disconnect
+            }
+            Err(e) => {
+                self.is_connected = false;
+                self.event_handler.on_error(&e);
+                self.event_handler.on_disconnected(None);
             }
         }
     }
@@ -524,13 +504,104 @@ impl ClientWorker {
         // Try to receive a message with a short timeout to avoid blocking
         match self.client.recv_packet() {
             Ok(Some(packet)) => match packet {
+                MqttPacket::ConnAck5(connack) => {
+                    // Handle CONNACK response
+                    self.is_connected = connack.reason_code == 0;
+                    self.reconnect_attempts = 0;
+                    
+                    let result = ConnectionResult {
+                        reason_code: connack.reason_code,
+                        session_present: connack.session_present,
+                        properties: connack.properties,
+                    };
+                    
+                    self.event_handler.on_connected(&result);
+                    
+                    if self.is_connected {
+                        // Process any buffered messages
+                        self.process_buffered_messages();
+                        // Re-subscribe to pending subscriptions
+                        self.resubscribe_pending();
+                    }
+                }
+                MqttPacket::SubAck5(suback) => {
+                    // Handle SUBACK response
+                    let result = SubscribeResult {
+                        packet_id: suback.packet_id,
+                        reason_codes: suback.reason_codes,
+                        properties: suback.properties,
+                    };
+                    
+                    // Remove from pending subscriptions if successful
+                    if result.is_success() {
+                        self.client.complete_subscribe(suback.packet_id);
+                    }
+                    
+                    self.event_handler.on_subscribed(&result);
+                }
+                MqttPacket::UnsubAck5(unsuback) => {
+                    // Handle UNSUBACK response
+                    let result = UnsubscribeResult {
+                        packet_id: unsuback.packet_id,
+                        reason_codes: unsuback.reason_codes,
+                        properties: unsuback.properties,
+                    };
+                    
+                    // Remove from pending unsubscriptions
+                    if let Some(topics) = self.client.complete_unsubscribe(unsuback.packet_id) {
+                        // Remove from pending subscriptions as well
+                        for topic in &topics {
+                            self.pending_subscribes.remove(topic);
+                        }
+                    }
+                    
+                    self.event_handler.on_unsubscribed(&result);
+                }
+                MqttPacket::PubAck5(puback) => {
+                    // Handle PUBACK response (QoS 1)
+                    let result = PublishResult {
+                        packet_id: Some(puback.packet_id),
+                        reason_code: Some(puback.reason_code),
+                        properties: Some(puback.properties),
+                        qos: 1,
+                    };
+                    
+                    // Remove from pending publishes
+                    self.client.complete_publish(puback.packet_id);
+                    
+                    self.event_handler.on_published(&result);
+                }
+                MqttPacket::PubRec5(_pubrec) => {
+                    // Handle PUBREC response (QoS 2 - first part)
+                    // The underlying client will handle PUBREL automatically
+                    // We just wait for PUBCOMP to complete the flow
+                }
+                MqttPacket::PubComp5(pubcomp) => {
+                    // Handle PUBCOMP response (QoS 2 - completion)
+                    let result = PublishResult {
+                        packet_id: Some(pubcomp.packet_id),
+                        reason_code: Some(pubcomp.reason_code),
+                        properties: Some(pubcomp.properties),
+                        qos: 2,
+                    };
+                    
+                    // Remove from pending publishes
+                    self.client.complete_publish(pubcomp.packet_id);
+                    
+                    self.event_handler.on_published(&result);
+                }
+                MqttPacket::PingResp5(_) => {
+                    // Handle PINGRESP response
+                    let result = PingResult { success: true };
+                    self.event_handler.on_ping_response(&result);
+                }
                 MqttPacket::Publish5(publish) => {
+                    // Handle incoming published messages
                     self.event_handler.on_message_received(&publish);
                 }
-                // Handle other packet types as needed
                 _ => {
-                    // For now, ignore other packet types
-                    // In a full implementation, you'd handle SUBACK, UNSUBACK, etc.
+                    // Handle other packet types or store as unhandled
+                    // For now, just ignore unknown packets
                 }
             },
             Ok(None) => {

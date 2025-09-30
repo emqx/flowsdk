@@ -2,6 +2,7 @@ use crate::mqtt_serde::mqttv5::subscribev5;
 use crate::mqtt_serde::mqttv5::willv5::{Will, WillProperties};
 
 pub struct MqttClientOptions {
+    pub peer: String,
     pub client_id: String,
     pub clean_start: bool,
     pub keep_alive: u16,

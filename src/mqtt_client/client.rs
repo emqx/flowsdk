@@ -192,16 +192,16 @@ pub struct MqttClient {
 }
 
 impl MqttClient {
-    pub fn new(endpoint: String, options: MqttClientOptions) -> Self {
+    pub fn new(options: MqttClientOptions) -> Self {
         MqttClient {
-            context: Context::new(endpoint),
+            context: Context::new(options.peer.clone()),
             options,
         }
     }
 
-    pub fn new_with_sess(peer: String, options: MqttClientOptions, session: ClientSession) -> Self {
+    pub fn new_with_sess(options: MqttClientOptions, session: ClientSession) -> Self {
         MqttClient {
-            context: Context::new_with_sess(peer, session),
+            context: Context::new_with_sess(options.peer.clone(), session),
             options,
         }
     }

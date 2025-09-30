@@ -2,6 +2,7 @@ use flowsdk::mqtt_client::{MqttClient, MqttClientOptions};
 
 fn main() {
     let opts: MqttClientOptions = MqttClientOptions {
+        peer: "localhost:1883".to_string(),
         client_id: "example_client".to_string(),
         clean_start: true,
         keep_alive: 10,
@@ -14,7 +15,7 @@ fn main() {
         auto_ack: false,
     };
     // Example usage of MqttClient
-    let mut client = MqttClient::new("localhost:1883".to_string(), opts);
+    let mut client = MqttClient::new(opts);
 
     match client.connected() {
         Ok(result) => {
