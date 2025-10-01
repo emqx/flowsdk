@@ -29,7 +29,7 @@ impl ClientSession {
         ClientSession {
             unacknowledged_publishes: HashMap::new(),
             unacknowledged_pubrels: HashMap::new(),
-            packet_id_counter: 1,
+            packet_id_counter: 0,
         }
     }
 
@@ -38,13 +38,20 @@ impl ClientSession {
         self.unacknowledged_pubrels.clear();
     }
 
-    pub fn next_packet_id(&self) -> u16 {
-        let next_id = self.packet_id_counter;
-        if next_id == u16::MAX {
-            1
+    pub fn next_packet_id(&mut self) -> u16 {
+        if self.packet_id_counter == u16::MAX || self.packet_id_counter == 0 {
+            // When the counter is at the maximum value or uninitialized (0), wrap to 1
+            self.packet_id_counter = 1;
         } else {
-            next_id + 1
+            self.packet_id_counter = self.packet_id_counter.wrapping_add(1);
+
+            if self.packet_id_counter == 0 {
+                // Ensure packet identifier never becomes 0 after wrapping addition
+                self.packet_id_counter = 1;
+            }
         }
+
+        self.packet_id_counter
     }
 
     pub fn handle_outgoing_publish(&mut self, publish: MqttPublish) {

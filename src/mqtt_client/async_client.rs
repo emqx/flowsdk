@@ -459,7 +459,7 @@ impl ClientWorker {
                 self.event_handler.on_error(&e);
             }
         }
-        
+
         // Remove from pending subscriptions regardless of connection state
         for topic in topics {
             self.pending_subscribes.remove(topic);
@@ -508,15 +508,15 @@ impl ClientWorker {
                     // Handle CONNACK response
                     self.is_connected = connack.reason_code == 0;
                     self.reconnect_attempts = 0;
-                    
+
                     let result = ConnectionResult {
                         reason_code: connack.reason_code,
                         session_present: connack.session_present,
                         properties: connack.properties,
                     };
-                    
+
                     self.event_handler.on_connected(&result);
-                    
+
                     if self.is_connected {
                         // Process any buffered messages
                         self.process_buffered_messages();
@@ -531,12 +531,12 @@ impl ClientWorker {
                         reason_codes: suback.reason_codes,
                         properties: suback.properties,
                     };
-                    
+
                     // Remove from pending subscriptions if successful
                     if result.is_success() {
                         self.client.complete_subscribe(suback.packet_id);
                     }
-                    
+
                     self.event_handler.on_subscribed(&result);
                 }
                 MqttPacket::UnsubAck5(unsuback) => {
@@ -546,7 +546,7 @@ impl ClientWorker {
                         reason_codes: unsuback.reason_codes,
                         properties: unsuback.properties,
                     };
-                    
+
                     // Remove from pending unsubscriptions
                     if let Some(topics) = self.client.complete_unsubscribe(unsuback.packet_id) {
                         // Remove from pending subscriptions as well
@@ -554,7 +554,7 @@ impl ClientWorker {
                             self.pending_subscribes.remove(topic);
                         }
                     }
-                    
+
                     self.event_handler.on_unsubscribed(&result);
                 }
                 MqttPacket::PubAck5(puback) => {
@@ -565,10 +565,10 @@ impl ClientWorker {
                         properties: Some(puback.properties),
                         qos: 1,
                     };
-                    
+
                     // Remove from pending publishes
                     self.client.complete_publish(puback.packet_id);
-                    
+
                     self.event_handler.on_published(&result);
                 }
                 MqttPacket::PubRec5(_pubrec) => {
@@ -584,10 +584,10 @@ impl ClientWorker {
                         properties: Some(pubcomp.properties),
                         qos: 2,
                     };
-                    
+
                     // Remove from pending publishes
                     self.client.complete_publish(pubcomp.packet_id);
-                    
+
                     self.event_handler.on_published(&result);
                 }
                 MqttPacket::PingResp5(_) => {
