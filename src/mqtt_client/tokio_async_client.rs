@@ -1,4 +1,4 @@
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, ErrorKind};
 use std::time::Duration;
 
@@ -12,8 +12,15 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket};
 use crate::mqtt_serde::mqttv5::{
-    connectv5, disconnectv5, pingreqv5, pingrespv5, pubackv5::MqttPubAck, pubcompv5::MqttPubComp,
-    publishv5::MqttPublish, pubrecv5::MqttPubRec, pubrelv5::MqttPubRel, subscribev5, unsubscribev5,
+    common::properties::Property,
+    connectv5, disconnectv5, pingreqv5, pingrespv5,
+    pubackv5::MqttPubAck,
+    pubcompv5::MqttPubComp,
+    publishv5::MqttPublish,
+    pubrecv5::MqttPubRec,
+    pubrelv5::MqttPubRel,
+    subscribev5::{self, TopicSubscription},
+    unsubscribev5,
 };
 use crate::mqtt_serde::parser::{ParseError, ParseOk};
 use crate::mqtt_session::ClientSession;
@@ -114,22 +121,116 @@ pub trait TokioMqttEventHandler: Send + Sync {
     async fn on_pending_operations_cleared(&mut self) {}
 }
 
+/// Fully customizable publish command for MQTT v5
+#[derive(Debug, Clone)]
+pub struct PublishCommand {
+    pub topic_name: String,
+    pub payload: Vec<u8>,
+    pub qos: u8,
+    pub retain: bool,
+    pub dup: bool,
+    pub packet_id: Option<u16>,
+    pub properties: Vec<Property>,
+}
+
+impl PublishCommand {
+    pub fn new(
+        topic_name: String,
+        payload: Vec<u8>,
+        qos: u8,
+        retain: bool,
+        dup: bool,
+        packet_id: Option<u16>,
+        properties: Vec<Property>,
+    ) -> Self {
+        Self {
+            topic_name,
+            payload,
+            qos,
+            retain,
+            dup,
+            packet_id,
+            properties,
+        }
+    }
+
+    pub fn simple(topic: impl Into<String>, payload: Vec<u8>, qos: u8, retain: bool) -> Self {
+        Self::new(topic.into(), payload, qos, retain, false, None, Vec::new())
+    }
+
+    fn to_mqtt_publish(&self) -> MqttPublish {
+        MqttPublish::new_with_prop(
+            self.qos,
+            self.topic_name.clone(),
+            self.packet_id,
+            self.payload.clone(),
+            self.retain,
+            self.dup,
+            self.properties.clone(),
+        )
+    }
+}
+
+/// Fully customizable subscribe command for MQTT v5
+#[derive(Debug, Clone)]
+pub struct SubscribeCommand {
+    pub packet_id: Option<u16>,
+    pub subscriptions: Vec<TopicSubscription>,
+    pub properties: Vec<Property>,
+}
+
+impl SubscribeCommand {
+    pub fn new(
+        packet_id: Option<u16>,
+        subscriptions: Vec<TopicSubscription>,
+        properties: Vec<Property>,
+    ) -> Self {
+        Self {
+            packet_id,
+            subscriptions,
+            properties,
+        }
+    }
+
+    pub fn single(topic: impl Into<String>, qos: u8) -> Self {
+        let subscription = TopicSubscription::new(topic.into(), qos, false, false, 0);
+        Self::new(None, vec![subscription], Vec::new())
+    }
+}
+
+/// Fully customizable unsubscribe command for MQTT v5
+#[derive(Debug, Clone)]
+pub struct UnsubscribeCommand {
+    pub packet_id: Option<u16>,
+    pub topics: Vec<String>,
+    pub properties: Vec<Property>,
+}
+
+impl UnsubscribeCommand {
+    pub fn new(packet_id: Option<u16>, topics: Vec<String>, properties: Vec<Property>) -> Self {
+        Self {
+            packet_id,
+            topics,
+            properties,
+        }
+    }
+
+    pub fn from_topics(topics: Vec<String>) -> Self {
+        Self::new(None, topics, Vec::new())
+    }
+}
+
 /// Commands that can be sent to the async worker
 #[derive(Debug)]
 enum TokioClientCommand {
     /// Connect to the broker
     Connect,
     /// Subscribe to topics
-    Subscribe { topic: String, qos: u8 },
+    Subscribe(SubscribeCommand),
     /// Publish a message
-    Publish {
-        topic: String,
-        payload: Vec<u8>,
-        qos: u8,
-        retain: bool,
-    },
+    Publish(PublishCommand),
     /// Unsubscribe from topics
-    Unsubscribe { topics: Vec<String> },
+    Unsubscribe(UnsubscribeCommand),
     /// Send ping to broker
     Ping,
     /// Disconnect from broker
@@ -138,6 +239,8 @@ enum TokioClientCommand {
     Shutdown,
     /// Enable/disable automatic reconnection
     SetAutoReconnect { enabled: bool },
+    /// Send a raw MQTT packet directly
+    SendPacket(MqttPacket),
 }
 
 /// Configuration for the tokio async client
@@ -410,7 +513,7 @@ pub struct TokioAsyncMqttClient {
     /// Command sender to worker task
     command_tx: mpsc::Sender<TokioClientCommand>,
     /// Client configuration
-    config: TokioAsyncClientConfig,
+    _config: TokioAsyncClientConfig,
 }
 
 impl TokioAsyncMqttClient {
@@ -429,7 +532,10 @@ impl TokioAsyncMqttClient {
             worker.run().await;
         });
 
-        Ok(TokioAsyncMqttClient { command_tx, config })
+        Ok(TokioAsyncMqttClient {
+            command_tx,
+            _config: config,
+        })
     }
 
     /// Create a new async MQTT client with default configuration
@@ -452,11 +558,14 @@ impl TokioAsyncMqttClient {
 
     /// Subscribe to a topic (non-blocking)
     pub async fn subscribe(&self, topic: &str, qos: u8) -> io::Result<()> {
-        self.send_command(TokioClientCommand::Subscribe {
-            topic: topic.to_string(),
-            qos,
-        })
-        .await
+        self.subscribe_with_command(SubscribeCommand::single(topic, qos))
+            .await
+    }
+
+    /// Subscribe with fully customized command
+    pub async fn subscribe_with_command(&self, command: SubscribeCommand) -> io::Result<()> {
+        self.send_command(TokioClientCommand::Subscribe(command))
+            .await
     }
 
     /// Publish a message (non-blocking)
@@ -467,19 +576,26 @@ impl TokioAsyncMqttClient {
         qos: u8,
         retain: bool,
     ) -> io::Result<()> {
-        self.send_command(TokioClientCommand::Publish {
-            topic: topic.to_string(),
-            payload: payload.to_vec(),
-            qos,
-            retain,
-        })
-        .await
+        let command = PublishCommand::simple(topic, payload.to_vec(), qos, retain);
+        self.publish_with_command(command).await
+    }
+
+    /// Publish with fully customized command
+    pub async fn publish_with_command(&self, command: PublishCommand) -> io::Result<()> {
+        self.send_command(TokioClientCommand::Publish(command))
+            .await
     }
 
     /// Unsubscribe from topics (non-blocking)
     pub async fn unsubscribe(&self, topics: Vec<&str>) -> io::Result<()> {
         let topics: Vec<String> = topics.into_iter().map(|s| s.to_string()).collect();
-        self.send_command(TokioClientCommand::Unsubscribe { topics })
+        self.unsubscribe_with_command(UnsubscribeCommand::from_topics(topics))
+            .await
+    }
+
+    /// Unsubscribe with fully customized command
+    pub async fn unsubscribe_with_command(&self, command: UnsubscribeCommand) -> io::Result<()> {
+        self.send_command(TokioClientCommand::Unsubscribe(command))
             .await
     }
 
@@ -502,6 +618,12 @@ impl TokioAsyncMqttClient {
     /// Shutdown the client
     pub async fn shutdown(self) -> io::Result<()> {
         self.send_command(TokioClientCommand::Shutdown).await
+    }
+
+    /// Send a raw MQTT packet to the broker (non-blocking)
+    pub async fn send_packet(&self, packet: MqttPacket) -> io::Result<()> {
+        self.send_command(TokioClientCommand::SendPacket(packet))
+            .await
     }
 
     /// Send a command to the worker task
@@ -534,9 +656,9 @@ struct TokioClientWorker {
     /// Reconnection state
     reconnect_attempts: u32,
     /// Message buffer for when disconnected
-    message_buffer: VecDeque<(String, Vec<u8>, u8, bool)>,
+    message_buffer: VecDeque<PublishCommand>,
     /// Pending subscribe operations keyed by packet identifier
-    pending_subscribes: HashMap<u16, (String, u8)>,
+    pending_subscribes: HashMap<u16, Vec<String>>,
     /// Pending unsubscribe operations keyed by packet identifier
     pending_unsubscribes: HashMap<u16, Vec<String>>,
     /// Client session for packet IDs
@@ -679,19 +801,14 @@ impl TokioClientWorker {
             TokioClientCommand::Connect => {
                 self.handle_connect().await;
             }
-            TokioClientCommand::Subscribe { topic, qos } => {
-                self.handle_subscribe(&topic, qos).await;
+            TokioClientCommand::Subscribe(command) => {
+                self.handle_subscribe(command).await;
             }
-            TokioClientCommand::Publish {
-                topic,
-                payload,
-                qos,
-                retain,
-            } => {
-                self.handle_publish(&topic, &payload, qos, retain).await;
+            TokioClientCommand::Publish(command) => {
+                self.handle_publish(command).await;
             }
-            TokioClientCommand::Unsubscribe { topics } => {
-                self.handle_unsubscribe(&topics).await;
+            TokioClientCommand::Unsubscribe(command) => {
+                self.handle_unsubscribe(command).await;
             }
             TokioClientCommand::Ping => {
                 self.handle_ping().await;
@@ -705,6 +822,11 @@ impl TokioClientWorker {
             TokioClientCommand::SetAutoReconnect { enabled } => {
                 // Update auto reconnect setting
                 let _ = enabled; // TODO: Update config
+            }
+            TokioClientCommand::SendPacket(packet) => {
+                if let Err(e) = self.send_packet_to_broker(&packet).await {
+                    self.event_handler.on_error(&e).await;
+                }
             }
         }
         true
@@ -840,24 +962,36 @@ impl TokioClientWorker {
     }
 
     /// Handle subscribe command
-    async fn handle_subscribe(&mut self, topic: &str, qos: u8) {
-        let session = match self.session.as_mut() {
-            Some(session) => session,
-            None => {
-                let error = io::Error::new(
-                    io::ErrorKind::Other,
-                    "No active session available for SUBSCRIBE",
-                );
-                self.event_handler.on_error(&error).await;
-                return;
-            }
+    async fn handle_subscribe(&mut self, mut command: SubscribeCommand) {
+        if command.subscriptions.is_empty() {
+            let error = io::Error::new(
+                ErrorKind::InvalidInput,
+                "SUBSCRIBE requires at least one topic subscription",
+            );
+            self.event_handler.on_error(&error).await;
+            return;
+        }
+
+        let packet_id = if let Some(id) = command.packet_id {
+            id
+        } else if let Some(session) = self.session.as_mut() {
+            session.next_packet_id()
+        } else {
+            let error = io::Error::new(
+                io::ErrorKind::Other,
+                "No active session available for SUBSCRIBE",
+            );
+            self.event_handler.on_error(&error).await;
+            return;
         };
 
-        let packet_id = session.next_packet_id();
-        let subscription =
-            subscribev5::TopicSubscription::new(topic.to_string(), qos, false, false, 0);
-        let subscribe_packet =
-            subscribev5::MqttSubscribe::new(packet_id, vec![subscription], Vec::new());
+        command.packet_id = Some(packet_id);
+
+        let subscribe_packet = subscribev5::MqttSubscribe::new(
+            packet_id,
+            command.subscriptions.clone(),
+            command.properties.clone(),
+        );
 
         match subscribe_packet.to_bytes() {
             Ok(bytes) => {
@@ -865,8 +999,13 @@ impl TokioClientWorker {
                     self.event_handler.on_error(&e).await;
                     return;
                 }
-                self.pending_subscribes
-                    .insert(packet_id, (topic.to_string(), qos));
+
+                let topics: Vec<String> = command
+                    .subscriptions
+                    .iter()
+                    .map(|sub| sub.topic_filter.clone())
+                    .collect();
+                self.pending_subscribes.insert(packet_id, topics);
             }
             Err(err) => {
                 let error = io::Error::new(
@@ -879,7 +1018,7 @@ impl TokioClientWorker {
     }
 
     /// Handle publish command
-    async fn handle_publish(&mut self, topic: &str, payload: &[u8], qos: u8, retain: bool) {
+    async fn handle_publish(&mut self, command: PublishCommand) {
         if self.stream.is_none() && self.config.buffer_messages {
             if self.message_buffer.len() >= self.config.max_buffer_size {
                 let error = io::Error::new(
@@ -890,8 +1029,7 @@ impl TokioClientWorker {
                 return;
             }
 
-            self.message_buffer
-                .push_back((topic.to_string(), payload.to_vec(), qos, retain));
+            self.message_buffer.push_back(command);
             return;
         }
 
@@ -904,14 +1042,14 @@ impl TokioClientWorker {
             return;
         }
 
-        if let Err(e) = self.send_publish_packet(topic, payload, qos, retain).await {
+        if let Err(e) = self.send_publish_command(command).await {
             self.event_handler.on_error(&e).await;
         }
     }
 
     /// Handle unsubscribe command
-    async fn handle_unsubscribe(&mut self, topics: &[String]) {
-        if topics.is_empty() {
+    async fn handle_unsubscribe(&mut self, mut command: UnsubscribeCommand) {
+        if command.topics.is_empty() {
             let error = io::Error::new(
                 ErrorKind::InvalidInput,
                 "UNSUBSCRIBE requires at least one topic",
@@ -920,22 +1058,26 @@ impl TokioClientWorker {
             return;
         }
 
-        let session = match self.session.as_mut() {
-            Some(session) => session,
-            None => {
-                let error = io::Error::new(
-                    io::ErrorKind::Other,
-                    "No active session available for UNSUBSCRIBE",
-                );
-                self.event_handler.on_error(&error).await;
-                return;
-            }
+        let packet_id = if let Some(id) = command.packet_id {
+            id
+        } else if let Some(session) = self.session.as_mut() {
+            session.next_packet_id()
+        } else {
+            let error = io::Error::new(
+                io::ErrorKind::Other,
+                "No active session available for UNSUBSCRIBE",
+            );
+            self.event_handler.on_error(&error).await;
+            return;
         };
 
-        let packet_id = session.next_packet_id();
-        let topic_filters: Vec<String> = topics.to_vec();
-        let unsubscribe_packet =
-            unsubscribev5::MqttUnsubscribe::new(packet_id, topic_filters.clone(), Vec::new());
+        command.packet_id = Some(packet_id);
+
+        let unsubscribe_packet = unsubscribev5::MqttUnsubscribe::new(
+            packet_id,
+            command.topics.clone(),
+            command.properties.clone(),
+        );
 
         match unsubscribe_packet.to_bytes() {
             Ok(bytes) => {
@@ -944,7 +1086,8 @@ impl TokioClientWorker {
                     return;
                 }
 
-                self.pending_unsubscribes.insert(packet_id, topic_filters);
+                self.pending_unsubscribes
+                    .insert(packet_id, command.topics.clone());
             }
             Err(err) => {
                 let error = io::Error::new(
@@ -1018,13 +1161,7 @@ impl TokioClientWorker {
         self.message_buffer.clear();
     }
 
-    async fn send_publish_packet(
-        &mut self,
-        topic: &str,
-        payload: &[u8],
-        qos: u8,
-        retain: bool,
-    ) -> io::Result<()> {
+    async fn send_publish_command(&mut self, mut command: PublishCommand) -> io::Result<()> {
         if self.stream.is_none() {
             return Err(io::Error::new(
                 io::ErrorKind::NotConnected,
@@ -1032,33 +1169,32 @@ impl TokioClientWorker {
             ));
         }
 
-        let packet_id = if qos > 0 {
+        if command.qos > 0 {
             let session = self.session.as_mut().ok_or_else(|| {
                 io::Error::new(
                     io::ErrorKind::Other,
                     "No active session available for QoS publish",
                 )
             })?;
-            Some(session.next_packet_id())
-        } else {
-            None
-        };
 
-        let publish_packet = MqttPublish::new(
-            qos,
-            topic.to_string(),
-            packet_id,
-            payload.to_vec(),
-            retain,
-            false,
-        );
-
-        if qos > 0 {
-            if let Some(session) = self.session.as_mut() {
-                session.handle_outgoing_publish(publish_packet.clone());
+            if command.packet_id.is_none() {
+                command.packet_id = Some(session.next_packet_id());
             }
+
+            let publish_packet = command.to_mqtt_publish();
+            session.handle_outgoing_publish(publish_packet.clone());
+
+            let publish_bytes = publish_packet.to_bytes().map_err(|err| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Failed to serialize PUBLISH packet: {:?}", err),
+                )
+            })?;
+
+            return self.streams.send_egress(publish_bytes).await;
         }
 
+        let publish_packet = command.to_mqtt_publish();
         let publish_bytes = publish_packet.to_bytes().map_err(|err| {
             io::Error::new(
                 io::ErrorKind::InvalidData,
@@ -1086,16 +1222,12 @@ impl TokioClientWorker {
         }
 
         while self.is_connected && self.stream.is_some() {
-            if let Some((topic, payload, qos, retain)) = self.message_buffer.pop_front() {
-                match self
-                    .send_publish_packet(&topic, &payload, qos, retain)
-                    .await
-                {
+            if let Some(command) = self.message_buffer.pop_front() {
+                match self.send_publish_command(command.clone()).await {
                     Ok(()) => continue,
                     Err(e) => {
                         self.event_handler.on_error(&e).await;
-                        self.message_buffer
-                            .push_front((topic, payload, qos, retain));
+                        self.message_buffer.push_front(command);
 
                         if matches!(
                             e.kind(),
@@ -1112,6 +1244,7 @@ impl TokioClientWorker {
     }
 
     /// Handle keep alive timer
+    #[allow(dead_code)]
     async fn handle_keep_alive(&mut self) {
         if self.is_connected {
             // Send ping
@@ -1191,9 +1324,11 @@ impl TokioClientWorker {
 
                 if let Some(topics) = self.pending_unsubscribes.remove(&unsuback.packet_id) {
                     if !topics.is_empty() {
-                        let topics: Vec<String> = topics;
-                        self.pending_subscribes
-                            .retain(|_, (topic, _)| !topics.contains(topic));
+                        let topic_set: HashSet<String> = topics.into_iter().collect();
+                        self.pending_subscribes.retain(|_, pending_topics| {
+                            pending_topics.retain(|topic| !topic_set.contains(topic));
+                            !pending_topics.is_empty()
+                        });
                     }
                 }
 
@@ -1385,6 +1520,7 @@ impl TokioClientWorker {
     }
 
     /// Set MQTT version for packet parsing
+    #[allow(dead_code)]
     fn set_mqtt_version(&mut self, version: u8) {
         self.mqtt_version = version;
     }
