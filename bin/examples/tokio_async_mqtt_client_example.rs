@@ -6,17 +6,30 @@ use flowsdk::mqtt_client::{
 };
 use flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish;
 use std::io;
+use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration};
 
 /// Example event handler for the tokio async client
 struct TokioExampleHandler {
     name: String,
+    context: Arc<Mutex<Option<u16>>>,
 }
 
 impl TokioExampleHandler {
-    fn new(name: &str) -> Self {
+    fn new(name: &str, context: Arc<Mutex<Option<u16>>>) -> Self {
         TokioExampleHandler {
             name: name.to_string(),
+            context,
+        }
+    }
+
+    fn update_last_acked_packet_id(&mut self, packet_id: u16) {
+        if let Ok(mut ctx) = self.context.lock() {
+            println!(
+                "[{}] 📦 Updating last acknowledged packet ID to {}",
+                self.name, packet_id
+            );
+            *ctx = Some(packet_id);
         }
     }
 }
@@ -50,6 +63,9 @@ impl TokioMqttEventHandler for TokioExampleHandler {
     }
 
     async fn on_published(&mut self, result: &PublishResult) {
+        if let Some(packet_id) = result.packet_id {
+            self.update_last_acked_packet_id(packet_id);
+        }
         if result.is_success() {
             println!(
                 "[{}] 📤 Message published successfully (QoS: {}, ID: {:?})",
@@ -64,6 +80,7 @@ impl TokioMqttEventHandler for TokioExampleHandler {
     }
 
     async fn on_subscribed(&mut self, result: &SubscribeResult) {
+        self.update_last_acked_packet_id(result.packet_id);
         if result.is_success() {
             println!(
                 "[{}] 📥 Subscribed successfully! ({} subscriptions)",
@@ -79,6 +96,11 @@ impl TokioMqttEventHandler for TokioExampleHandler {
     }
 
     async fn on_unsubscribed(&mut self, result: &UnsubscribeResult) {
+        self.update_last_acked_packet_id(result.packet_id);
+        println!(
+            "[{}] 📤 Unsubscribe result for packet ID {:?}",
+            self.name, result.packet_id
+        );
         if result.is_success() {
             println!("[{}] 📤 Unsubscribed successfully!", self.name);
         } else {
@@ -163,8 +185,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tcp_nodelay: true,
     };
 
+    let context = Arc::new(Mutex::new(None::<u16>));
     // Create event handler
-    let event_handler = Box::new(TokioExampleHandler::new("TokioAsyncClient"));
+    let event_handler = Box::new(TokioExampleHandler::new(
+        "TokioAsyncClient",
+        context.clone(),
+    ));
 
     // Create tokio async MQTT client
     let client = TokioAsyncMqttClient::new(mqtt_options, event_handler, async_config).await?;
@@ -178,9 +204,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📋 Subscribing to topics...");
     client.subscribe("test/tokio/topic", 1).await?;
     client.subscribe("tokio/async/+", 2).await?;
-
-    // Give some time for subscriptions
-    sleep(Duration::from_millis(500)).await;
 
     println!("📤 Publishing test messages...");
     client
@@ -198,26 +221,35 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .publish("tokio/async/qos0", b"Quick QoS 0 message", 0, false)
         .await?;
 
-    // Give some time for publishes
-    sleep(Duration::from_millis(500)).await;
-
     println!("🏓 Sending ping...");
     client.ping().await?;
-
-    // Give some time for ping
-    sleep(Duration::from_millis(500)).await;
 
     println!("📤 Unsubscribing from topics...");
     client.unsubscribe(vec!["test/tokio/topic"]).await?;
 
-    // Give some time for unsubscribes
-    sleep(Duration::from_millis(500)).await;
+    // Wait for the last_acked_packet_id to be exactly 4
+    println!("⏳ Waiting for unsubscribe acknowledgment (packet ID 4)...");
+    let wait_for_ack = async {
+        loop {
+            if let Ok(ctx) = context.lock() {
+                if *ctx == Some(4) {
+                    println!("✅ Received acknowledgment for packet ID 4");
+                    break;
+                } else {
+                    println!("❌ Unsubscribe acknowledgment not received yet {:?}", ctx);
+                }
+            }
+            sleep(Duration::from_millis(100)).await;
+        }
+    };
+
+    match tokio::time::timeout(Duration::from_secs(5), wait_for_ack).await {
+        Ok(_) => println!("✅ Successfully received acknowledgment"),
+        Err(_) => println!("⚠️  Timeout waiting for acknowledgment"),
+    }
 
     println!("👋 Disconnecting...");
     client.disconnect().await?;
-
-    // Give some time for disconnect
-    sleep(Duration::from_millis(500)).await;
 
     println!("🛑 Shutting down client...");
     client.shutdown().await?;

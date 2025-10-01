@@ -6,7 +6,6 @@ use flowsdk::mqtt_client::{
 };
 use flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish;
 use std::io;
-use std::time::Duration;
 
 /// Example event handler implementation
 struct MyEventHandler {

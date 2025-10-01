@@ -167,6 +167,7 @@ pub struct AsyncMqttClient {
     /// Handle to the worker thread
     worker_handle: Option<JoinHandle<()>>,
     /// Client configuration
+    #[allow(dead_code)]
     config: AsyncClientConfig,
 }
 

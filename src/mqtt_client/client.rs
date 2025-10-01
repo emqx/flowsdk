@@ -1,4 +1,3 @@
-use crate::mqtt_serde::mqttv3::puback;
 use crate::mqtt_session::ClientSession;
 
 use crate::mqtt_serde::control_packet::MqttControlPacket;
@@ -142,8 +141,10 @@ pub struct Context {
     session: Option<ClientSession>,
     mqtt_stream: Option<MqttStream<TcpStream>>,
     // Update when subscribed to topics and session is not None
+    #[allow(dead_code)]
     subscribed_topics: Vec<Subscription>,
     session_present: bool,
+    #[allow(dead_code)]
     mqtt_buffer: Vec<MqttPacket>,
     // Track pending operations for fire-and-forget methods
     pending_subscribes: std::collections::HashMap<u16, String>, // packet_id -> topic

@@ -117,6 +117,7 @@ impl ClientSession {
     }
 
     pub fn resend_pending_messages(&self) -> Vec<MqttPacket> {
+        // @TODO: have some pacing mechanism to avoid flooding the network
         let mut packets_to_resend = Vec::new();
 
         for (packet_id, publish) in &self.unacknowledged_publishes {

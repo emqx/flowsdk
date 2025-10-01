@@ -1,5 +1,5 @@
 use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
-use crate::mqtt_serde::mqttv5::common::properties::{self, encode_properities_hdr, Property};
+use crate::mqtt_serde::mqttv5::common::properties::{encode_properities_hdr, Property};
 use crate::mqtt_serde::parser;
 use crate::mqtt_serde::parser::{
     packet_type, parse_packet_id, parse_remaining_length, parse_topic_name, ParseError, ParseOk,

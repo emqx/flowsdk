@@ -24,9 +24,11 @@ pub struct ServerSession {
     unacknowledged_pubrels: HashMap<u16, MqttPubRel>,
 
     // The Will Message.
+    #[allow(dead_code)]
     will: Option<MqttPublish>,
 
     // The session expiry interval.
+    #[allow(dead_code)]
     session_expiry_interval: u32,
 
     // The client's receive maximum value.

@@ -89,7 +89,7 @@ pub trait TokioMqttEventHandler: Send + Sync {
         let _ = result;
     }
 
-    /// Called when an incoming message is received
+    /// Called when an incoming publish message is received
     async fn on_message_received(&mut self, publish: &MqttPublish) {
         let _ = publish;
     }
@@ -849,10 +849,6 @@ impl TokioClientWorker {
                 Err(TryRecvError::Empty) => break,
                 Err(TryRecvError::Disconnected) => break,
             }
-        }
-
-        if let Some(stream) = &mut self.stream {
-            stream.flush().await?;
         }
 
         Ok(())
