@@ -134,20 +134,12 @@ impl MqttEventHandler for MyEventHandler {
 fn main() -> io::Result<()> {
     println!("🚀 Starting Async MQTT Client Example");
 
-    // Configure MQTT client options
-    let mqtt_options = MqttClientOptions {
-        peer: "localhost:1883".to_string(),
-        client_id: "async_example_client".to_string(),
-        clean_start: true,
-        keep_alive: 60,
-        username: None,
-        password: None,
-        will: None,
-        reconnect: false,
-        sessionless: false,
-        subscription_topics: vec![],
-        auto_ack: false,
-    };
+    // Configure MQTT client options using builder pattern
+    let mqtt_options = MqttClientOptions::builder()
+        .peer("localhost:1883")
+        .client_id("async_example_client")
+        .auto_ack(false)
+        .build();
 
     // Configure async client settings
     let async_config = AsyncClientConfig {

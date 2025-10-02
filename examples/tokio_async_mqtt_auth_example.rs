@@ -134,20 +134,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 MQTT v5 Enhanced Authentication Example");
     println!("==========================================\n");
 
-    // Configure MQTT client options
-    let options = MqttClientOptions {
-        peer: "127.0.0.1:1883".to_string(),
-        client_id: "auth_example_client".to_string(),
-        clean_start: true,
-        keep_alive: 60,
-        username: Some("test_user".to_string()),
-        password: Some(b"test_password".to_vec()),
-        sessionless: false,
-        auto_ack: true,
-        will: None,
-        reconnect: false,
-        subscription_topics: Vec::new(),
-    };
+    // Configure MQTT client options using builder pattern
+    let options = MqttClientOptions::builder()
+        .peer("127.0.0.1:1883")
+        .client_id("auth_example_client")
+        .username("test_user")
+        .password(b"test_password".to_vec())
+        .keep_alive(60)
+        .build();
 
     // Configure async client with default settings
     let config = TokioAsyncClientConfig::default();

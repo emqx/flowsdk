@@ -97,20 +97,11 @@ async fn main() -> io::Result<()> {
     let handler = EventTracker::new();
     let handler_clone = handler.clone();
 
-    // Configure MQTT client
-    let options = MqttClientOptions {
-        peer: "localhost:1883".to_string(),
-        client_id: "tokio_all_sync_ops_client".to_string(),
-        clean_start: true,
-        keep_alive: 60,
-        username: None,
-        password: None,
-        sessionless: false,
-        auto_ack: true,
-        will: None,
-        reconnect: false,
-        subscription_topics: Vec::new(),
-    };
+    // Configure MQTT client using builder pattern
+    let options = MqttClientOptions::builder()
+        .peer("localhost:1883")
+        .client_id("tokio_all_sync_ops_client")
+        .build();
 
     let config = TokioAsyncClientConfig::default();
 

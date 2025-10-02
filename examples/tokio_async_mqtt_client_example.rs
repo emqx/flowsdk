@@ -155,20 +155,14 @@ impl TokioMqttEventHandler for TokioExampleHandler {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Starting Tokio Async MQTT Client Example");
 
-    // Configure MQTT client options
-    let mqtt_options = MqttClientOptions {
-        peer: "localhost:1883".to_string(),
-        client_id: "tokio_async_example_client".to_string(),
-        clean_start: true,
-        keep_alive: 10,
-        username: None,
-        password: None,
-        will: None,
-        reconnect: true,
-        sessionless: false,
-        subscription_topics: vec![],
-        auto_ack: false,
-    };
+    // Configure MQTT client options using builder pattern
+    let mqtt_options = MqttClientOptions::builder()
+        .peer("localhost:1883")
+        .client_id("tokio_async_example_client")
+        .keep_alive(10)
+        .reconnect(true)
+        .auto_ack(false)
+        .build();
 
     // Configure tokio async client settings
     let async_config = TokioAsyncClientConfig {

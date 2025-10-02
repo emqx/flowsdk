@@ -1,19 +1,14 @@
 use flowsdk::mqtt_client::{MqttClient, MqttClientOptions};
 
 fn main() {
-    let opts: MqttClientOptions = MqttClientOptions {
-        peer: "localhost:1883".to_string(),
-        client_id: "example_client".to_string(),
-        clean_start: true,
-        keep_alive: 10,
-        username: None,
-        password: None,
-        will: None,
-        reconnect: true,
-        sessionless: false,
-        subscription_topics: vec![],
-        auto_ack: false,
-    };
+    // Using builder pattern for cleaner configuration
+    let opts = MqttClientOptions::builder()
+        .peer("localhost:1883")
+        .client_id("example_client")
+        .keep_alive(10)
+        .reconnect(true)
+        .auto_ack(false)
+        .build();
     // Example usage of MqttClient
     let mut client = MqttClient::new(opts);
 

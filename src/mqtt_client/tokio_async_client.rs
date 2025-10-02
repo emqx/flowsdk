@@ -1355,6 +1355,13 @@ impl TokioClientWorker {
                 }
 
                 // Prepare CONNECT packet (MQTT v5 by default for now)
+                let mut properties = vec![];
+
+                // Add session expiry interval if specified
+                if let Some(expiry_interval) = self.options.session_expiry_interval {
+                    properties.push(Property::SessionExpiryInterval(expiry_interval));
+                }
+
                 let connect_packet = connectv5::MqttConnect::new(
                     self.options.client_id.clone(),
                     self.options.username.clone(),
@@ -1362,7 +1369,7 @@ impl TokioClientWorker {
                     self.options.will.clone(),
                     self.options.keep_alive,
                     self.options.clean_start,
-                    vec![],
+                    properties,
                 );
 
                 let connect_bytes = match connect_packet.to_bytes() {
