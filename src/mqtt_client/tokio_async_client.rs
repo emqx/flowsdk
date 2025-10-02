@@ -8,6 +8,7 @@ use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, error::TryRecvError, error::TrySendError, Receiver};
+use tokio::sync::oneshot;
 use tokio::time::Sleep;
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -235,14 +236,37 @@ impl UnsubscribeCommand {
 enum TokioClientCommand {
     /// Connect to the broker
     Connect,
+    /// Connect to the broker and wait for acknowledgment
+    ConnectSync {
+        response_tx: tokio::sync::oneshot::Sender<ConnectionResult>,
+    },
     /// Subscribe to topics
     Subscribe(SubscribeCommand),
-    /// Publish a message
+    /// Subscribe to topics and wait for acknowledgment
+    SubscribeSync {
+        command: SubscribeCommand,
+        response_tx: tokio::sync::oneshot::Sender<SubscribeResult>,
+    },
+    /// Publish a message (fire-and-forget)
     Publish(PublishCommand),
+    /// Publish a message and wait for acknowledgment (QoS 1 = PUBACK, QoS 2 = PUBCOMP)
+    PublishSync {
+        command: PublishCommand,
+        response_tx: tokio::sync::oneshot::Sender<PublishResult>,
+    },
     /// Unsubscribe from topics
     Unsubscribe(UnsubscribeCommand),
+    /// Unsubscribe from topics and wait for acknowledgment
+    UnsubscribeSync {
+        command: UnsubscribeCommand,
+        response_tx: tokio::sync::oneshot::Sender<UnsubscribeResult>,
+    },
     /// Send ping to broker
     Ping,
+    /// Send ping to broker and wait for response
+    PingSync {
+        response_tx: tokio::sync::oneshot::Sender<PingResult>,
+    },
     /// Disconnect from broker
     Disconnect,
     /// Shutdown the client and worker
@@ -601,6 +625,86 @@ impl TokioAsyncMqttClient {
             .await
     }
 
+    /// Publish a message and wait for acknowledgment (QoS 1 = PUBACK, QoS 2 = PUBCOMP)
+    ///
+    /// This method blocks until the broker acknowledges the message:
+    /// - QoS 0: Returns immediately after sending (no acknowledgment)
+    /// - QoS 1: Waits for PUBACK from broker
+    /// - QoS 2: Waits for PUBCOMP from broker (full QoS 2 flow)
+    ///
+    /// # Arguments
+    /// * `topic` - Topic to publish to
+    /// * `payload` - Message payload
+    /// * `qos` - Quality of Service level (0, 1, or 2)
+    /// * `retain` - Whether broker should retain this message
+    ///
+    /// # Returns
+    /// `PublishResult` containing packet_id, reason_code, and properties
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use tokio;
+    /// # use std::time::Duration;
+    /// # async fn example() -> std::io::Result<()> {
+    /// # let client = todo!();
+    /// // Simple sync publish
+    /// let result = client.publish_sync("sensors/temp", b"23.5", 2, false).await?;
+    /// println!("Published with packet ID: {:?}", result.packet_id);
+    ///
+    /// // With timeout
+    /// let result = tokio::time::timeout(
+    ///     Duration::from_secs(5),
+    ///     client.publish_sync("sensors/temp", b"23.5", 2, false)
+    /// ).await??;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn publish_sync(
+        &self,
+        topic: &str,
+        payload: &[u8],
+        qos: u8,
+        retain: bool,
+    ) -> io::Result<PublishResult> {
+        let command = PublishCommand::simple(topic, payload.to_vec(), qos, retain);
+        self.publish_with_command_sync(command).await
+    }
+
+    /// Publish with fully customized command and wait for acknowledgment
+    pub async fn publish_with_command_sync(
+        &self,
+        command: PublishCommand,
+    ) -> io::Result<PublishResult> {
+        // QoS 0 messages have no acknowledgment, send fire-and-forget
+        if command.qos == 0 {
+            self.send_command(TokioClientCommand::Publish(command))
+                .await?;
+            return Ok(PublishResult {
+                packet_id: None,
+                reason_code: Some(0),
+                properties: None,
+                qos: 0,
+            });
+        }
+
+        // For QoS 1/2, use oneshot channel to wait for acknowledgment
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.send_command(TokioClientCommand::PublishSync {
+            command,
+            response_tx: tx,
+        })
+        .await?;
+
+        // Block until response received or channel closed
+        rx.await.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Response channel closed before acknowledgment received (connection may be lost)",
+            )
+        })
+    }
+
     /// Unsubscribe from topics (non-blocking)
     pub async fn unsubscribe(&self, topics: Vec<&str>) -> io::Result<()> {
         let topics: Vec<String> = topics.into_iter().map(|s| s.to_string()).collect();
@@ -666,6 +770,202 @@ impl TokioAsyncMqttClient {
         self.auth(0x19, properties).await
     }
 
+    /// Connect to broker and wait for CONNACK acknowledgment
+    ///
+    /// This method blocks until the broker acknowledges the connection with CONNACK.
+    ///
+    /// # Returns
+    /// `ConnectionResult` containing reason_code, session_present, and properties
+    ///
+    /// # Example
+    /// ```no_run
+    /// # async fn example() -> std::io::Result<()> {
+    /// # let client = todo!();
+    /// let result = client.connect_sync().await?;
+    /// if result.is_success() {
+    ///     println!("Connected! Session present: {}", result.session_present);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect_sync(&self) -> io::Result<ConnectionResult> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.send_command(TokioClientCommand::ConnectSync { response_tx: tx })
+            .await?;
+
+        rx.await.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Response channel closed before CONNACK received (connection may have failed)",
+            )
+        })
+    }
+
+    /// Subscribe to topics and wait for SUBACK acknowledgment
+    ///
+    /// This method blocks until the broker acknowledges the subscription with SUBACK.
+    ///
+    /// # Arguments
+    /// * `topic` - Topic to subscribe to
+    /// * `qos` - Requested Quality of Service level
+    ///
+    /// # Returns
+    /// `SubscribeResult` containing packet_id, reason_codes, and properties
+    ///
+    /// # Example
+    /// ```no_run
+    /// # async fn example() -> std::io::Result<()> {
+    /// # let client = todo!();
+    /// let result = client.subscribe_sync("sensors/#", 1).await?;
+    /// println!("Subscribed with QoS: {:?}", result.reason_codes);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn subscribe_sync(&self, topic: &str, qos: u8) -> io::Result<SubscribeResult> {
+        self.subscribe_with_command_sync(SubscribeCommand::single(topic, qos))
+            .await
+    }
+
+    /// Subscribe with fully customized command and wait for acknowledgment
+    pub async fn subscribe_with_command_sync(
+        &self,
+        command: SubscribeCommand,
+    ) -> io::Result<SubscribeResult> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.send_command(TokioClientCommand::SubscribeSync {
+            command,
+            response_tx: tx,
+        })
+        .await?;
+
+        rx.await.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Response channel closed before SUBACK received (connection may be lost)",
+            )
+        })
+    }
+
+    /// Unsubscribe from topics and wait for UNSUBACK acknowledgment
+    ///
+    /// This method blocks until the broker acknowledges the unsubscription with UNSUBACK.
+    ///
+    /// # Arguments
+    /// * `topics` - List of topics to unsubscribe from
+    ///
+    /// # Returns
+    /// `UnsubscribeResult` containing packet_id, reason_codes, and properties
+    ///
+    /// # Example
+    /// ```no_run
+    /// # async fn example() -> std::io::Result<()> {
+    /// # let client = todo!();
+    /// let result = client.unsubscribe_sync(vec!["sensors/#"]).await?;
+    /// println!("Unsubscribed: packet_id={:?}", result.packet_id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn unsubscribe_sync(&self, topics: Vec<&str>) -> io::Result<UnsubscribeResult> {
+        let topics: Vec<String> = topics.into_iter().map(|s| s.to_string()).collect();
+        self.unsubscribe_with_command_sync(UnsubscribeCommand::from_topics(topics))
+            .await
+    }
+
+    /// Unsubscribe with fully customized command and wait for acknowledgment
+    pub async fn unsubscribe_with_command_sync(
+        &self,
+        command: UnsubscribeCommand,
+    ) -> io::Result<UnsubscribeResult> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.send_command(TokioClientCommand::UnsubscribeSync {
+            command,
+            response_tx: tx,
+        })
+        .await?;
+
+        rx.await.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Response channel closed before UNSUBACK received (connection may be lost)",
+            )
+        })
+    }
+
+    /// Send ping and wait for PINGRESP acknowledgment
+    ///
+    /// This method blocks until the broker responds with PINGRESP.
+    ///
+    /// # Returns
+    /// `PingResult` indicating successful ping response
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use tokio;
+    /// # use std::time::Duration;
+    /// # async fn example() -> std::io::Result<()> {
+    /// # let client = todo!();
+    /// // Check connection with timeout
+    /// match tokio::time::timeout(
+    ///     Duration::from_secs(5),
+    ///     client.ping_sync()
+    /// ).await {
+    ///     Ok(Ok(_)) => println!("Connection alive!"),
+    ///     _ => println!("Connection timeout or error"),
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn ping_sync(&self) -> io::Result<PingResult> {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+
+        self.send_command(TokioClientCommand::PingSync { response_tx: tx })
+            .await?;
+
+        rx.await.map_err(|_| {
+            io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "Response channel closed before PINGRESP received (connection may be lost)",
+            )
+        })
+    }
+
+    /// Publish a message and wait for acknowledgment (QoS 1 = PUBACK, QoS 2 = PUBCOMP)
+    ///
+    /// This method blocks until the broker acknowledges the message:
+    /// - QoS 0: Returns immediately after sending (no acknowledgment)
+    /// - QoS 1: Waits for PUBACK from broker
+    /// - QoS 2: Waits for PUBCOMP from broker (full QoS 2 flow)
+    ///
+    /// # Arguments
+    /// * `topic` - Topic to publish to
+    /// * `payload` - Message payload
+    /// * `qos` - Quality of Service level (0, 1, or 2)
+    /// * `retain` - Whether broker should retain this message
+    ///
+    /// # Returns
+    /// `PublishResult` containing packet_id, reason_code, and properties
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use tokio;
+    /// # use std::time::Duration;
+    /// # async fn example() -> std::io::Result<()> {
+    /// # let client = todo!();
+    /// // Simple sync publish
+    /// let result = client.publish_sync("sensors/temp", b"23.5", 2, false).await?;
+    /// println!("Published with packet ID: {:?}", result.packet_id);
+    ///
+    /// // With timeout
+    /// let result = tokio::time::timeout(
+    ///     Duration::from_secs(5),
+    ///     client.publish_sync("sensors/temp", b"23.5", 2, false)
+    /// ).await??;
+    /// # Ok(())
+    /// # }
+    /// ```
     /// Send a command to the worker task
     async fn send_command(&self, command: TokioClientCommand) -> io::Result<()> {
         self.command_tx.send(command).await.map_err(|_| {
@@ -701,6 +1001,16 @@ struct TokioClientWorker {
     pending_subscribes: HashMap<u16, Vec<String>>,
     /// Pending unsubscribe operations keyed by packet identifier
     pending_unsubscribes: HashMap<u16, Vec<String>>,
+    /// Pending synchronous publish operations keyed by packet identifier
+    pending_publishes: HashMap<u16, tokio::sync::oneshot::Sender<PublishResult>>,
+    /// Pending synchronous connect operations (only one at a time)
+    pending_connect: Option<tokio::sync::oneshot::Sender<ConnectionResult>>,
+    /// Pending synchronous subscribe operations keyed by packet identifier
+    pending_subscribes_sync: HashMap<u16, tokio::sync::oneshot::Sender<SubscribeResult>>,
+    /// Pending synchronous unsubscribe operations keyed by packet identifier
+    pending_unsubscribes_sync: HashMap<u16, tokio::sync::oneshot::Sender<UnsubscribeResult>>,
+    /// Pending synchronous ping operations (only one at a time)
+    pending_ping: Option<tokio::sync::oneshot::Sender<PingResult>>,
     /// Client session for packet IDs
     session: Option<ClientSession>,
     /// Keep alive timer (dynamic sleep based on last packet sent)
@@ -732,6 +1042,11 @@ impl TokioClientWorker {
             message_buffer: VecDeque::new(),
             pending_subscribes: HashMap::new(),
             pending_unsubscribes: HashMap::new(),
+            pending_publishes: HashMap::new(),
+            pending_connect: None,
+            pending_subscribes_sync: HashMap::new(),
+            pending_unsubscribes_sync: HashMap::new(),
+            pending_ping: None,
             session: None,
             keep_alive_timer: None,
             mqtt_version: 5, // Default to MQTT v5.0, will be auto-detected from first packet
@@ -844,17 +1159,41 @@ impl TokioClientWorker {
             TokioClientCommand::Connect => {
                 self.handle_connect().await;
             }
+            TokioClientCommand::ConnectSync { response_tx } => {
+                self.handle_connect_sync(response_tx).await;
+            }
             TokioClientCommand::Subscribe(command) => {
                 self.handle_subscribe(command).await;
+            }
+            TokioClientCommand::SubscribeSync {
+                command,
+                response_tx,
+            } => {
+                self.handle_subscribe_sync(command, response_tx).await;
             }
             TokioClientCommand::Publish(command) => {
                 self.handle_publish(command).await;
             }
+            TokioClientCommand::PublishSync {
+                command,
+                response_tx,
+            } => {
+                self.handle_publish_sync(command, response_tx).await;
+            }
             TokioClientCommand::Unsubscribe(command) => {
                 self.handle_unsubscribe(command).await;
             }
+            TokioClientCommand::UnsubscribeSync {
+                command,
+                response_tx,
+            } => {
+                self.handle_unsubscribe_sync(command, response_tx).await;
+            }
             TokioClientCommand::Ping => {
                 self.handle_ping().await;
+            }
+            TokioClientCommand::PingSync { response_tx } => {
+                self.handle_ping_sync(response_tx).await;
             }
             TokioClientCommand::Disconnect => {
                 self.handle_disconnect().await;
@@ -1150,6 +1489,86 @@ impl TokioClientWorker {
         }
     }
 
+    /// Handle synchronous publish command
+    async fn handle_publish_sync(
+        &mut self,
+        command: PublishCommand,
+        response_tx: oneshot::Sender<PublishResult>,
+    ) {
+        // Check connection status
+        if self.stream.is_none() {
+            // For disconnected state, send an error result
+            let result = PublishResult {
+                packet_id: command.packet_id,
+                reason_code: Some(128), // Unspecified error
+                properties: Some(vec![]),
+                qos: command.qos,
+            };
+            let _ = response_tx.send(result);
+            return;
+        }
+
+        // Get packet ID from command or generate new one
+        let packet_id = if let Some(id) = command.packet_id {
+            id
+        } else if let Some(session) = self.session.as_mut() {
+            session.next_packet_id()
+        } else {
+            // No session - send error result
+            let result = PublishResult {
+                packet_id: None,
+                reason_code: Some(128), // Unspecified error
+                properties: Some(vec![]),
+                qos: command.qos,
+            };
+            let _ = response_tx.send(result);
+            return;
+        };
+
+        // For QoS 0, complete immediately (fire-and-forget)
+        if command.qos == 0 {
+            if let Err(_e) = self.send_publish_command(command).await {
+                let result = PublishResult {
+                    packet_id: Some(packet_id),
+                    reason_code: Some(128), // Unspecified error
+                    properties: Some(vec![]),
+                    qos: 0,
+                };
+                let _ = response_tx.send(result);
+            } else {
+                let result = PublishResult {
+                    packet_id: Some(packet_id),
+                    reason_code: Some(0), // Success
+                    properties: Some(vec![]),
+                    qos: 0,
+                };
+                let _ = response_tx.send(result);
+            }
+            return;
+        }
+
+        // For QoS 1 and QoS 2, store the response channel
+        self.pending_publishes.insert(packet_id, response_tx);
+
+        // Send the publish command
+        let mut cmd = command;
+        cmd.packet_id = Some(packet_id);
+        let cmd_qos = cmd.qos; // Save QoS before moving
+
+        if let Err(_e) = self.send_publish_command(cmd).await {
+            // Remove from pending and send error
+            if let Some(tx) = self.pending_publishes.remove(&packet_id) {
+                let result = PublishResult {
+                    packet_id: Some(packet_id),
+                    reason_code: Some(128), // Unspecified error
+                    properties: Some(vec![]),
+                    qos: cmd_qos,
+                };
+                let _ = tx.send(result);
+            }
+        }
+    }
+
     /// Handle unsubscribe command
     async fn handle_unsubscribe(&mut self, mut command: UnsubscribeCommand) {
         if command.topics.is_empty() {
@@ -1258,6 +1677,203 @@ impl TokioClientWorker {
                 self.event_handler.on_error(&error).await;
             }
         }
+    }
+
+    /// Handle synchronous connect command
+    async fn handle_connect_sync(
+        &mut self,
+        response_tx: tokio::sync::oneshot::Sender<ConnectionResult>,
+    ) {
+        // Check if already connected or connecting
+        if self.stream.is_some() {
+            let result = ConnectionResult {
+                reason_code: 0,
+                session_present: false,
+                properties: Some(vec![]),
+            };
+            let _ = response_tx.send(result);
+            return;
+        }
+
+        // Store the response channel for when CONNACK arrives
+        self.pending_connect = Some(response_tx);
+
+        // Initiate connection
+        self.handle_connect().await;
+    }
+
+    /// Handle synchronous subscribe command
+    async fn handle_subscribe_sync(
+        &mut self,
+        mut command: SubscribeCommand,
+        response_tx: tokio::sync::oneshot::Sender<SubscribeResult>,
+    ) {
+        if self.stream.is_none() {
+            let result = SubscribeResult {
+                packet_id: 0,
+                reason_codes: vec![128], // Unspecified error
+                properties: vec![],
+            };
+            let _ = response_tx.send(result);
+            return;
+        }
+
+        if command.subscriptions.is_empty() {
+            let result = SubscribeResult {
+                packet_id: 0,
+                reason_codes: vec![128],
+                properties: vec![],
+            };
+            let _ = response_tx.send(result);
+            return;
+        }
+
+        // Generate packet ID
+        let packet_id = if let Some(id) = command.packet_id {
+            id
+        } else if let Some(session) = self.session.as_mut() {
+            session.next_packet_id()
+        } else {
+            let result = SubscribeResult {
+                packet_id: 0,
+                reason_codes: vec![128],
+                properties: vec![],
+            };
+            let _ = response_tx.send(result);
+            return;
+        };
+
+        command.packet_id = Some(packet_id);
+
+        let subscribe_packet = subscribev5::MqttSubscribe::new(
+            packet_id,
+            command.subscriptions.clone(),
+            command.properties.clone(),
+        );
+
+        match subscribe_packet.to_bytes() {
+            Ok(bytes) => {
+                if let Err(_e) = self.streams.send_egress(bytes).await {
+                    let result = SubscribeResult {
+                        packet_id,
+                        reason_codes: vec![128],
+                        properties: vec![],
+                    };
+                    let _ = response_tx.send(result);
+                    return;
+                }
+
+                // Store response channel and topics
+                let topics: Vec<String> = command
+                    .subscriptions
+                    .iter()
+                    .map(|sub| sub.topic_filter.clone())
+                    .collect();
+                self.pending_subscribes.insert(packet_id, topics);
+                self.pending_subscribes_sync.insert(packet_id, response_tx);
+            }
+            Err(_err) => {
+                let result = SubscribeResult {
+                    packet_id,
+                    reason_codes: vec![128],
+                    properties: vec![],
+                };
+                let _ = response_tx.send(result);
+            }
+        }
+    }
+
+    /// Handle synchronous unsubscribe command
+    async fn handle_unsubscribe_sync(
+        &mut self,
+        mut command: UnsubscribeCommand,
+        response_tx: tokio::sync::oneshot::Sender<UnsubscribeResult>,
+    ) {
+        if self.stream.is_none() {
+            let result = UnsubscribeResult {
+                packet_id: 0,
+                reason_codes: vec![128],
+                properties: vec![],
+            };
+            let _ = response_tx.send(result);
+            return;
+        }
+
+        if command.topics.is_empty() {
+            let result = UnsubscribeResult {
+                packet_id: 0,
+                reason_codes: vec![128],
+                properties: vec![],
+            };
+            let _ = response_tx.send(result);
+            return;
+        }
+
+        // Generate packet ID
+        let packet_id = if let Some(id) = command.packet_id {
+            id
+        } else if let Some(session) = self.session.as_mut() {
+            session.next_packet_id()
+        } else {
+            let result = UnsubscribeResult {
+                packet_id: 0,
+                reason_codes: vec![128],
+                properties: vec![],
+            };
+            let _ = response_tx.send(result);
+            return;
+        };
+
+        command.packet_id = Some(packet_id);
+
+        let unsubscribe_packet = unsubscribev5::MqttUnsubscribe::new(
+            packet_id,
+            command.topics.clone(),
+            command.properties.clone(),
+        );
+
+        match unsubscribe_packet.to_bytes() {
+            Ok(bytes) => {
+                if let Err(_e) = self.streams.send_egress(bytes).await {
+                    let result = UnsubscribeResult {
+                        packet_id,
+                        reason_codes: vec![128],
+                        properties: vec![],
+                    };
+                    let _ = response_tx.send(result);
+                    return;
+                }
+
+                // Store response channel and topics
+                self.pending_unsubscribes
+                    .insert(packet_id, command.topics.clone());
+                self.pending_unsubscribes_sync
+                    .insert(packet_id, response_tx);
+            }
+            Err(_err) => {
+                let result = UnsubscribeResult {
+                    packet_id,
+                    reason_codes: vec![128],
+                    properties: vec![],
+                };
+                let _ = response_tx.send(result);
+            }
+        }
+    }
+
+    /// Handle synchronous ping command
+    async fn handle_ping_sync(&mut self, response_tx: tokio::sync::oneshot::Sender<PingResult>) {
+        if self.stream.is_none() {
+            let result = PingResult { success: false };
+            let _ = response_tx.send(result);
+            return;
+        }
+
+        // Store response channel (only one ping at a time)
+        self.pending_ping = Some(response_tx);
+
+        // Send PINGREQ
+        self.handle_ping().await;
     }
 
     /// Handle disconnect command
@@ -1419,6 +2035,11 @@ impl TokioClientWorker {
                     properties: connack.properties.clone(),
                 };
 
+                // Complete synchronous connect if waiting
+                if let Some(tx) = self.pending_connect.take() {
+                    let _ = tx.send(result.clone());
+                }
+
                 self.event_handler.on_connected(&result).await;
 
                 if !success {
@@ -1436,6 +2057,12 @@ impl TokioClientWorker {
                 };
 
                 self.pending_subscribes.remove(&suback.packet_id);
+
+                // Complete synchronous subscribe if waiting
+                if let Some(tx) = self.pending_subscribes_sync.remove(&suback.packet_id) {
+                    let _ = tx.send(result.clone());
+                }
+
                 self.event_handler.on_subscribed(&result).await;
             }
             MqttPacket::UnsubAck5(unsuback) => {
@@ -1455,6 +2082,11 @@ impl TokioClientWorker {
                     }
                 }
 
+                // Complete synchronous unsubscribe if waiting
+                if let Some(tx) = self.pending_unsubscribes_sync.remove(&unsuback.packet_id) {
+                    let _ = tx.send(result.clone());
+                }
+
                 self.event_handler.on_unsubscribed(&result).await;
             }
             MqttPacket::PubAck5(puback) => {
@@ -1468,6 +2100,11 @@ impl TokioClientWorker {
                     properties: Some(puback.properties.clone()),
                     qos: 1,
                 };
+
+                // Complete synchronous publish if waiting
+                if let Some(tx) = self.pending_publishes.remove(&puback.packet_id) {
+                    let _ = tx.send(result.clone());
+                }
 
                 self.event_handler.on_published(&result).await;
             }
@@ -1542,6 +2179,11 @@ impl TokioClientWorker {
                     qos: 2,
                 };
 
+                // Complete synchronous publish if waiting
+                if let Some(tx) = self.pending_publishes.remove(&pubcomp.packet_id) {
+                    let _ = tx.send(result.clone());
+                }
+
                 self.event_handler.on_published(&result).await;
             }
             MqttPacket::Publish5(publish) => {
@@ -1578,6 +2220,12 @@ impl TokioClientWorker {
             }
             MqttPacket::PingResp5(_) => {
                 let result = PingResult { success: true };
+
+                // Complete synchronous ping if waiting
+                if let Some(tx) = self.pending_ping.take() {
+                    let _ = tx.send(result.clone());
+                }
+
                 self.event_handler.on_ping_response(&result).await;
             }
             MqttPacket::Disconnect5(disconnect) => {
@@ -1619,6 +2267,53 @@ impl TokioClientWorker {
         self.is_connected = false;
         self.stream = None;
         self.keep_alive_timer = None;
+
+        // Clean up any pending synchronous publish operations
+        for (_packet_id, tx) in self.pending_publishes.drain() {
+            let result = PublishResult {
+                packet_id: Some(_packet_id),
+                reason_code: Some(128), // Unspecified error
+                properties: Some(vec![]),
+                qos: 0, // Unknown QoS
+            };
+            let _ = tx.send(result);
+        }
+
+        // Clean up pending synchronous connect
+        if let Some(tx) = self.pending_connect.take() {
+            let result = ConnectionResult {
+                reason_code: 128, // Unspecified error
+                session_present: false,
+                properties: Some(vec![]),
+            };
+            let _ = tx.send(result);
+        }
+
+        // Clean up pending synchronous subscribes
+        for (_packet_id, tx) in self.pending_subscribes_sync.drain() {
+            let result = SubscribeResult {
+                packet_id: _packet_id,
+                reason_codes: vec![128],
+                properties: vec![],
+            };
+            let _ = tx.send(result);
+        }
+
+        // Clean up pending synchronous unsubscribes
+        for (_packet_id, tx) in self.pending_unsubscribes_sync.drain() {
+            let result = UnsubscribeResult {
+                packet_id: _packet_id,
+                reason_codes: vec![128],
+                properties: vec![],
+            };
+            let _ = tx.send(result);
+        }
+
+        // Clean up pending synchronous ping
+        if let Some(tx) = self.pending_ping.take() {
+            let result = PingResult { success: false };
+            let _ = tx.send(result);
+        }
 
         if was_connected {
             self.event_handler.on_connection_lost().await;
