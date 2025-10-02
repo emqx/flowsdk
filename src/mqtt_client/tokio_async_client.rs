@@ -1419,8 +1419,7 @@ impl TokioClientWorker {
         } else if let Some(session) = self.session.as_mut() {
             session.next_packet_id()
         } else {
-            let error = io::Error::new(
-                io::ErrorKind::Other,
+            let error = io::Error::other(
                 "No active session available for SUBSCRIBE",
             );
             self.event_handler.on_error(&error).await;
@@ -1585,8 +1584,7 @@ impl TokioClientWorker {
         } else if let Some(session) = self.session.as_mut() {
             session.next_packet_id()
         } else {
-            let error = io::Error::new(
-                io::ErrorKind::Other,
+            let error = io::Error::other(
                 "No active session available for UNSUBSCRIBE",
             );
             self.event_handler.on_error(&error).await;
@@ -1919,8 +1917,7 @@ impl TokioClientWorker {
 
         if command.qos > 0 {
             let session = self.session.as_mut().ok_or_else(|| {
-                io::Error::new(
-                    io::ErrorKind::Other,
+                io::Error::other(
                     "No active session available for QoS publish",
                 )
             })?;
@@ -2163,7 +2160,6 @@ impl TokioClientWorker {
                     if let Err(e) = self.send_packet_to_broker(&packet).await {
                         self.event_handler.on_error(&e).await;
                         self.handle_connection_lost().await;
-                        return;
                     }
                 }
             }
@@ -2214,7 +2210,6 @@ impl TokioClientWorker {
                     if let Err(e) = self.send_packet_to_broker(&ack).await {
                         self.event_handler.on_error(&e).await;
                         self.handle_connection_lost().await;
-                        return;
                     }
                 }
             }

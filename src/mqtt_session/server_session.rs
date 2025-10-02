@@ -68,7 +68,7 @@ impl ServerSession {
     pub fn handle_incoming_publish(&mut self, publish: MqttPublish) -> Option<MqttPacket> {
         // TODO: Implement topic matching logic here.
         // For now, we will just queue the message for all subscribers.
-        for (_topic_filter, _subscription) in &self.subscriptions {
+        for _subscription in self.subscriptions.values() {
             self.pending_publishes.push(publish.clone());
         }
 

@@ -186,7 +186,7 @@ impl AsyncMqttClient {
             .spawn(move || {
                 worker.run();
             })
-            .map_err(|e| io::Error::new(io::ErrorKind::Other, e))?;
+            .map_err(io::Error::other)?;
 
         Ok(AsyncMqttClient {
             command_tx,
@@ -256,7 +256,7 @@ impl AsyncMqttClient {
         if let Some(handle) = self.worker_handle.take() {
             handle
                 .join()
-                .map_err(|_| io::Error::new(io::ErrorKind::Other, "Worker thread panicked"))?;
+                .map_err(|_| io::Error::other("Worker thread panicked"))?;
         }
 
         Ok(())

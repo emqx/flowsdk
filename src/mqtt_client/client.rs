@@ -159,7 +159,7 @@ pub struct PublishResult {
 
 impl PublishResult {
     pub fn is_success(&self) -> bool {
-        self.reason_code.map_or(true, |code| code == 0) // QoS 0 or reason code 0
+        self.reason_code.is_none_or(|code| code == 0) // QoS 0 or reason code 0
     }
 }
 
@@ -316,8 +316,7 @@ impl MqttClient {
                         });
                     }
                     _ => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::Other,
+                        return Err(io::Error::other(
                             "Expected CONNACK packet",
                         ));
                     }
@@ -370,7 +369,7 @@ impl MqttClient {
                 }
             }
         } else {
-            return Err(io::Error::new(io::ErrorKind::Other, "No active session"));
+            return Err(io::Error::other("No active session"));
         }
 
         Err(io::Error::new(
@@ -413,7 +412,7 @@ impl MqttClient {
                 }
             }
         } else {
-            return Err(io::Error::new(io::ErrorKind::Other, "No active session"));
+            return Err(io::Error::other("No active session"));
         }
 
         Err(io::Error::new(
@@ -454,21 +453,21 @@ impl MqttClient {
             // Handle PUBACK/PUBREC response for QoS 1/2 if needed
             match qos {
                 1 => {
-                    return self.receive_for_puback(packet_id);
+                    self.receive_for_puback(packet_id)
                 }
-                2 => return Ok(self.handle_qos2(packet_id)?),
+                2 => self.handle_qos2(packet_id),
                 _ => {
                     // QoS 0, no acknowledgment needed
-                    return Ok(PublishResult {
+                    Ok(PublishResult {
                         packet_id,
                         reason_code: None,
                         properties: None,
                         qos,
-                    });
+                    })
                 }
             }
         } else {
-            return Err(io::Error::new(io::ErrorKind::Other, "No active session"));
+            Err(io::Error::other("No active session"))
         }
     }
 
@@ -612,7 +611,7 @@ impl MqttClient {
 
             Ok(packet_id)
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "No active session"))
+            Err(io::Error::other("No active session"))
         }
     }
 
@@ -638,7 +637,7 @@ impl MqttClient {
 
             Ok(packet_id)
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "No active session"))
+            Err(io::Error::other("No active session"))
         }
     }
 
@@ -683,7 +682,7 @@ impl MqttClient {
 
             Ok(packet_id)
         } else {
-            Err(io::Error::new(io::ErrorKind::Other, "No active session"))
+            Err(io::Error::other("No active session"))
         }
     }
 
