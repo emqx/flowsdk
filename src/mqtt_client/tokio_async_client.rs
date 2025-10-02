@@ -824,8 +824,7 @@ impl TokioClientWorker {
                 return false; // Exit event loop
             }
             TokioClientCommand::SetAutoReconnect { enabled } => {
-                // Update auto reconnect setting
-                let _ = enabled; // TODO: Update config
+                self.config.auto_reconnect = enabled;
             }
             TokioClientCommand::SendPacket(packet) => {
                 if let Err(e) = self.send_packet_to_broker(&packet).await {
@@ -1547,6 +1546,11 @@ impl TokioClientWorker {
     /// Schedule reconnection attempt
     // @TODO: Implement exponential backoff and max attempts with timer
     async fn schedule_reconnect(&mut self) {
+        // Early exit if auto-reconnect was disabled during sleep
+        if !self.config.auto_reconnect {
+            return;
+        }
+
         if self.config.max_reconnect_attempts > 0
             && self.reconnect_attempts >= self.config.max_reconnect_attempts
         {
