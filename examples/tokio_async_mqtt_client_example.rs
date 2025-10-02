@@ -160,7 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         peer: "localhost:1883".to_string(),
         client_id: "tokio_async_example_client".to_string(),
         clean_start: true,
-        keep_alive: 60,
+        keep_alive: 10,
         username: None,
         password: None,
         will: None,
@@ -182,7 +182,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         send_buffer_size: 1000,
         recv_buffer_size: 1000,
         keep_alive_interval: 60,
-        tcp_nodelay: true,
+        tcp_nodelay: false,
     };
 
     let context = Arc::new(Mutex::new(None::<u16>));
@@ -248,8 +248,24 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         Err(_) => println!("⚠️  Timeout waiting for acknowledgment"),
     }
 
+    // Now testing the keep-alive and auto-reconnect features
+    tokio::time::sleep(Duration::from_secs(20)).await;
+
+    client
+        .publish("tokio/async/test", b"Async message with QoS 2", 2, true)
+        .await?;
+
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    client
+        .publish("tokio/async/test", b"Async message with QoS 2", 2, true)
+        .await?;
+
+    tokio::time::sleep(Duration::from_secs(20)).await;
+
     println!("👋 Disconnecting...");
     client.disconnect().await?;
+
+    tokio::time::sleep(Duration::from_secs(20)).await;
 
     println!("🛑 Shutting down client...");
     client.shutdown().await?;
