@@ -24,7 +24,7 @@ pub struct MqttClientOptions {
     /// - None or 0: Session expires immediately on disconnect
     /// - Some(n): Session persists for n seconds after disconnect
     /// - Some(0xFFFFFFFF): Session never expires (maximum value)
-    /// Default: None (expires immediately)
+    ///   Default: None (expires immediately)
     pub session_expiry_interval: Option<u32>,
 }
 

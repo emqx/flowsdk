@@ -32,7 +32,7 @@ impl TokioMqttEventHandler for BuilderExampleHandler {
         eprintln!("⚠️  Error: {}", error);
     }
 }
-
+#[allow(clippy::field_reassign_with_default)]
 #[tokio::main]
 async fn main() -> io::Result<()> {
     println!("🚀 MQTT Client Options Builder Pattern Examples\n");
@@ -118,7 +118,7 @@ async fn main() -> io::Result<()> {
     println!("\n📋 Example 5: Using Default + Modifications");
     println!("{}", "-".repeat(60));
     let mut options_default = MqttClientOptions::default();
-    options_default.peer = "mqtt.example.com:8883".to_string();
+    options_default.peer = "localhost:8883".to_string();
     options_default.client_id = "modified_default_client".to_string();
 
     println!("Peer: {}", options_default.peer);

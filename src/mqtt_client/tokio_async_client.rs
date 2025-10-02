@@ -10,7 +10,6 @@ use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, error::TryRecvError, error::TrySendError, Receiver};
 use tokio::sync::oneshot;
 use tokio::time::Sleep;
-use tokio_stream::wrappers::ReceiverStream;
 
 use crate::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket};
 use crate::mqtt_serde::mqttv5::{
@@ -232,6 +231,7 @@ impl UnsubscribeCommand {
 }
 
 /// Commands that can be sent to the async worker
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 enum TokioClientCommand {
     /// Connect to the broker
@@ -379,16 +379,11 @@ impl AsyncEgressStream {
         }
     }
 
+    #[allow(clippy::wrong_self_convention)]
     fn take_receiver(&mut self) -> Receiver<Vec<u8>> {
         self.receiver.take().expect("egress receiver already taken")
     }
 
-    #[allow(dead_code)]
-    fn into_stream(&mut self) -> ReceiverStream<Vec<u8>> {
-        ReceiverStream::new(self.take_receiver())
-    }
-
-    #[allow(dead_code)]
     fn capacity(&self) -> usize {
         self.capacity
     }
@@ -421,44 +416,35 @@ impl AsyncIngressStream {
             .expect("ingress receiver already taken")
     }
 
-    #[allow(dead_code)]
-    fn into_stream(&mut self) -> ReceiverStream<MqttPacket> {
-        ReceiverStream::new(self.take_receiver())
-    }
-
     /// Push raw transport bytes, parse MQTT packets, and forward to consumers.
     fn push_raw_data(&mut self, data: &[u8], mqtt_version: u8) -> io::Result<()> {
         self.raw_buffer.extend_from_slice(data);
         self.flush_pending()?;
 
-        loop {
-            match self.try_parse_next_packet(mqtt_version)? {
-                Some((packet, consumed)) => match self.sender.try_send(packet) {
-                    Ok(()) => {
-                        self.raw_buffer.advance(consumed);
-                    }
-                    Err(TrySendError::Full(packet)) => {
-                        if self.pending_packets.len() >= self.max_pending {
-                            return Err(io::Error::new(
-                                io::ErrorKind::WouldBlock,
-                                "Ingress buffer full",
-                            ));
-                        }
-                        self.pending_packets.push_back(packet);
-                        self.raw_buffer.advance(consumed);
-                        break;
-                    }
-                    Err(TrySendError::Closed(_)) => {
+        while let Some((packet, consumed)) = self.try_parse_next_packet(mqtt_version)? {
+            match self.sender.try_send(packet) {
+                Ok(()) => {
+                    self.raw_buffer.advance(consumed);
+                }
+                Err(TrySendError::Full(packet)) => {
+                    if self.pending_packets.len() >= self.max_pending {
                         return Err(io::Error::new(
-                            io::ErrorKind::BrokenPipe,
-                            "Ingress stream closed",
+                            io::ErrorKind::WouldBlock,
+                            "Ingress buffer full",
                         ));
                     }
-                },
-                None => break,
+                    self.pending_packets.push_back(packet);
+                    self.raw_buffer.advance(consumed);
+                    break;
+                }
+                Err(TrySendError::Closed(_)) => {
+                    return Err(io::Error::new(
+                        io::ErrorKind::BrokenPipe,
+                        "Ingress stream closed",
+                    ));
+                }
             }
         }
-
         Ok(())
     }
 

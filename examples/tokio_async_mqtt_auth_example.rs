@@ -27,10 +27,6 @@ impl AuthExampleHandler {
             auth_step: Arc::new(Mutex::new(0)),
         }
     }
-
-    fn set_client(&mut self, client: Arc<TokioAsyncMqttClient>) {
-        self.client = Some(client);
-    }
 }
 
 #[async_trait::async_trait]
@@ -148,7 +144,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Create event handler
     let handler = AuthExampleHandler::new();
-    let handler_clone = handler.clone();
 
     // Create the async MQTT client
     println!("📡 Creating MQTT client...");
