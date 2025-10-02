@@ -1,13 +1,14 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::io::{self, ErrorKind};
-use std::time::Duration;
+use std::pin::Pin;
+use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, error::TryRecvError, error::TrySendError, Receiver};
-use tokio::time::{Interval, MissedTickBehavior};
+use tokio::time::Sleep;
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket};
@@ -663,10 +664,12 @@ struct TokioClientWorker {
     pending_unsubscribes: HashMap<u16, Vec<String>>,
     /// Client session for packet IDs
     session: Option<ClientSession>,
-    /// Keep alive timer
-    keep_alive_timer: Option<Interval>,
+    /// Keep alive timer (dynamic sleep based on last packet sent)
+    keep_alive_timer: Option<Pin<Box<Sleep>>>,
     /// MQTT protocol version (3, 4, or 5)
     mqtt_version: u8,
+    /// Last time any control packet was SENT (for keep-alive compliance)
+    last_packet_sent: Instant,
 }
 
 impl TokioClientWorker {
@@ -693,6 +696,7 @@ impl TokioClientWorker {
             session: None,
             keep_alive_timer: None,
             mqtt_version: 5, // Default to MQTT v5.0, will be auto-detected from first packet
+            last_packet_sent: Instant::now(),
         }
     }
 
@@ -783,7 +787,7 @@ impl TokioClientWorker {
                 // Keep alive timer - only when connected and timer exists
                 _ = async {
                     if let Some(ref mut timer) = self.keep_alive_timer {
-                        timer.tick().await;
+                        timer.as_mut().await;
                         true
                     } else {
                         std::future::pending::<bool>().await
@@ -856,7 +860,12 @@ impl TokioClientWorker {
 
     async fn write_to_transport(&mut self, frame: &[u8]) -> io::Result<()> {
         if let Some(stream) = &mut self.stream {
-            stream.write_all(frame).await
+            let result = stream.write_all(frame).await;
+            if result.is_ok() {
+                // Update last send time for keep-alive tracking
+                self.last_packet_sent = Instant::now();
+            }
+            result
         } else {
             Err(io::Error::new(
                 io::ErrorKind::NotConnected,
@@ -865,13 +874,70 @@ impl TokioClientWorker {
         }
     }
 
-    /// Check keep alive timer without blocking
+    /// Check keep alive and send PINGREQ if needed
+    ///
+    /// MQTT Keep-Alive Specification:
+    /// - The client MUST send a control packet within the Keep Alive period
+    /// - ANY control packet counts (PUBLISH, SUBSCRIBE, PUBACK, etc.)
+    /// - PINGREQ is only sent if NO other packet was sent during the period
+    /// - The broker will disconnect if it doesn't receive ANY packet within 1.5x Keep Alive
     async fn check_keep_alive(&mut self) {
-        // Simple keep alive check - in a real implementation,
-        // you'd track the last activity time and send ping if needed
-        if self.is_connected {
-            // For now, just a placeholder
+        if !self.is_connected || self.options.keep_alive == 0 {
+            return;
         }
+
+        let keep_alive_duration = Duration::from_secs(self.options.keep_alive as u64);
+        let time_since_last_send = self.last_packet_sent.elapsed();
+
+        // Only send PINGREQ if we haven't sent ANY packet within the keep-alive period
+        if time_since_last_send >= keep_alive_duration {
+            // Send PINGREQ to satisfy keep-alive requirement
+            let pingreq = pingreqv5::MqttPingReq::new();
+            match pingreq.to_bytes() {
+                Ok(bytes) => {
+                    if let Err(e) = self.streams.send_egress(bytes).await {
+                        self.event_handler.on_error(&e).await;
+                        self.handle_connection_lost().await;
+                        return; // Don't reset timer if connection lost
+                    }
+                    // last_packet_sent will be updated in write_to_transport
+                }
+                Err(err) => {
+                    let error = io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("Failed to serialize PINGREQ: {:?}", err),
+                    );
+                    self.event_handler.on_error(&error).await;
+                    return; // Don't reset timer on error
+                }
+            }
+        }
+
+        // Reset timer based on time remaining until next keep-alive check
+        self.reset_keep_alive_timer();
+    }
+
+    /// Reset the keep-alive timer based on when we last sent a packet
+    fn reset_keep_alive_timer(&mut self) {
+        if self.options.keep_alive == 0 {
+            return;
+        }
+
+        let keep_alive_duration = Duration::from_secs(self.options.keep_alive as u64);
+        let time_since_last_send = self.last_packet_sent.elapsed();
+
+        // Calculate when we need to check again
+        // If we just sent a packet (including PINGREQ), schedule for full keep-alive duration
+        let time_until_next_check = if time_since_last_send < keep_alive_duration {
+            // Schedule for when keep-alive period expires
+            keep_alive_duration - time_since_last_send
+        } else {
+            // Edge case: already past keep-alive (shouldn't happen normally)
+            // Check immediately by using a very small duration
+            Duration::from_millis(100)
+        };
+
+        self.keep_alive_timer = Some(Box::pin(tokio::time::sleep(time_until_next_check)));
     }
 
     /// Handle connecting to broker
@@ -938,14 +1004,11 @@ impl TokioClientWorker {
                 self.is_connected = true;
                 self.mqtt_version = 5; // currently only MQTT v5 is supported in async client
 
-                if self.options.keep_alive > 0 {
-                    let mut timer =
-                        tokio::time::interval(Duration::from_secs(self.options.keep_alive as u64));
-                    timer.set_missed_tick_behavior(MissedTickBehavior::Delay);
-                    self.keep_alive_timer = Some(timer);
-                } else {
-                    self.keep_alive_timer = None;
-                }
+                // Reset send tracking for keep-alive
+                self.last_packet_sent = Instant::now();
+
+                // Set up dynamic keep-alive timer
+                self.reset_keep_alive_timer();
 
                 if self.config.buffer_messages {
                     self.flush_message_buffer().await;
@@ -1236,15 +1299,6 @@ impl TokioClientWorker {
             } else {
                 break;
             }
-        }
-    }
-
-    /// Handle keep alive timer
-    #[allow(dead_code)]
-    async fn handle_keep_alive(&mut self) {
-        if self.is_connected {
-            // Send ping
-            println!("TokioAsync: Sending keep alive ping");
         }
     }
 
