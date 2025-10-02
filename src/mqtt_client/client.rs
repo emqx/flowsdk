@@ -316,9 +316,7 @@ impl MqttClient {
                         });
                     }
                     _ => {
-                        return Err(io::Error::other(
-                            "Expected CONNACK packet",
-                        ));
+                        return Err(io::Error::other("Expected CONNACK packet"));
                     }
                 }
             }
@@ -452,9 +450,7 @@ impl MqttClient {
 
             // Handle PUBACK/PUBREC response for QoS 1/2 if needed
             match qos {
-                1 => {
-                    self.receive_for_puback(packet_id)
-                }
+                1 => self.receive_for_puback(packet_id),
                 2 => self.handle_qos2(packet_id),
                 _ => {
                     // QoS 0, no acknowledgment needed
