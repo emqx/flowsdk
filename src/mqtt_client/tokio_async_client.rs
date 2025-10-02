@@ -13,6 +13,7 @@ use tokio_stream::wrappers::ReceiverStream;
 
 use crate::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket};
 use crate::mqtt_serde::mqttv5::{
+    authv5,
     common::properties::Property,
     connectv5, disconnectv5, pingreqv5, pingrespv5,
     pubackv5::MqttPubAck,
@@ -27,7 +28,7 @@ use crate::mqtt_serde::parser::{ParseError, ParseOk};
 use crate::mqtt_session::ClientSession;
 
 use super::client::{
-    ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
+    AuthResult, ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
 };
 use super::opts::MqttClientOptions;
 
@@ -60,6 +61,8 @@ pub enum TokioMqttEvent {
     PendingOperationsCleared,
     /// Parse error occurred
     ParseError(String),
+    /// Authentication challenge or response received (MQTT v5 enhanced auth)
+    AuthReceived(AuthResult),
 }
 
 /// Trait for handling MQTT events in async context
@@ -120,6 +123,12 @@ pub trait TokioMqttEventHandler: Send + Sync {
 
     /// Called when pending operations are cleared (usually on reconnect)
     async fn on_pending_operations_cleared(&mut self) {}
+
+    /// Called when AUTH packet is received from broker (MQTT v5 enhanced authentication)
+    /// This is used for multi-step authentication like SCRAM, OAuth, or custom auth
+    async fn on_auth_received(&mut self, result: &AuthResult) {
+        let _ = result;
+    }
 }
 
 /// Fully customizable publish command for MQTT v5
@@ -242,6 +251,11 @@ enum TokioClientCommand {
     SetAutoReconnect { enabled: bool },
     /// Send a raw MQTT packet directly
     SendPacket(MqttPacket),
+    /// Send AUTH packet for enhanced authentication (MQTT v5)
+    Auth {
+        reason_code: u8,
+        properties: Vec<Property>,
+    },
 }
 
 /// Configuration for the tokio async client
@@ -627,6 +641,31 @@ impl TokioAsyncMqttClient {
             .await
     }
 
+    /// Send AUTH packet for enhanced authentication (MQTT v5)
+    ///
+    /// Used for multi-step authentication protocols like SCRAM, OAuth, Kerberos, etc.
+    ///
+    /// # Arguments
+    /// * `reason_code` - Authentication reason code (0x00 = Success, 0x18 = Continue, 0x19 = Re-authenticate)
+    /// * `properties` - Authentication properties (typically AuthenticationMethod and AuthenticationData)
+    pub async fn auth(&self, reason_code: u8, properties: Vec<Property>) -> io::Result<()> {
+        self.send_command(TokioClientCommand::Auth {
+            reason_code,
+            properties,
+        })
+        .await
+    }
+
+    /// Send AUTH packet to continue authentication (reason code 0x18)
+    pub async fn auth_continue(&self, properties: Vec<Property>) -> io::Result<()> {
+        self.auth(0x18, properties).await
+    }
+
+    /// Send AUTH packet to re-authenticate (reason code 0x19)
+    pub async fn auth_re_authenticate(&self, properties: Vec<Property>) -> io::Result<()> {
+        self.auth(0x19, properties).await
+    }
+
     /// Send a command to the worker task
     async fn send_command(&self, command: TokioClientCommand) -> io::Result<()> {
         self.command_tx.send(command).await.map_err(|_| {
@@ -830,6 +869,12 @@ impl TokioClientWorker {
                 if let Err(e) = self.send_packet_to_broker(&packet).await {
                     self.event_handler.on_error(&e).await;
                 }
+            }
+            TokioClientCommand::Auth {
+                reason_code,
+                properties,
+            } => {
+                self.handle_auth(reason_code, properties).await;
             }
         }
         true
@@ -1186,6 +1231,35 @@ impl TokioClientWorker {
         }
     }
 
+    /// Handle AUTH command for enhanced authentication (MQTT v5)
+    async fn handle_auth(&mut self, reason_code: u8, properties: Vec<Property>) {
+        if self.stream.is_none() {
+            let error = io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Cannot send AUTH while disconnected",
+            );
+            self.event_handler.on_error(&error).await;
+            return;
+        }
+
+        let auth_packet = authv5::MqttAuth::new(reason_code, properties);
+
+        match auth_packet.to_bytes() {
+            Ok(bytes) => {
+                if let Err(e) = self.streams.send_egress(bytes).await {
+                    self.event_handler.on_error(&e).await;
+                }
+            }
+            Err(err) => {
+                let error = io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    format!("Failed to serialize AUTH packet: {:?}", err),
+                );
+                self.event_handler.on_error(&error).await;
+            }
+        }
+    }
+
     /// Handle disconnect command
     async fn handle_disconnect(&mut self) {
         if self.stream.is_none() {
@@ -1519,6 +1593,18 @@ impl TokioClientWorker {
                     self.event_handler.on_error(&e).await;
                     self.handle_connection_lost().await;
                 }
+            }
+            MqttPacket::Auth(auth) => {
+                // Handle incoming AUTH packet from broker (enhanced authentication)
+                let result = AuthResult {
+                    reason_code: auth.reason_code,
+                    properties: auth.properties.clone(),
+                };
+
+                self.event_handler.on_auth_received(&result).await;
+
+                // Note: Application is responsible for responding with appropriate AUTH packet
+                // via client.auth() or client.auth_continue() based on authentication method
             }
             other => {
                 // For unhandled packets, just log for now

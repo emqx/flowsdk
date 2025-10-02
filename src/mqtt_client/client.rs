@@ -85,6 +85,39 @@ impl ConnectionResult {
 }
 
 #[derive(Debug, Clone)]
+pub struct AuthResult {
+    pub reason_code: u8,
+    pub properties: Vec<Property>,
+}
+
+impl AuthResult {
+    /// Returns true if authentication was successful (reason code 0x00)
+    pub fn is_success(&self) -> bool {
+        self.reason_code == 0x00
+    }
+
+    /// Returns true if authentication requires continuation (reason code 0x18)
+    pub fn is_continue(&self) -> bool {
+        self.reason_code == 0x18
+    }
+
+    /// Returns true if re-authentication is requested (reason code 0x19)
+    pub fn is_re_authenticate(&self) -> bool {
+        self.reason_code == 0x19
+    }
+
+    /// Returns a description of the authentication reason code
+    pub fn reason_description(&self) -> &'static str {
+        match self.reason_code {
+            0x00 => "Success",
+            0x18 => "Continue authentication",
+            0x19 => "Re-authenticate",
+            _ => "Unknown authentication reason code",
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct SubscribeResult {
     pub packet_id: u16,
     pub reason_codes: Vec<u8>,
