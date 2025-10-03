@@ -1,10 +1,28 @@
 # flowSDK
 
-The developer toolkit for modern 
+A safty first messaging SDK for building messaging components for different scenarios.
+
+- Pub/Sub
+- Request/Response
+- Streaming
+- Peer-to-Peer
+- Push and Pull
+- QoS Policies
+- Multi-Protocol Support
+
+You can use flowSDK to build:
+
+1. Clients
+2. Servers 
+3. Proxies
+4. Firewalls
+5. And more...
+
+Security-first with well-defined behaviors. 
 
 ## Current Status
 
-Developing in private REPO.
+Preview
 
 ## Project Structure
 
@@ -145,4 +163,4 @@ This implementation follows the MQTT v5.0 specification with:
 
 ## License
 
-[Add your license information here]
+see [[LICENSE]]
