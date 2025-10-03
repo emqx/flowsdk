@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["mqtt_serde"]};
+window.SIDEBAR_ITEMS = {"mod":["mqtt_client","mqtt_serde","mqtt_session"]};

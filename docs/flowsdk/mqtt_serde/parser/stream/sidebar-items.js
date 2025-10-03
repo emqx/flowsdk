@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["MqttParser"]};
+window.SIDEBAR_ITEMS = {"struct":["MqttParser","MqttStream"]};
