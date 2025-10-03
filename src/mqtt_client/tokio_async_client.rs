@@ -329,10 +329,8 @@ impl Default for TokioAsyncClientConfig {
 
 /// Async stream for outbound MQTT frame bytes.
 struct AsyncEgressStream {
-    #[allow(dead_code)]
     sender: mpsc::Sender<Vec<u8>>,
     receiver: Option<Receiver<Vec<u8>>>,
-    #[allow(dead_code)]
     capacity: usize,
 }
 
@@ -2350,7 +2348,6 @@ impl TokioClientWorker {
     }
 
     /// Schedule reconnection attempt
-    // @TODO: Implement exponential backoff and max attempts with timer
     async fn schedule_reconnect(&mut self) {
         // Early exit if auto-reconnect was disabled during sleep
         if !self.config.auto_reconnect {

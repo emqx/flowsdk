@@ -39,17 +39,14 @@ impl ClientSession {
     }
 
     pub fn next_packet_id(&mut self) -> u16 {
-        if self.packet_id_counter == u16::MAX || self.packet_id_counter == 0 {
-            // When the counter is at the maximum value or uninitialized (0), wrap to 1
-            self.packet_id_counter = 1;
-        } else {
-            self.packet_id_counter = self.packet_id_counter.wrapping_add(1);
-
-            if self.packet_id_counter == 0 {
-                // Ensure packet identifier never becomes 0 after wrapping addition
-                self.packet_id_counter = 1;
-            }
-        }
+        // MQTT spec: packet identifier must be non-zero (1-65535)
+        // When at MAX or uninitialized (0), wrap to 1
+        self.packet_id_counter =
+            if self.packet_id_counter == u16::MAX || self.packet_id_counter == 0 {
+                1
+            } else {
+                self.packet_id_counter + 1
+            };
 
         self.packet_id_counter
     }
