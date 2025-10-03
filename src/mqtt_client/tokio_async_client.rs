@@ -629,10 +629,17 @@ impl TokioAsyncMqttClient {
     ///
     /// # Example
     /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
     /// # use tokio;
     /// # use std::time::Duration;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
     /// # async fn example() -> std::io::Result<()> {
-    /// # let client = todo!();
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// // Simple sync publish
     /// let result = client.publish_sync("sensors/temp", b"23.5", 2, false).await?;
     /// println!("Published with packet ID: {:?}", result.packet_id);
@@ -765,8 +772,15 @@ impl TokioAsyncMqttClient {
     ///
     /// # Example
     /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
     /// # async fn example() -> std::io::Result<()> {
-    /// # let client = todo!();
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// let result = client.connect_sync().await?;
     /// if result.is_success() {
     ///     println!("Connected! Session present: {}", result.session_present);
@@ -801,8 +815,15 @@ impl TokioAsyncMqttClient {
     ///
     /// # Example
     /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
     /// # async fn example() -> std::io::Result<()> {
-    /// # let client = todo!();
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// let result = client.subscribe_sync("sensors/#", 1).await?;
     /// println!("Subscribed with QoS: {:?}", result.reason_codes);
     /// # Ok(())
@@ -846,8 +867,15 @@ impl TokioAsyncMqttClient {
     ///
     /// # Example
     /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
     /// # async fn example() -> std::io::Result<()> {
-    /// # let client = todo!();
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// let result = client.unsubscribe_sync(vec!["sensors/#"]).await?;
     /// println!("Unsubscribed: packet_id={:?}", result.packet_id);
     /// # Ok(())
@@ -889,10 +917,17 @@ impl TokioAsyncMqttClient {
     ///
     /// # Example
     /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
     /// # use tokio;
     /// # use std::time::Duration;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
     /// # async fn example() -> std::io::Result<()> {
-    /// # let client = todo!();
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// // Check connection with timeout
     /// match tokio::time::timeout(
     ///     Duration::from_secs(5),
@@ -936,10 +971,17 @@ impl TokioAsyncMqttClient {
     ///
     /// # Example
     /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
     /// # use tokio;
     /// # use std::time::Duration;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
     /// # async fn example() -> std::io::Result<()> {
-    /// # let client = todo!();
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// // Simple sync publish
     /// let result = client.publish_sync("sensors/temp", b"23.5", 2, false).await?;
     /// println!("Published with packet ID: {:?}", result.packet_id);
