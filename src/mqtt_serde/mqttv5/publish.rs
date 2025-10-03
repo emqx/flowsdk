@@ -38,9 +38,24 @@ impl MqttPublish {
         }
     }
 
-    pub fn properties(&self) -> Vec<u8> {
-        //@TODO: implement properties
-        Vec::new()
+    pub fn new_with_prop(
+        qos: u8,
+        topic_name: String,
+        packet_id: Option<u16>,
+        payload: Vec<u8>,
+        retain: bool,
+        dup: bool,
+        properties: Vec<Property>,
+    ) -> Self {
+        MqttPublish {
+            topic_name,
+            packet_id,
+            payload,
+            qos,
+            dup,
+            retain,
+            properties,
+        }
     }
 
     fn qos(flags: u8) -> u8 {
