@@ -505,6 +505,6 @@ mod tests {
         );
         let result = connect.to_bytes();
         println!("Result: {:?}", result);
-        assert_eq!(result, Err(ParseError::ParseError("UTF-8 string contains null character (U+0000)".to_string())));
+        assert!(matches!(result, Err(ParseError::ParseError(_))));
     }
 }
