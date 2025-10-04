@@ -116,6 +116,11 @@ pub trait TokioMqttEventHandler: Send + Sync {
         let _ = error;
     }
 
+    /// Called when a parse error occurs with raw packet data for debugging
+    async fn on_parse_error(&mut self, raw_data: &[u8], error: &ParseError, recoverable: bool) {
+        let _ = (raw_data, error, recoverable);
+    }
+
     /// Called when TLS peer certificate is received (for custom validation)
     async fn on_peer_cert_received(&mut self, cert: &[u8]) {
         let _ = cert;
@@ -423,7 +428,7 @@ impl AsyncIngressStream {
     }
 
     /// Push raw transport bytes, parse MQTT packets, and forward to consumers.
-    fn push_raw_data(&mut self, data: &[u8], mqtt_version: u8) -> io::Result<()> {
+    fn push_raw_data(&mut self, data: &[u8], mqtt_version: u8) -> Result<(), MqttClientError> {
         self.raw_buffer.extend_from_slice(data);
         self.flush_pending()?;
 
@@ -434,20 +439,19 @@ impl AsyncIngressStream {
                 }
                 Err(TrySendError::Full(packet)) => {
                     if self.pending_packets.len() >= self.max_pending {
-                        return Err(io::Error::new(
-                            io::ErrorKind::WouldBlock,
-                            "Ingress buffer full",
-                        ));
+                        return Err(MqttClientError::BufferFull {
+                            buffer_type: "ingress buffer".to_string(),
+                            capacity: self.max_pending,
+                        });
                     }
                     self.pending_packets.push_back(packet);
                     self.raw_buffer.advance(consumed);
                     break;
                 }
                 Err(TrySendError::Closed(_)) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "Ingress stream closed",
-                    ));
+                    return Err(MqttClientError::ChannelClosed {
+                        channel: "ingress stream".to_string(),
+                    });
                 }
             }
         }
@@ -455,7 +459,7 @@ impl AsyncIngressStream {
     }
 
     /// Allow consumers to wake pending packets after they drain channel capacity.
-    fn flush_pending(&mut self) -> io::Result<()> {
+    fn flush_pending(&mut self) -> Result<(), MqttClientError> {
         while let Some(packet) = self.pending_packets.pop_front() {
             match self.sender.try_send(packet) {
                 Ok(()) => continue,
@@ -464,17 +468,19 @@ impl AsyncIngressStream {
                     break;
                 }
                 Err(TrySendError::Closed(_)) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "Ingress stream closed",
-                    ));
+                    return Err(MqttClientError::ChannelClosed {
+                        channel: "ingress stream".to_string(),
+                    });
                 }
             }
         }
         Ok(())
     }
 
-    fn try_parse_next_packet(&self, mqtt_version: u8) -> io::Result<Option<(MqttPacket, usize)>> {
+    fn try_parse_next_packet(
+        &self,
+        mqtt_version: u8,
+    ) -> Result<Option<(MqttPacket, usize)>, MqttClientError> {
         if self.raw_buffer.is_empty() {
             return Ok(None);
         }
@@ -482,17 +488,20 @@ impl AsyncIngressStream {
         match MqttPacket::from_bytes_with_version(&self.raw_buffer[..], mqtt_version) {
             Ok(ParseOk::Packet(packet, consumed)) => Ok(Some((packet, consumed))),
             Ok(ParseOk::Continue(_, _)) => Ok(None),
-            Ok(ParseOk::TopicName(_, _)) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Unexpected ParseOk variant: TopicName",
-            )),
+            Ok(ParseOk::TopicName(_, _)) => Err(MqttClientError::ProtocolViolation {
+                message: "Unexpected ParseOk variant: TopicName".to_string(),
+            }),
             Err(ParseError::More(_, _))
             | Err(ParseError::BufferTooShort)
-            | Err(ParseError::BufferEmpty) => Ok(None),
-            Err(e) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("MQTT packet parsing failed: {:?}", e),
-            )),
+            | Err(ParseError::BufferEmpty) => Ok(None), // Need more data
+            Err(e) => {
+                // Capture raw data for debugging (first 100 bytes)
+                let raw_data = self.raw_buffer.iter().take(100).copied().collect();
+                Err(MqttClientError::PacketParsing {
+                    parse_error: format!("{:?}", e),
+                    raw_data,
+                })
+            }
         }
     }
 }
@@ -525,11 +534,11 @@ impl AsyncMQTTStreams {
         self.egress.send_bytes(bytes).await
     }
 
-    fn push_ingress_data(&mut self, data: &[u8], mqtt_version: u8) -> io::Result<()> {
+    fn push_ingress_data(&mut self, data: &[u8], mqtt_version: u8) -> Result<(), MqttClientError> {
         self.ingress.push_raw_data(data, mqtt_version)
     }
 
-    fn flush_ingress_pending(&mut self) -> io::Result<()> {
+    fn flush_ingress_pending(&mut self) -> Result<(), MqttClientError> {
         self.ingress.flush_pending()
     }
 
@@ -1112,8 +1121,7 @@ impl TokioClientWorker {
                 // EGRESS: Drain channel data and write to the transport
                 frame = egress_rx.recv() => {
                     if let Some(frame) = frame {
-                        if let Err(e) = self.handle_egress_frame(frame, &mut egress_rx).await {
-                            let mqtt_err = MqttClientError::from_io_error(e, "egress frame write");
+                        if let Err(mqtt_err) = self.handle_egress_frame(frame, &mut egress_rx).await {
                             self.event_handler.on_error(&mqtt_err).await;
                             self.handle_connection_lost().await;
                             continue;
@@ -1141,8 +1149,17 @@ impl TokioClientWorker {
                 } => {
                     match read_result {
                         Ok(Some(bytes)) => {
-                            if let Err(e) = self.streams.push_ingress_data(&bytes, self.mqtt_version) {
-                                let mqtt_err = MqttClientError::from_io_error(e, "ingress data push");
+                            if let Err(mqtt_err) = self.streams.push_ingress_data(&bytes, self.mqtt_version) {
+                                // Emit ParseError event if it's a packet parsing error
+                                if let MqttClientError::PacketParsing { parse_error, raw_data } = &mqtt_err {
+                                    let parse_err = ParseError::ParseError(parse_error.clone());
+                                    self.event_handler.on_parse_error(
+                                        raw_data,
+                                        &parse_err,
+                                        mqtt_err.is_recoverable()
+                                    ).await;
+                                }
+
                                 self.event_handler.on_error(&mqtt_err).await;
                                 self.handle_connection_lost().await;
                                 continue;
@@ -1169,8 +1186,7 @@ impl TokioClientWorker {
                 packet = ingress_rx.recv() => {
                     if let Some(packet) = packet {
                         self.handle_mqtt_packet(packet).await;
-                        if let Err(e) = self.streams.flush_ingress_pending() {
-                            let mqtt_err = MqttClientError::from_io_error(e, "ingress stream flush");
+                        if let Err(mqtt_err) = self.streams.flush_ingress_pending() {
                             self.event_handler.on_error(&mqtt_err).await;
                         }
                     } else {
@@ -1265,7 +1281,7 @@ impl TokioClientWorker {
         &mut self,
         first: Vec<u8>,
         egress_rx: &mut Receiver<Vec<u8>>,
-    ) -> io::Result<()> {
+    ) -> Result<(), MqttClientError> {
         self.write_to_transport(&first).await?;
 
         // Opportunistically drain any additional frames that are ready.
@@ -1282,19 +1298,44 @@ impl TokioClientWorker {
         Ok(())
     }
 
-    async fn write_to_transport(&mut self, frame: &[u8]) -> io::Result<()> {
+    async fn write_to_transport(&mut self, frame: &[u8]) -> Result<(), MqttClientError> {
         if let Some(stream) = &mut self.stream {
-            let result = stream.write_all(frame).await;
-            if result.is_ok() {
-                // Update last send time for keep-alive tracking
-                self.last_packet_sent = Instant::now();
+            match stream.write_all(frame).await {
+                Ok(_) => {
+                    // Update last send time for keep-alive tracking
+                    self.last_packet_sent = Instant::now();
+                    Ok(())
+                }
+                Err(e) => {
+                    // Categorize network errors for better error handling
+                    let error = match e.kind() {
+                        io::ErrorKind::ConnectionReset => MqttClientError::NetworkError {
+                            kind: e.kind(),
+                            message: "Connection reset by peer".to_string(),
+                        },
+                        io::ErrorKind::BrokenPipe => MqttClientError::NetworkError {
+                            kind: e.kind(),
+                            message: "Broken pipe (connection closed)".to_string(),
+                        },
+                        io::ErrorKind::UnexpectedEof => MqttClientError::NetworkError {
+                            kind: e.kind(),
+                            message: "Unexpected end of file".to_string(),
+                        },
+                        io::ErrorKind::ConnectionAborted => MqttClientError::NetworkError {
+                            kind: e.kind(),
+                            message: "Connection aborted".to_string(),
+                        },
+                        io::ErrorKind::TimedOut => MqttClientError::NetworkError {
+                            kind: e.kind(),
+                            message: "Write operation timed out".to_string(),
+                        },
+                        _ => MqttClientError::from_io_error(e, "write_to_transport"),
+                    };
+                    Err(error)
+                }
             }
-            result
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "Transport not connected",
-            ))
+            Err(MqttClientError::NotConnected)
         }
     }
 
