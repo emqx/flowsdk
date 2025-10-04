@@ -14,7 +14,7 @@ use flowsdk::mqtt_client::client::{
 use flowsdk::mqtt_client::tokio_async_client::{
     TokioAsyncClientConfig, TokioAsyncMqttClient, TokioMqttEventHandler,
 };
-use flowsdk::mqtt_client::MqttClientOptions;
+use flowsdk::mqtt_client::{MqttClientError, MqttClientOptions};
 use flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish;
 use std::io;
 use std::sync::Arc;
@@ -82,8 +82,8 @@ impl TokioMqttEventHandler for EventTracker {
         .await;
     }
 
-    async fn on_error(&mut self, error: &io::Error) {
-        self.log(format!("Error: {}", error)).await;
+    async fn on_error(&mut self, error: &MqttClientError) {
+        self.log(format!("Error: {}", error.user_message())).await;
     }
 }
 

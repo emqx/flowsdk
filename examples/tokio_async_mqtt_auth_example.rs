@@ -8,7 +8,7 @@ use flowsdk::mqtt_client::client::{AuthResult, ConnectionResult};
 use flowsdk::mqtt_client::tokio_async_client::{
     TokioAsyncClientConfig, TokioAsyncMqttClient, TokioMqttEventHandler,
 };
-use flowsdk::mqtt_client::MqttClientOptions;
+use flowsdk::mqtt_client::{MqttClientError, MqttClientOptions};
 use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
 use std::sync::Arc;
 use tokio::sync::Mutex;
@@ -116,8 +116,8 @@ impl TokioMqttEventHandler for AuthExampleHandler {
         }
     }
 
-    async fn on_error(&mut self, error: &std::io::Error) {
-        eprintln!("⚠️  Error: {}", error);
+    async fn on_error(&mut self, error: &MqttClientError) {
+        eprintln!("⚠️  Error: {}", error.user_message());
     }
 
     async fn on_connection_lost(&mut self) {

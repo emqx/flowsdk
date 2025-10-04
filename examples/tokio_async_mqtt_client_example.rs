@@ -2,10 +2,10 @@ use flowsdk::mqtt_client::client::{
     ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
 };
 use flowsdk::mqtt_client::{
-    MqttClientOptions, TokioAsyncClientConfig, TokioAsyncMqttClient, TokioMqttEventHandler,
+    MqttClientError, MqttClientOptions, TokioAsyncClientConfig, TokioAsyncMqttClient,
+    TokioMqttEventHandler,
 };
 use flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish;
-use std::io;
 use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration};
 
@@ -131,8 +131,8 @@ impl TokioMqttEventHandler for TokioExampleHandler {
         }
     }
 
-    async fn on_error(&mut self, error: &io::Error) {
-        println!("[{}] ❌ Error: {}", self.name, error);
+    async fn on_error(&mut self, error: &MqttClientError) {
+        println!("[{}] ❌ Error: {}", self.name, error.user_message());
     }
 
     async fn on_connection_lost(&mut self) {
