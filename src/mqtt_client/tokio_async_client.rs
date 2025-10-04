@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{self, ErrorKind};
+use std::io;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
@@ -30,6 +30,7 @@ use crate::mqtt_session::ClientSession;
 use super::client::{
     AuthResult, ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
 };
+use super::error::MqttClientError;
 use super::opts::MqttClientOptions;
 
 /// Events that can occur during MQTT client operation
@@ -49,8 +50,8 @@ pub enum TokioMqttEvent {
     MessageReceived(MqttPublish),
     /// Ping response received
     PingResponse(PingResult),
-    /// Error occurred during operation
-    Error(io::Error),
+    /// Error occurred during operation (enhanced with MqttClientError)
+    Error(MqttClientError),
     /// TLS peer certificate received (for certificate validation)
     PeerCertReceived(Vec<u8>),
     /// Connection lost (will attempt to reconnect if enabled)
@@ -59,8 +60,15 @@ pub enum TokioMqttEvent {
     ReconnectAttempt(u32),
     /// All pending operations cleared (on reconnect with clean_start)
     PendingOperationsCleared,
-    /// Parse error occurred
-    ParseError(String),
+    /// Parse error occurred with details
+    ParseError {
+        /// First 100 bytes of raw data for debugging
+        raw_data: Vec<u8>,
+        /// The parse error that occurred
+        error: ParseError,
+        /// Whether this error is recoverable
+        recoverable: bool,
+    },
     /// Authentication challenge or response received (MQTT v5 enhanced auth)
     AuthReceived(AuthResult),
 }
@@ -103,8 +111,8 @@ pub trait TokioMqttEventHandler: Send + Sync {
         let _ = result;
     }
 
-    /// Called when an error occurs
-    async fn on_error(&mut self, error: &io::Error) {
+    /// Called when an error occurs (enhanced with MqttClientError)
+    async fn on_error(&mut self, error: &MqttClientError) {
         let _ = error;
     }
 
@@ -1105,7 +1113,8 @@ impl TokioClientWorker {
                 frame = egress_rx.recv() => {
                     if let Some(frame) = frame {
                         if let Err(e) = self.handle_egress_frame(frame, &mut egress_rx).await {
-                            self.event_handler.on_error(&e).await;
+                            let mqtt_err = MqttClientError::from_io_error(e, "egress frame write");
+                            self.event_handler.on_error(&mqtt_err).await;
                             self.handle_connection_lost().await;
                             continue;
                         }
@@ -1133,19 +1142,23 @@ impl TokioClientWorker {
                     match read_result {
                         Ok(Some(bytes)) => {
                             if let Err(e) = self.streams.push_ingress_data(&bytes, self.mqtt_version) {
-                                self.event_handler.on_error(&e).await;
+                                let mqtt_err = MqttClientError::from_io_error(e, "ingress data push");
+                                self.event_handler.on_error(&mqtt_err).await;
                                 self.handle_connection_lost().await;
                                 continue;
                             }
                         }
                         Ok(None) => {
-                            let error = io::Error::new(io::ErrorKind::UnexpectedEof, "Connection closed");
-                            self.event_handler.on_error(&error).await;
+                            let mqtt_err = MqttClientError::ConnectionLost {
+                                reason: "Connection closed by server".to_string(),
+                            };
+                            self.event_handler.on_error(&mqtt_err).await;
                             self.handle_connection_lost().await;
                             continue;
                         }
                         Err(e) => {
-                            self.event_handler.on_error(&e).await;
+                            let mqtt_err = MqttClientError::from_io_error(e, "transport read");
+                            self.event_handler.on_error(&mqtt_err).await;
                             self.handle_connection_lost().await;
                             continue;
                         }
@@ -1157,7 +1170,8 @@ impl TokioClientWorker {
                     if let Some(packet) = packet {
                         self.handle_mqtt_packet(packet).await;
                         if let Err(e) = self.streams.flush_ingress_pending() {
-                            self.event_handler.on_error(&e).await;
+                            let mqtt_err = MqttClientError::from_io_error(e, "ingress stream flush");
+                            self.event_handler.on_error(&mqtt_err).await;
                         }
                     } else {
                         break;
@@ -1232,7 +1246,8 @@ impl TokioClientWorker {
             }
             TokioClientCommand::SendPacket(packet) => {
                 if let Err(e) = self.send_packet_to_broker(&packet).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                 }
             }
             TokioClientCommand::Auth {
@@ -1305,18 +1320,18 @@ impl TokioClientWorker {
             match pingreq.to_bytes() {
                 Ok(bytes) => {
                     if let Err(e) = self.streams.send_egress(bytes).await {
-                        self.event_handler.on_error(&e).await;
+                        let mqtt_err = MqttClientError::from_io_error(e, "send keep-alive PINGREQ");
+                        self.event_handler.on_error(&mqtt_err).await;
                         self.handle_connection_lost().await;
                         return; // Don't reset timer if connection lost
                     }
                     // last_packet_sent will be updated in write_to_transport
                 }
                 Err(err) => {
-                    let error = io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("Failed to serialize PINGREQ: {:?}", err),
-                    );
-                    self.event_handler.on_error(&error).await;
+                    let mqtt_err = MqttClientError::ProtocolViolation {
+                        message: format!("Failed to serialize PINGREQ: {:?}", err),
+                    };
+                    self.event_handler.on_error(&mqtt_err).await;
                     return; // Don't reset timer on error
                 }
             }
@@ -1362,7 +1377,8 @@ impl TokioClientWorker {
             Ok(stream) => {
                 if self.config.tcp_nodelay {
                     if let Err(e) = stream.set_nodelay(true) {
-                        self.event_handler.on_error(&e).await;
+                        let mqtt_err = MqttClientError::from_io_error(e, "TCP set_nodelay");
+                        self.event_handler.on_error(&mqtt_err).await;
                     }
                 }
 
@@ -1401,17 +1417,17 @@ impl TokioClientWorker {
                 let connect_bytes = match connect_packet.to_bytes() {
                     Ok(bytes) => bytes,
                     Err(err) => {
-                        let error = io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("Failed to serialize CONNECT packet: {:?}", err),
-                        );
-                        self.event_handler.on_error(&error).await;
+                        let mqtt_err = MqttClientError::ProtocolViolation {
+                            message: format!("Failed to serialize CONNECT packet: {:?}", err),
+                        };
+                        self.event_handler.on_error(&mqtt_err).await;
                         return;
                     }
                 };
 
                 if let Err(e) = self.streams.send_egress(connect_bytes).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send CONNECT packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                     self.stream = None;
                     self.is_connected = false;
                     return;
@@ -1431,7 +1447,8 @@ impl TokioClientWorker {
                 }
             }
             Err(e) => {
-                self.event_handler.on_error(&e).await;
+                let mqtt_err = MqttClientError::from_io_error(e, "TCP connect");
+                self.event_handler.on_error(&mqtt_err).await;
             }
         }
     }
@@ -1439,11 +1456,11 @@ impl TokioClientWorker {
     /// Handle subscribe command
     async fn handle_subscribe(&mut self, mut command: SubscribeCommand) {
         if command.subscriptions.is_empty() {
-            let error = io::Error::new(
-                ErrorKind::InvalidInput,
-                "SUBSCRIBE requires at least one topic subscription",
-            );
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::InvalidState {
+                expected: "at least one topic subscription".to_string(),
+                actual: "empty subscription list".to_string(),
+            };
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         }
 
@@ -1452,8 +1469,8 @@ impl TokioClientWorker {
         } else if let Some(session) = self.session.as_mut() {
             session.next_packet_id()
         } else {
-            let error = io::Error::other("No active session available for SUBSCRIBE");
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::NoActiveSession;
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         };
 
@@ -1468,7 +1485,8 @@ impl TokioClientWorker {
         match subscribe_packet.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send SUBSCRIBE packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                     return;
                 }
 
@@ -1480,11 +1498,10 @@ impl TokioClientWorker {
                 self.pending_subscribes.insert(packet_id, topics);
             }
             Err(err) => {
-                let error = io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to serialize SUBSCRIBE packet: {:?}", err),
-                );
-                self.event_handler.on_error(&error).await;
+                let mqtt_err = MqttClientError::ProtocolViolation {
+                    message: format!("Failed to serialize SUBSCRIBE packet: {:?}", err),
+                };
+                self.event_handler.on_error(&mqtt_err).await;
             }
         }
     }
@@ -1493,11 +1510,11 @@ impl TokioClientWorker {
     async fn handle_publish(&mut self, command: PublishCommand) {
         if self.stream.is_none() && self.config.buffer_messages {
             if self.message_buffer.len() >= self.config.max_buffer_size {
-                let error = io::Error::new(
-                    ErrorKind::WouldBlock,
-                    "Publish buffer full; dropping message",
-                );
-                self.event_handler.on_error(&error).await;
+                let mqtt_err = MqttClientError::BufferFull {
+                    buffer_type: "publish buffer".to_string(),
+                    capacity: self.config.max_buffer_size,
+                };
+                self.event_handler.on_error(&mqtt_err).await;
                 return;
             }
 
@@ -1506,16 +1523,14 @@ impl TokioClientWorker {
         }
 
         if self.stream.is_none() {
-            let error = io::Error::new(
-                io::ErrorKind::NotConnected,
-                "Cannot publish while disconnected",
-            );
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::NotConnected;
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         }
 
         if let Err(e) = self.send_publish_command(command).await {
-            self.event_handler.on_error(&e).await;
+            let mqtt_err = MqttClientError::from_io_error(e, "send publish");
+            self.event_handler.on_error(&mqtt_err).await;
         }
     }
 
@@ -1602,11 +1617,11 @@ impl TokioClientWorker {
     /// Handle unsubscribe command
     async fn handle_unsubscribe(&mut self, mut command: UnsubscribeCommand) {
         if command.topics.is_empty() {
-            let error = io::Error::new(
-                ErrorKind::InvalidInput,
-                "UNSUBSCRIBE requires at least one topic",
-            );
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::InvalidState {
+                expected: "at least one topic".to_string(),
+                actual: "empty topic list".to_string(),
+            };
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         }
 
@@ -1615,8 +1630,8 @@ impl TokioClientWorker {
         } else if let Some(session) = self.session.as_mut() {
             session.next_packet_id()
         } else {
-            let error = io::Error::other("No active session available for UNSUBSCRIBE");
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::NoActiveSession;
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         };
 
@@ -1631,7 +1646,8 @@ impl TokioClientWorker {
         match unsubscribe_packet.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send UNSUBSCRIBE packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                     return;
                 }
 
@@ -1639,11 +1655,10 @@ impl TokioClientWorker {
                     .insert(packet_id, command.topics.clone());
             }
             Err(err) => {
-                let error = io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to serialize UNSUBSCRIBE packet: {:?}", err),
-                );
-                self.event_handler.on_error(&error).await;
+                let mqtt_err = MqttClientError::ProtocolViolation {
+                    message: format!("Failed to serialize UNSUBSCRIBE packet: {:?}", err),
+                };
+                self.event_handler.on_error(&mqtt_err).await;
             }
         }
     }
@@ -1651,11 +1666,8 @@ impl TokioClientWorker {
     /// Handle ping command
     async fn handle_ping(&mut self) {
         if self.stream.is_none() {
-            let error = io::Error::new(
-                io::ErrorKind::NotConnected,
-                "Cannot send PING while disconnected",
-            );
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::NotConnected;
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         }
 
@@ -1664,15 +1676,15 @@ impl TokioClientWorker {
         match pingreq_packet.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send PINGREQ packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                 }
             }
             Err(err) => {
-                let error = io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to serialize PINGREQ packet: {:?}", err),
-                );
-                self.event_handler.on_error(&error).await;
+                let mqtt_err = MqttClientError::ProtocolViolation {
+                    message: format!("Failed to serialize PINGREQ packet: {:?}", err),
+                };
+                self.event_handler.on_error(&mqtt_err).await;
             }
         }
     }
@@ -1680,11 +1692,8 @@ impl TokioClientWorker {
     /// Handle AUTH command for enhanced authentication (MQTT v5)
     async fn handle_auth(&mut self, reason_code: u8, properties: Vec<Property>) {
         if self.stream.is_none() {
-            let error = io::Error::new(
-                io::ErrorKind::NotConnected,
-                "Cannot send AUTH while disconnected",
-            );
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::NotConnected;
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         }
 
@@ -1693,15 +1702,15 @@ impl TokioClientWorker {
         match auth_packet.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send AUTH packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                 }
             }
             Err(err) => {
-                let error = io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to serialize AUTH packet: {:?}", err),
-                );
-                self.event_handler.on_error(&error).await;
+                let mqtt_err = MqttClientError::ProtocolViolation {
+                    message: format!("Failed to serialize AUTH packet: {:?}", err),
+                };
+                self.event_handler.on_error(&mqtt_err).await;
             }
         }
     }
@@ -1917,16 +1926,16 @@ impl TokioClientWorker {
         match disconnect_packet.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send DISCONNECT packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                     return;
                 }
             }
             Err(err) => {
-                let error = io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to serialize DISCONNECT packet: {:?}", err),
-                );
-                self.event_handler.on_error(&error).await;
+                let mqtt_err = MqttClientError::ProtocolViolation {
+                    message: format!("Failed to serialize DISCONNECT packet: {:?}", err),
+                };
+                self.event_handler.on_error(&mqtt_err).await;
                 return;
             }
         }
@@ -1999,15 +2008,10 @@ impl TokioClientWorker {
                 match self.send_publish_command(command.clone()).await {
                     Ok(()) => continue,
                     Err(e) => {
-                        self.event_handler.on_error(&e).await;
+                        let mqtt_err = MqttClientError::from_io_error(e, "flush publish buffer");
+                        self.event_handler.on_error(&mqtt_err).await;
                         self.message_buffer.push_front(command);
-
-                        if matches!(
-                            e.kind(),
-                            ErrorKind::WouldBlock | ErrorKind::NotConnected | ErrorKind::BrokenPipe
-                        ) {
-                            break;
-                        }
+                        break;
                     }
                 }
             } else {
@@ -2042,7 +2046,9 @@ impl TokioClientWorker {
                     } else if let Some(session) = self.session.as_ref() {
                         for resend_packet in session.resend_pending_messages() {
                             if let Err(e) = self.send_packet_to_broker(&resend_packet).await {
-                                self.event_handler.on_error(&e).await;
+                                let mqtt_err =
+                                    MqttClientError::from_io_error(e, "resend pending message");
+                                self.event_handler.on_error(&mqtt_err).await;
                                 self.handle_connection_lost().await;
                                 return;
                             }
@@ -2155,7 +2161,8 @@ impl TokioClientWorker {
                     if let Some(pubrel) = next_pubrel {
                         let packet = MqttPacket::PubRel5(pubrel.clone());
                         if let Err(e) = self.send_packet_to_broker(&packet).await {
-                            self.event_handler.on_error(&e).await;
+                            let mqtt_err = MqttClientError::from_io_error(e, "send PUBREL packet");
+                            self.event_handler.on_error(&mqtt_err).await;
                             self.handle_connection_lost().await;
                             return;
                         }
@@ -2186,7 +2193,8 @@ impl TokioClientWorker {
 
                     let packet = MqttPacket::PubComp5(pubcomp.clone());
                     if let Err(e) = self.send_packet_to_broker(&packet).await {
-                        self.event_handler.on_error(&e).await;
+                        let mqtt_err = MqttClientError::from_io_error(e, "send PUBCOMP packet");
+                        self.event_handler.on_error(&mqtt_err).await;
                         self.handle_connection_lost().await;
                     }
                 }
@@ -2236,7 +2244,8 @@ impl TokioClientWorker {
 
                 if let Some(ack) = ack_packet {
                     if let Err(e) = self.send_packet_to_broker(&ack).await {
-                        self.event_handler.on_error(&e).await;
+                        let mqtt_err = MqttClientError::from_io_error(e, "send publish ACK");
+                        self.event_handler.on_error(&mqtt_err).await;
                         self.handle_connection_lost().await;
                     }
                 }
@@ -2261,7 +2270,8 @@ impl TokioClientWorker {
                 // Respond to unexpected PINGREQ from broker with PINGRESP
                 let response = MqttPacket::PingResp5(pingrespv5::MqttPingResp::new());
                 if let Err(e) = self.send_packet_to_broker(&response).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send PINGRESP packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                     self.handle_connection_lost().await;
                 }
             }
