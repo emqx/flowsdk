@@ -165,20 +165,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     // Configure tokio async client settings
-    let async_config = TokioAsyncClientConfig {
-        auto_reconnect: true,
-        reconnect_delay_ms: 1000,
-        max_reconnect_delay_ms: 30000,
-        max_reconnect_attempts: 5,
-        command_queue_size: 1000,
-        buffer_messages: true,
-        max_buffer_size: 1000,
-        send_buffer_size: 1000,
-        recv_buffer_size: 1000,
-        keep_alive_interval: 60,
-        tcp_nodelay: false,
-        ..Default::default()
-    };
+    let async_config = TokioAsyncClientConfig::builder()
+        .auto_reconnect(true)
+        .reconnect_delay_ms(1000)
+        .max_reconnect_delay_ms(30000)
+        .max_reconnect_attempts(5)
+        .command_queue_size(1000)
+        .buffer_messages(true)
+        .max_buffer_size(1000)
+        .send_buffer_size(1000)
+        .recv_buffer_size(1000)
+        .keep_alive_interval(60)
+        .tcp_nodelay(false)
+        .build();
 
     let context = Arc::new(Mutex::new(None::<u16>));
     // Create event handler

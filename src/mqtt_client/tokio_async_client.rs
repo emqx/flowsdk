@@ -358,6 +358,277 @@ impl Default for TokioAsyncClientConfig {
     }
 }
 
+impl TokioAsyncClientConfig {
+    /// Create a new configuration builder
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::tokio_async_client::TokioAsyncClientConfig;
+    ///
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .auto_reconnect(true)
+    ///     .reconnect_delay_ms(2000)
+    ///     .connect_timeout_ms(60000)
+    ///     .build();
+    /// ```
+    pub fn builder() -> ConfigBuilder {
+        ConfigBuilder::new()
+    }
+}
+
+/// Builder for TokioAsyncClientConfig
+///
+/// Provides a fluent API for constructing client configuration with sensible defaults.
+///
+/// # Example
+/// ```no_run
+/// use flowsdk::mqtt_client::tokio_async_client::TokioAsyncClientConfig;
+///
+/// let config = TokioAsyncClientConfig::builder()
+///     .auto_reconnect(true)
+///     .reconnect_delay_ms(2000)
+///     .max_reconnect_attempts(10)
+///     .connect_timeout_ms(60000)
+///     .subscribe_timeout_ms(5000)
+///     .send_buffer_size(2000)
+///     .tcp_nodelay(false)
+///     .build();
+/// ```
+#[derive(Debug, Clone)]
+pub struct ConfigBuilder {
+    config: TokioAsyncClientConfig,
+}
+
+impl ConfigBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        ConfigBuilder {
+            config: TokioAsyncClientConfig::default(),
+        }
+    }
+
+    /// Build the final configuration
+    pub fn build(self) -> TokioAsyncClientConfig {
+        self.config
+    }
+
+    // ==================== Reconnection Settings ====================
+
+    /// Enable or disable automatic reconnection on connection loss
+    pub fn auto_reconnect(mut self, enabled: bool) -> Self {
+        self.config.auto_reconnect = enabled;
+        self
+    }
+
+    /// Set initial reconnect delay in milliseconds
+    pub fn reconnect_delay_ms(mut self, delay_ms: u64) -> Self {
+        self.config.reconnect_delay_ms = delay_ms;
+        self
+    }
+
+    /// Set maximum reconnect delay in milliseconds
+    pub fn max_reconnect_delay_ms(mut self, max_delay_ms: u64) -> Self {
+        self.config.max_reconnect_delay_ms = max_delay_ms;
+        self
+    }
+
+    /// Set maximum number of reconnect attempts (0 = infinite)
+    pub fn max_reconnect_attempts(mut self, max_attempts: u32) -> Self {
+        self.config.max_reconnect_attempts = max_attempts;
+        self
+    }
+
+    // ==================== Timeout Settings ====================
+
+    /// Set timeout for connect operation in milliseconds
+    pub fn connect_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.connect_timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Disable timeout for connect operation (wait indefinitely)
+    pub fn no_connect_timeout(mut self) -> Self {
+        self.config.connect_timeout_ms = None;
+        self
+    }
+
+    /// Set timeout for subscribe operation in milliseconds
+    pub fn subscribe_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.subscribe_timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Disable timeout for subscribe operation (wait indefinitely)
+    pub fn no_subscribe_timeout(mut self) -> Self {
+        self.config.subscribe_timeout_ms = None;
+        self
+    }
+
+    /// Set timeout for publish acknowledgment in milliseconds
+    pub fn publish_ack_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.publish_ack_timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Disable timeout for publish acknowledgment (wait indefinitely)
+    pub fn no_publish_ack_timeout(mut self) -> Self {
+        self.config.publish_ack_timeout_ms = None;
+        self
+    }
+
+    /// Set timeout for unsubscribe operation in milliseconds
+    pub fn unsubscribe_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.unsubscribe_timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Disable timeout for unsubscribe operation (wait indefinitely)
+    pub fn no_unsubscribe_timeout(mut self) -> Self {
+        self.config.unsubscribe_timeout_ms = None;
+        self
+    }
+
+    /// Set timeout for ping operation in milliseconds
+    pub fn ping_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.ping_timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Disable timeout for ping operation (wait indefinitely)
+    pub fn no_ping_timeout(mut self) -> Self {
+        self.config.ping_timeout_ms = None;
+        self
+    }
+
+    /// Set default timeout for operations without specific timeout (milliseconds)
+    pub fn default_operation_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.default_operation_timeout_ms = timeout_ms;
+        self
+    }
+
+    // ==================== Buffer Settings ====================
+
+    /// Set queue size for pending commands
+    pub fn command_queue_size(mut self, size: usize) -> Self {
+        self.config.command_queue_size = size;
+        self
+    }
+
+    /// Enable or disable buffering of messages during disconnection
+    pub fn buffer_messages(mut self, enabled: bool) -> Self {
+        self.config.buffer_messages = enabled;
+        self
+    }
+
+    /// Set maximum size of message buffer
+    pub fn max_buffer_size(mut self, size: usize) -> Self {
+        self.config.max_buffer_size = size;
+        self
+    }
+
+    /// Set send buffer size limit
+    pub fn send_buffer_size(mut self, size: usize) -> Self {
+        self.config.send_buffer_size = size;
+        self
+    }
+
+    /// Set receive buffer size limit
+    pub fn recv_buffer_size(mut self, size: usize) -> Self {
+        self.config.recv_buffer_size = size;
+        self
+    }
+
+    // ==================== Other Settings ====================
+
+    /// Set keep alive interval in seconds
+    pub fn keep_alive_interval(mut self, seconds: u64) -> Self {
+        self.config.keep_alive_interval = seconds;
+        self
+    }
+
+    /// Enable or disable TCP_NODELAY (disable Nagle algorithm)
+    pub fn tcp_nodelay(mut self, enabled: bool) -> Self {
+        self.config.tcp_nodelay = enabled;
+        self
+    }
+
+    // ==================== Convenience Methods ====================
+
+    /// Disable all operation timeouts (operations wait indefinitely)
+    ///
+    /// Useful for development/debugging or networks with unpredictable latency.
+    pub fn no_timeouts(mut self) -> Self {
+        self.config.connect_timeout_ms = None;
+        self.config.subscribe_timeout_ms = None;
+        self.config.publish_ack_timeout_ms = None;
+        self.config.unsubscribe_timeout_ms = None;
+        self.config.ping_timeout_ms = None;
+        self
+    }
+
+    /// Reset all timeouts to their default values
+    pub fn default_timeouts(mut self) -> Self {
+        self.config.connect_timeout_ms = Some(30000);
+        self.config.subscribe_timeout_ms = Some(10000);
+        self.config.publish_ack_timeout_ms = Some(10000);
+        self.config.unsubscribe_timeout_ms = Some(10000);
+        self.config.ping_timeout_ms = Some(5000);
+        self.config.default_operation_timeout_ms = 30000;
+        self
+    }
+
+    /// Apply a timeout profile optimized for local networks
+    ///
+    /// - Connect: 5 seconds
+    /// - Subscribe/Publish/Unsubscribe: 3 seconds
+    /// - Ping: 2 seconds
+    pub fn local_network_timeouts(mut self) -> Self {
+        self.config.connect_timeout_ms = Some(5000);
+        self.config.subscribe_timeout_ms = Some(3000);
+        self.config.publish_ack_timeout_ms = Some(3000);
+        self.config.unsubscribe_timeout_ms = Some(3000);
+        self.config.ping_timeout_ms = Some(2000);
+        self.config.default_operation_timeout_ms = 5000;
+        self
+    }
+
+    /// Apply a timeout profile optimized for internet/cloud networks
+    ///
+    /// - Connect: 30 seconds
+    /// - Subscribe/Publish/Unsubscribe: 10 seconds
+    /// - Ping: 5 seconds
+    pub fn internet_timeouts(mut self) -> Self {
+        self.config.connect_timeout_ms = Some(30000);
+        self.config.subscribe_timeout_ms = Some(10000);
+        self.config.publish_ack_timeout_ms = Some(10000);
+        self.config.unsubscribe_timeout_ms = Some(10000);
+        self.config.ping_timeout_ms = Some(5000);
+        self.config.default_operation_timeout_ms = 30000;
+        self
+    }
+
+    /// Apply a timeout profile optimized for satellite/high-latency networks
+    ///
+    /// - Connect: 120 seconds
+    /// - Subscribe/Publish/Unsubscribe: 60 seconds
+    /// - Ping: 30 seconds
+    pub fn satellite_timeouts(mut self) -> Self {
+        self.config.connect_timeout_ms = Some(120000);
+        self.config.subscribe_timeout_ms = Some(60000);
+        self.config.publish_ack_timeout_ms = Some(60000);
+        self.config.unsubscribe_timeout_ms = Some(60000);
+        self.config.ping_timeout_ms = Some(30000);
+        self.config.default_operation_timeout_ms = 120000;
+        self
+    }
+}
+
+impl Default for ConfigBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Async stream for outbound MQTT frame bytes.
 struct AsyncEgressStream {
     sender: mpsc::Sender<Vec<u8>>,

@@ -46,8 +46,9 @@ impl TokioMqttEventHandler for TestEventHandler {
 #[tokio::test]
 async fn test_connect_sync_with_default_timeout() {
     // Create a config with a short connect timeout
-    let mut config = TokioAsyncClientConfig::default();
-    config.connect_timeout_ms = Some(100); // 100ms timeout
+    let config = TokioAsyncClientConfig::builder()
+        .connect_timeout_ms(100) // 100ms timeout
+        .build();
 
     let options = MqttClientOptions::builder()
         .peer("127.0.0.1:1883")
@@ -154,8 +155,9 @@ async fn test_connect_sync_with_custom_timeout() {
 /// Test that successful operations complete before timeout
 #[tokio::test]
 async fn test_successful_operation_within_timeout() {
-    let mut config = TokioAsyncClientConfig::default();
-    config.connect_timeout_ms = Some(5000); // 5 second timeout
+    let config = TokioAsyncClientConfig::builder()
+        .connect_timeout_ms(5000) // 5 second timeout
+        .build();
 
     let options = MqttClientOptions::builder()
         .peer("127.0.0.1:1883")
@@ -202,8 +204,9 @@ async fn test_successful_operation_within_timeout() {
 /// Test timeout error conversion to io::Error
 #[tokio::test]
 async fn test_timeout_error_conversion_to_io_error() {
-    let mut config = TokioAsyncClientConfig::default();
-    config.connect_timeout_ms = Some(100); // 100ms timeout
+    let config = TokioAsyncClientConfig::builder()
+        .connect_timeout_ms(100) // 100ms timeout
+        .build();
 
     let options = MqttClientOptions::builder()
         .peer("192.0.2.1:1883") // TEST-NET-1: Should not be routable
@@ -395,8 +398,9 @@ async fn test_ping_sync_with_timeout() {
 /// Test that None timeout means no timeout (operation waits indefinitely)
 #[tokio::test]
 async fn test_none_timeout_means_no_timeout() {
-    let mut config = TokioAsyncClientConfig::default();
-    config.connect_timeout_ms = None; // No timeout
+    let config = TokioAsyncClientConfig::builder()
+        .no_connect_timeout() // No timeout
+        .build();
 
     let options = MqttClientOptions::builder()
         .peer("127.0.0.1:1883")
