@@ -369,6 +369,77 @@ impl From<io::Error> for MqttClientError {
     }
 }
 
+// Conversion to io::Error for backward compatibility
+impl From<MqttClientError> for io::Error {
+    fn from(error: MqttClientError) -> Self {
+        match error {
+            // Map OperationTimeout to TimedOut
+            MqttClientError::OperationTimeout {
+                operation,
+                timeout_ms,
+            } => io::Error::new(
+                io::ErrorKind::TimedOut,
+                format!("{} operation timed out after {}ms", operation, timeout_ms),
+            ),
+
+            // Map NetworkError back to io::Error (passthrough)
+            MqttClientError::NetworkError { kind, message } => io::Error::new(kind, message),
+
+            // Map ConnectionLost to ConnectionReset
+            MqttClientError::ConnectionLost { reason } => {
+                io::Error::new(io::ErrorKind::ConnectionReset, reason)
+            }
+
+            // Map NotConnected to NotConnected
+            MqttClientError::NotConnected => io::Error::new(
+                io::ErrorKind::NotConnected,
+                "Client is not connected to broker",
+            ),
+
+            // Map ChannelClosed to BrokenPipe
+            MqttClientError::ChannelClosed { channel } => io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                format!("Channel '{}' was closed unexpectedly", channel),
+            ),
+
+            // Map BufferFull to WouldBlock (resource temporarily unavailable)
+            MqttClientError::BufferFull {
+                buffer_type,
+                capacity,
+            } => io::Error::new(
+                io::ErrorKind::WouldBlock,
+                format!("{} buffer is full (capacity: {})", buffer_type, capacity),
+            ),
+
+            // Map InvalidConfiguration to InvalidInput
+            MqttClientError::InvalidConfiguration { field, reason } => io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!("Invalid configuration for '{}': {}", field, reason),
+            ),
+
+            // Map ProtocolViolation to InvalidData
+            MqttClientError::ProtocolViolation { message } => {
+                io::Error::new(io::ErrorKind::InvalidData, message)
+            }
+
+            // Map PacketParsing to InvalidData
+            MqttClientError::PacketParsing {
+                parse_error,
+                raw_data: _,
+            } => io::Error::new(io::ErrorKind::InvalidData, parse_error),
+
+            // Map OperationCancelled to Interrupted
+            MqttClientError::OperationCancelled { operation } => io::Error::new(
+                io::ErrorKind::Interrupted,
+                format!("{} operation was cancelled", operation),
+            ),
+
+            // Map all other errors to Other with the error's display message
+            other => io::Error::new(io::ErrorKind::Other, other.to_string()),
+        }
+    }
+}
+
 // Conversion from ParseError
 impl From<ParseError> for MqttClientError {
     fn from(error: ParseError) -> Self {
