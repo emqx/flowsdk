@@ -320,6 +320,18 @@ pub struct TokioAsyncClientConfig {
     pub keep_alive_interval: u64,
     /// Enable TCP_NODELAY (disable Nagle) on the underlying socket
     pub tcp_nodelay: bool,
+    /// Timeout for connect operation in milliseconds (None = no timeout)
+    pub connect_timeout_ms: Option<u64>,
+    /// Timeout for subscribe operation in milliseconds (None = no timeout)
+    pub subscribe_timeout_ms: Option<u64>,
+    /// Timeout for publish acknowledgment in milliseconds (None = no timeout)
+    pub publish_ack_timeout_ms: Option<u64>,
+    /// Timeout for unsubscribe operation in milliseconds (None = no timeout)
+    pub unsubscribe_timeout_ms: Option<u64>,
+    /// Timeout for ping operation in milliseconds (None = no timeout)
+    pub ping_timeout_ms: Option<u64>,
+    /// Default timeout for operations without specific timeout (milliseconds)
+    pub default_operation_timeout_ms: u64,
 }
 
 impl Default for TokioAsyncClientConfig {
@@ -336,6 +348,12 @@ impl Default for TokioAsyncClientConfig {
             recv_buffer_size: 1000,
             keep_alive_interval: 60,
             tcp_nodelay: true,
+            connect_timeout_ms: Some(30000),     // 30 seconds
+            subscribe_timeout_ms: Some(10000),   // 10 seconds
+            publish_ack_timeout_ms: Some(10000), // 10 seconds
+            unsubscribe_timeout_ms: Some(10000), // 10 seconds
+            ping_timeout_ms: Some(5000),         // 5 seconds
+            default_operation_timeout_ms: 30000, // 30 seconds
         }
     }
 }
@@ -591,6 +609,31 @@ impl TokioAsyncMqttClient {
         .await
     }
 
+    /// Internal helper to apply timeout to sync operations
+    async fn with_timeout<F, T>(
+        &self,
+        future: F,
+        timeout_ms: Option<u64>,
+        operation_name: &str,
+    ) -> Result<T, MqttClientError>
+    where
+        F: std::future::Future<Output = io::Result<T>>,
+    {
+        if let Some(timeout) = timeout_ms {
+            match tokio::time::timeout(Duration::from_millis(timeout), future).await {
+                Ok(result) => result.map_err(|e| MqttClientError::from_io_error(e, operation_name)),
+                Err(_) => Err(MqttClientError::OperationTimeout {
+                    operation: operation_name.to_string(),
+                    timeout_ms: timeout,
+                }),
+            }
+        } else {
+            future
+                .await
+                .map_err(|e| MqttClientError::from_io_error(e, operation_name))
+        }
+    }
+
     /// Connect to the MQTT broker (non-blocking)
     pub async fn connect(&self) -> io::Result<()> {
         self.send_command(TokioClientCommand::Connect).await
@@ -633,6 +676,8 @@ impl TokioAsyncMqttClient {
     /// - QoS 1: Waits for PUBACK from broker
     /// - QoS 2: Waits for PUBCOMP from broker (full QoS 2 flow)
     ///
+    /// Uses the timeout configured in `TokioAsyncClientConfig::publish_ack_timeout_ms`.
+    ///
     /// # Arguments
     /// * `topic` - Topic to publish to
     /// * `payload` - Message payload
@@ -642,28 +687,23 @@ impl TokioAsyncMqttClient {
     /// # Returns
     /// `PublishResult` containing packet_id, reason_code, and properties
     ///
+    /// # Errors
+    /// Returns `MqttClientError::OperationTimeout` if the operation times out.
+    ///
     /// # Example
     /// ```no_run
     /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
     /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
-    /// # use tokio;
-    /// # use std::time::Duration;
     /// # #[derive(Clone)]
     /// # struct Handler;
     /// # #[async_trait::async_trait]
     /// # impl TokioMqttEventHandler for Handler {}
-    /// # async fn example() -> std::io::Result<()> {
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
     /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// // Simple sync publish
     /// let result = client.publish_sync("sensors/temp", b"23.5", 2, false).await?;
     /// println!("Published with packet ID: {:?}", result.packet_id);
-    ///
-    /// // With timeout
-    /// let result = tokio::time::timeout(
-    ///     Duration::from_secs(5),
-    ///     client.publish_sync("sensors/temp", b"23.5", 2, false)
-    /// ).await??;
     /// # Ok(())
     /// # }
     /// ```
@@ -673,7 +713,7 @@ impl TokioAsyncMqttClient {
         payload: &[u8],
         qos: u8,
         retain: bool,
-    ) -> io::Result<PublishResult> {
+    ) -> Result<PublishResult, MqttClientError> {
         let command = PublishCommand::simple(topic, payload.to_vec(), qos, retain);
         self.publish_with_command_sync(command).await
     }
@@ -682,7 +722,14 @@ impl TokioAsyncMqttClient {
     pub async fn publish_with_command_sync(
         &self,
         command: PublishCommand,
-    ) -> io::Result<PublishResult> {
+    ) -> Result<PublishResult, MqttClientError> {
+        let timeout = self._config.publish_ack_timeout_ms;
+        self.with_timeout(self.publish_sync_internal(command), timeout, "publish")
+            .await
+    }
+
+    /// Internal publish implementation without timeout
+    async fn publish_sync_internal(&self, command: PublishCommand) -> io::Result<PublishResult> {
         // QoS 0 messages have no acknowledgment, send fire-and-forget
         if command.qos == 0 {
             self.send_command(TokioClientCommand::Publish(command))
@@ -781,9 +828,13 @@ impl TokioAsyncMqttClient {
     /// Connect to broker and wait for CONNACK acknowledgment
     ///
     /// This method blocks until the broker acknowledges the connection with CONNACK.
+    /// Uses the timeout configured in `TokioAsyncClientConfig::connect_timeout_ms`.
     ///
     /// # Returns
     /// `ConnectionResult` containing reason_code, session_present, and properties
+    ///
+    /// # Errors
+    /// Returns `MqttClientError::OperationTimeout` if the operation times out.
     ///
     /// # Example
     /// ```no_run
@@ -793,7 +844,7 @@ impl TokioAsyncMqttClient {
     /// # struct Handler;
     /// # #[async_trait::async_trait]
     /// # impl TokioMqttEventHandler for Handler {}
-    /// # async fn example() -> std::io::Result<()> {
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
     /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// let result = client.connect_sync().await?;
@@ -803,7 +854,14 @@ impl TokioAsyncMqttClient {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect_sync(&self) -> io::Result<ConnectionResult> {
+    pub async fn connect_sync(&self) -> Result<ConnectionResult, MqttClientError> {
+        let timeout = self._config.connect_timeout_ms;
+        self.with_timeout(self.connect_sync_internal(), timeout, "connect")
+            .await
+    }
+
+    /// Internal connect implementation without timeout
+    async fn connect_sync_internal(&self) -> io::Result<ConnectionResult> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         self.send_command(TokioClientCommand::ConnectSync { response_tx: tx })
@@ -820,6 +878,7 @@ impl TokioAsyncMqttClient {
     /// Subscribe to topics and wait for SUBACK acknowledgment
     ///
     /// This method blocks until the broker acknowledges the subscription with SUBACK.
+    /// Uses the timeout configured in `TokioAsyncClientConfig::subscribe_timeout_ms`.
     ///
     /// # Arguments
     /// * `topic` - Topic to subscribe to
@@ -827,6 +886,9 @@ impl TokioAsyncMqttClient {
     ///
     /// # Returns
     /// `SubscribeResult` containing packet_id, reason_codes, and properties
+    ///
+    /// # Errors
+    /// Returns `MqttClientError::OperationTimeout` if the operation times out.
     ///
     /// # Example
     /// ```no_run
@@ -836,7 +898,7 @@ impl TokioAsyncMqttClient {
     /// # struct Handler;
     /// # #[async_trait::async_trait]
     /// # impl TokioMqttEventHandler for Handler {}
-    /// # async fn example() -> std::io::Result<()> {
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
     /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// let result = client.subscribe_sync("sensors/#", 1).await?;
@@ -844,13 +906,27 @@ impl TokioAsyncMqttClient {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn subscribe_sync(&self, topic: &str, qos: u8) -> io::Result<SubscribeResult> {
+    pub async fn subscribe_sync(
+        &self,
+        topic: &str,
+        qos: u8,
+    ) -> Result<SubscribeResult, MqttClientError> {
         self.subscribe_with_command_sync(SubscribeCommand::single(topic, qos))
             .await
     }
 
     /// Subscribe with fully customized command and wait for acknowledgment
     pub async fn subscribe_with_command_sync(
+        &self,
+        command: SubscribeCommand,
+    ) -> Result<SubscribeResult, MqttClientError> {
+        let timeout = self._config.subscribe_timeout_ms;
+        self.with_timeout(self.subscribe_sync_internal(command), timeout, "subscribe")
+            .await
+    }
+
+    /// Internal subscribe implementation without timeout
+    async fn subscribe_sync_internal(
         &self,
         command: SubscribeCommand,
     ) -> io::Result<SubscribeResult> {
@@ -873,12 +949,16 @@ impl TokioAsyncMqttClient {
     /// Unsubscribe from topics and wait for UNSUBACK acknowledgment
     ///
     /// This method blocks until the broker acknowledges the unsubscription with UNSUBACK.
+    /// Uses the timeout configured in `TokioAsyncClientConfig::unsubscribe_timeout_ms`.
     ///
     /// # Arguments
     /// * `topics` - List of topics to unsubscribe from
     ///
     /// # Returns
     /// `UnsubscribeResult` containing packet_id, reason_codes, and properties
+    ///
+    /// # Errors
+    /// Returns `MqttClientError::OperationTimeout` if the operation times out.
     ///
     /// # Example
     /// ```no_run
@@ -888,7 +968,7 @@ impl TokioAsyncMqttClient {
     /// # struct Handler;
     /// # #[async_trait::async_trait]
     /// # impl TokioMqttEventHandler for Handler {}
-    /// # async fn example() -> std::io::Result<()> {
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
     /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// let result = client.unsubscribe_sync(vec!["sensors/#"]).await?;
@@ -896,7 +976,10 @@ impl TokioAsyncMqttClient {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unsubscribe_sync(&self, topics: Vec<&str>) -> io::Result<UnsubscribeResult> {
+    pub async fn unsubscribe_sync(
+        &self,
+        topics: Vec<&str>,
+    ) -> Result<UnsubscribeResult, MqttClientError> {
         let topics: Vec<String> = topics.into_iter().map(|s| s.to_string()).collect();
         self.unsubscribe_with_command_sync(UnsubscribeCommand::from_topics(topics))
             .await
@@ -904,6 +987,20 @@ impl TokioAsyncMqttClient {
 
     /// Unsubscribe with fully customized command and wait for acknowledgment
     pub async fn unsubscribe_with_command_sync(
+        &self,
+        command: UnsubscribeCommand,
+    ) -> Result<UnsubscribeResult, MqttClientError> {
+        let timeout = self._config.unsubscribe_timeout_ms;
+        self.with_timeout(
+            self.unsubscribe_sync_internal(command),
+            timeout,
+            "unsubscribe",
+        )
+        .await
+    }
+
+    /// Internal unsubscribe implementation without timeout
+    async fn unsubscribe_sync_internal(
         &self,
         command: UnsubscribeCommand,
     ) -> io::Result<UnsubscribeResult> {
@@ -926,35 +1023,41 @@ impl TokioAsyncMqttClient {
     /// Send ping and wait for PINGRESP acknowledgment
     ///
     /// This method blocks until the broker responds with PINGRESP.
+    /// Uses the timeout configured in `TokioAsyncClientConfig::ping_timeout_ms`.
     ///
     /// # Returns
     /// `PingResult` indicating successful ping response
+    ///
+    /// # Errors
+    /// Returns `MqttClientError::OperationTimeout` if the operation times out.
     ///
     /// # Example
     /// ```no_run
     /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
     /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
-    /// # use tokio;
-    /// # use std::time::Duration;
     /// # #[derive(Clone)]
     /// # struct Handler;
     /// # #[async_trait::async_trait]
     /// # impl TokioMqttEventHandler for Handler {}
-    /// # async fn example() -> std::io::Result<()> {
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
     /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
-    /// // Check connection with timeout
-    /// match tokio::time::timeout(
-    ///     Duration::from_secs(5),
-    ///     client.ping_sync()
-    /// ).await {
-    ///     Ok(Ok(_)) => println!("Connection alive!"),
-    ///     _ => println!("Connection timeout or error"),
+    /// // Check connection
+    /// match client.ping_sync().await {
+    ///     Ok(_) => println!("Connection alive!"),
+    ///     Err(e) => println!("Connection error: {}", e),
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn ping_sync(&self) -> io::Result<PingResult> {
+    pub async fn ping_sync(&self) -> Result<PingResult, MqttClientError> {
+        let timeout = self._config.ping_timeout_ms;
+        self.with_timeout(self.ping_sync_internal(), timeout, "ping")
+            .await
+    }
+
+    /// Internal ping implementation without timeout
+    async fn ping_sync_internal(&self) -> io::Result<PingResult> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         self.send_command(TokioClientCommand::PingSync { response_tx: tx })
@@ -967,6 +1070,225 @@ impl TokioAsyncMqttClient {
             )
         })
     }
+
+    // ==================== Custom Timeout Override Methods ====================
+
+    /// Connect with a custom timeout duration
+    ///
+    /// Allows overriding the default connect timeout for this specific operation.
+    /// Useful for scenarios requiring longer or shorter timeouts than the configured default.
+    ///
+    /// # Arguments
+    /// * `timeout_ms` - Custom timeout in milliseconds
+    ///
+    /// # Returns
+    /// `Result<ConnectionResult, MqttClientError>` - Connection result or timeout error
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
+    /// // Connect with 60 second timeout for satellite network
+    /// let result = client.connect_sync_with_timeout(60000).await?;
+    /// println!("Connected: {:?}", result.session_present);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect_sync_with_timeout(
+        &self,
+        timeout_ms: u64,
+    ) -> Result<ConnectionResult, MqttClientError> {
+        self.with_timeout(self.connect_sync_internal(), Some(timeout_ms), "connect")
+            .await
+    }
+
+    /// Subscribe with a custom timeout duration
+    ///
+    /// Allows overriding the default subscribe timeout for this specific operation.
+    ///
+    /// # Arguments
+    /// * `topic` - Topic filter to subscribe to
+    /// * `qos` - Requested Quality of Service level
+    /// * `timeout_ms` - Custom timeout in milliseconds
+    ///
+    /// # Returns
+    /// `Result<SubscribeResult, MqttClientError>` - Subscribe result or timeout error
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
+    /// // Subscribe with 5 second timeout for time-critical subscription
+    /// let result = client.subscribe_sync_with_timeout("sensors/+", 1, 5000).await?;
+    /// println!("Subscribed with reason codes: {:?}", result.reason_codes);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn subscribe_sync_with_timeout(
+        &self,
+        topic: &str,
+        qos: u8,
+        timeout_ms: u64,
+    ) -> Result<SubscribeResult, MqttClientError> {
+        let subscribe_command = SubscribeCommand::single(topic, qos);
+        self.with_timeout(
+            self.subscribe_sync_internal(subscribe_command),
+            Some(timeout_ms),
+            "subscribe",
+        )
+        .await
+    }
+
+    /// Publish with a custom timeout duration
+    ///
+    /// Allows overriding the default publish acknowledgment timeout for this specific operation.
+    ///
+    /// # Arguments
+    /// * `topic` - Topic to publish to
+    /// * `payload` - Message payload
+    /// * `qos` - Quality of Service level (0, 1, or 2)
+    /// * `retain` - Whether broker should retain this message
+    /// * `timeout_ms` - Custom timeout in milliseconds
+    ///
+    /// # Returns
+    /// `Result<PublishResult, MqttClientError>` - Publish result or timeout error
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
+    /// // Publish critical alert with 3 second timeout
+    /// let result = client.publish_sync_with_timeout(
+    ///     "alerts/critical",
+    ///     b"SYSTEM FAILURE",
+    ///     2,
+    ///     false,
+    ///     3000
+    /// ).await?;
+    /// println!("Published with packet ID: {:?}", result.packet_id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn publish_sync_with_timeout(
+        &self,
+        topic: &str,
+        payload: &[u8],
+        qos: u8,
+        retain: bool,
+        timeout_ms: u64,
+    ) -> Result<PublishResult, MqttClientError> {
+        let publish_command = PublishCommand::simple(topic, payload.to_vec(), qos, retain);
+        self.with_timeout(
+            self.publish_sync_internal(publish_command),
+            Some(timeout_ms),
+            "publish",
+        )
+        .await
+    }
+
+    /// Unsubscribe with a custom timeout duration
+    ///
+    /// Allows overriding the default unsubscribe timeout for this specific operation.
+    ///
+    /// # Arguments
+    /// * `topics` - Topic filters to unsubscribe from
+    /// * `timeout_ms` - Custom timeout in milliseconds
+    ///
+    /// # Returns
+    /// `Result<UnsubscribeResult, MqttClientError>` - Unsubscribe result or timeout error
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
+    /// // Unsubscribe with 15 second timeout for slow network
+    /// let result = client.unsubscribe_sync_with_timeout(
+    ///     vec!["sensors/+", "alerts/#"],
+    ///     15000
+    /// ).await?;
+    /// println!("Unsubscribed with reason codes: {:?}", result.reason_codes);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn unsubscribe_sync_with_timeout(
+        &self,
+        topics: Vec<&str>,
+        timeout_ms: u64,
+    ) -> Result<UnsubscribeResult, MqttClientError> {
+        let topics: Vec<String> = topics.into_iter().map(|s| s.to_string()).collect();
+        let unsubscribe_command = UnsubscribeCommand::from_topics(topics);
+        self.with_timeout(
+            self.unsubscribe_sync_internal(unsubscribe_command),
+            Some(timeout_ms),
+            "unsubscribe",
+        )
+        .await
+    }
+
+    /// Send PINGREQ and wait for PINGRESP with a custom timeout duration
+    ///
+    /// Allows overriding the default ping timeout for this specific operation.
+    ///
+    /// # Arguments
+    /// * `timeout_ms` - Custom timeout in milliseconds
+    ///
+    /// # Returns
+    /// `Result<PingResult, MqttClientError>` - Ping result or timeout error
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
+    /// // Quick ping with 2 second timeout for health check
+    /// let result = client.ping_sync_with_timeout(2000).await?;
+    /// println!("Ping successful!");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn ping_sync_with_timeout(
+        &self,
+        timeout_ms: u64,
+    ) -> Result<PingResult, MqttClientError> {
+        self.with_timeout(self.ping_sync_internal(), Some(timeout_ms), "ping")
+            .await
+    }
+
+    // ==================== End Custom Timeout Override Methods ====================
 
     /// Publish a message and wait for acknowledgment (QoS 1 = PUBACK, QoS 2 = PUBCOMP)
     ///

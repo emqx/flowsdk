@@ -117,6 +117,57 @@ let result = client.unsubscribe_sync(vec!["topic"]).await?;
 let result = client.ping_sync().await?;
 ```
 
+### Timeout Configuration
+
+All sync operations support configurable timeouts to prevent indefinite blocking:
+
+```rust
+use flowsdk::mqtt_client::tokio_async_client::TokioAsyncClientConfig;
+use flowsdk::mqtt_client::MqttClientError;
+
+// Configure default timeouts for all operations
+let config = TokioAsyncClientConfig {
+    connect_timeout_ms: Some(30000),        // 30 seconds for CONNECT
+    subscribe_timeout_ms: Some(10000),      // 10 seconds for SUBSCRIBE
+    publish_ack_timeout_ms: Some(10000),    // 10 seconds for PUBLISH ACK
+    unsubscribe_timeout_ms: Some(10000),    // 10 seconds for UNSUBSCRIBE
+    ping_timeout_ms: Some(5000),            // 5 seconds for PING
+    default_operation_timeout_ms: 30000,    // Default fallback
+    ..Default::default()
+};
+
+let client = TokioAsyncMqttClient::new(options, handler, config).await?;
+
+// Use default timeouts
+match client.connect_sync().await {
+    Ok(result) => println!("Connected: {:?}", result),
+    Err(MqttClientError::OperationTimeout { operation, timeout_ms }) => {
+        eprintln!("{} timed out after {}ms", operation, timeout_ms);
+    }
+    Err(e) => eprintln!("Error: {}", e),
+}
+
+// Or override with custom timeout for specific operation
+let result = client.connect_sync_with_timeout(60000).await?; // 60 second timeout
+let result = client.subscribe_sync_with_timeout("topic/#", 1, 5000).await?; // 5 second timeout
+let result = client.publish_sync_with_timeout("topic", b"data", 2, false, 3000).await?; // 3 second timeout
+let result = client.unsubscribe_sync_with_timeout(vec!["topic"], 15000).await?; // 15 second timeout
+let result = client.ping_sync_with_timeout(2000).await?; // 2 second timeout
+```
+
+**Timeout Behavior:**
+- `Some(ms)`: Operation times out after specified milliseconds
+- `None`: No timeout, operation waits indefinitely
+- On timeout: Returns `MqttClientError::OperationTimeout` with operation name and timeout duration
+- Custom timeouts override defaults for individual operations
+
+**Use Cases for Custom Timeouts:**
+- **Satellite/High-latency networks**: Longer timeouts (60s+)
+- **Time-critical operations**: Shorter timeouts (1-3s)
+- **Health checks**: Very short ping timeouts (500ms-2s)
+- **Bulk operations**: Extended timeouts for large payloads
+- **Development/testing**: Disable timeouts with `None`
+
 ### Advanced Publish/Subscribe Commands
 
 For full control over MQTT v5 features:
@@ -360,27 +411,72 @@ client.auth_re_authenticate(properties).await?;
 
 ## Error Handling
 
-All operations return `io::Result<T>`:
+All sync operations return `Result<T, MqttClientError>` for comprehensive error information:
 
 ```rust
-use tokio::time::{timeout, Duration};
+use flowsdk::mqtt_client::MqttClientError;
 
-// With timeout
-match timeout(Duration::from_secs(5), client.connect_sync()).await {
-    Ok(Ok(result)) => println!("Connected: {:?}", result),
-    Ok(Err(e)) => eprintln!("Connection error: {}", e),
-    Err(_) => eprintln!("Connection timeout"),
+// Handling MqttClientError
+match client.connect_sync().await {
+    Ok(result) => println!("Connected: {:?}", result),
+    Err(MqttClientError::OperationTimeout { operation, timeout_ms }) => {
+        eprintln!("⏱️  {} timed out after {}ms", operation, timeout_ms);
+        // Consider retrying with longer timeout
+    }
+    Err(MqttClientError::ConnectionRefused { reason_code, description }) => {
+        eprintln!("🚫 Connection refused: {} (code: 0x{:02X})", description, reason_code);
+        // Check authentication, authorization, broker config
+    }
+    Err(MqttClientError::NetworkError { kind, message }) => {
+        eprintln!("🌐 Network error ({:?}): {}", kind, message);
+        // Check network connectivity
+    }
+    Err(e) => eprintln!("❌ Error: {}", e.user_message()),
 }
 
+// Check if error is recoverable
+if error.is_recoverable() {
+    // Retry the operation
+}
+
+// Check if error should trigger reconnection
+if error.should_reconnect() {
+    // Initiate reconnection
+}
+
+// Convert to io::Error for backward compatibility
+let io_result: io::Result<_> = client.connect_sync().await.map_err(Into::into);
+
 // Error handling in event handler
-async fn on_error(&mut self, error: &io::Error) {
-    match error.kind() {
-        io::ErrorKind::ConnectionReset => println!("Connection reset"),
-        io::ErrorKind::BrokenPipe => println!("Broken pipe"),
-        _ => eprintln!("Error: {}", error),
+async fn on_error(&mut self, error: &MqttClientError) {
+    match error {
+        MqttClientError::ConnectionLost { reason } => {
+            println!("Connection lost: {}", reason);
+        }
+        MqttClientError::PublishFailed { packet_id, reason_code, reason_string } => {
+            eprintln!("Publish failed: packet_id={:?}, code={}, reason={:?}", 
+                     packet_id, reason_code, reason_string);
+        }
+        _ => eprintln!("Error: {}", error.user_message()),
     }
 }
 ```
+
+**Error Categories:**
+- **Timeout Errors**: `OperationTimeout` - operation exceeded configured timeout
+- **Connection Errors**: `ConnectionRefused`, `ConnectionLost`, `NotConnected`
+- **Network Errors**: `NetworkError` - I/O errors with detailed context
+- **Protocol Errors**: `ProtocolViolation`, `PacketParsing`, `UnexpectedPacket`
+- **Operation Errors**: `PublishFailed`, `SubscribeFailed`, `UnsubscribeFailed`
+- **State Errors**: `InvalidState`, `AlreadyConnected`, `NoActiveSession`
+- **Resource Errors**: `BufferFull`, `PacketIdExhausted`
+
+**Backward Compatibility:**
+MqttClientError implements `From<MqttClientError>` for `io::Error`, allowing seamless integration with code expecting `io::Result<T>`:
+- `OperationTimeout` → `io::ErrorKind::TimedOut`
+- `NetworkError` → Original `io::ErrorKind`
+- `NotConnected` → `io::ErrorKind::NotConnected`
+- Other errors → `io::ErrorKind::Other`
 
 ## Examples
 
@@ -398,13 +494,44 @@ cargo run --example tokio_async_mqtt_client_example
 
 ## Best Practices
 
-1. **Use Sync APIs for Critical Operations**: When you need to ensure delivery before proceeding
-2. **Event Handler for Business Logic**: Handle incoming messages in `on_message_received`
-3. **Builder Pattern for Configuration**: Clean and explicit configuration
-4. **Don't wrap in Arc unnecessarily**: The client is already clone-safe via internal `mpsc::Sender`
-5. **Handle Reconnection**: Implement `on_connection_lost` and `on_reconnect_attempt` for robust reconnection handling
-6. **Set Appropriate Timeouts**: Use `tokio::time::timeout` for sync operations
-7. **QoS Selection**: Use QoS 0 for telemetry, QoS 1 for events, QoS 2 for critical commands
+1. **Configure Appropriate Timeouts**: Set timeouts based on your network characteristics
+   - Local networks: 1-5 seconds
+   - Internet/Cloud: 10-30 seconds
+   - Satellite/High-latency: 60+ seconds
+   - Development: Disable with `None` for easier debugging
+
+2. **Use Sync APIs for Critical Operations**: When you need to ensure delivery before proceeding
+   - Use `*_sync()` methods with default timeouts for most cases
+   - Use `*_sync_with_timeout()` for operations needing custom timeouts
+
+3. **Handle Timeout Errors Gracefully**: 
+   ```rust
+   match client.publish_sync(topic, payload, qos, retain).await {
+       Err(MqttClientError::OperationTimeout { .. }) => {
+           // Retry with longer timeout or fail gracefully
+           client.publish_sync_with_timeout(topic, payload, qos, retain, 30000).await?
+       }
+       result => result
+   }
+   ```
+
+4. **Event Handler for Business Logic**: Handle incoming messages in `on_message_received`
+
+5. **Builder Pattern for Configuration**: Clean and explicit configuration
+
+6. **Don't wrap in Arc unnecessarily**: The client is already clone-safe via internal `mpsc::Sender`
+
+7. **Handle Reconnection**: Implement `on_connection_lost` and `on_reconnect_attempt` for robust reconnection handling
+
+8. **QoS Selection**: Use QoS 0 for telemetry, QoS 1 for events, QoS 2 for critical commands
+
+9. **Check Error Recoverability**: Use `error.is_recoverable()` to determine retry strategy
+
+10. **Monitor Timeout Patterns**: If operations frequently timeout, consider:
+    - Increasing timeout values
+    - Checking network quality
+    - Verifying broker performance
+    - Reducing message size or frequency
 
 ## Performance Tips
 

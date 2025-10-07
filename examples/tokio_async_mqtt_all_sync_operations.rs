@@ -16,7 +16,6 @@ use flowsdk::mqtt_client::tokio_async_client::{
 };
 use flowsdk::mqtt_client::{MqttClientError, MqttClientOptions};
 use flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish;
-use std::io;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 
@@ -88,7 +87,7 @@ impl TokioMqttEventHandler for EventTracker {
 }
 
 #[tokio::main]
-async fn main() -> io::Result<()> {
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("╔═══════════════════════════════════════════════════════════════╗");
     println!("║  Tokio Async MQTT Client - All Synchronous Operations Demo  ║");
     println!("╚═══════════════════════════════════════════════════════════════╝\n");
@@ -125,7 +124,7 @@ async fn main() -> io::Result<()> {
         }
         Err(e) => {
             eprintln!("✗ Connection failed: {}\n", e);
-            return Err(e);
+            return Err(e.into());
         }
     }
 

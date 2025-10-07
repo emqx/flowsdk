@@ -177,6 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         recv_buffer_size: 1000,
         keep_alive_interval: 60,
         tcp_nodelay: false,
+        ..Default::default()
     };
 
     let context = Arc::new(Mutex::new(None::<u16>));
