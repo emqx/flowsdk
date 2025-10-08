@@ -258,7 +258,7 @@ async fn test_publish_sync_with_timeout() {
     match TokioAsyncMqttClient::new(options, Box::new(handler), config).await {
         Ok(client) => {
             // Try to connect first
-            if let Ok(_) = client.connect_sync().await {
+            if client.connect_sync().await.is_ok() {
                 // Try publishing with a custom timeout
                 let result = client
                     .publish_sync_with_timeout("test/topic", b"test payload", 1, false, 5000)
@@ -309,7 +309,7 @@ async fn test_subscribe_sync_with_timeout() {
 
     match TokioAsyncMqttClient::new(options, Box::new(handler), config).await {
         Ok(client) => {
-            if let Ok(_) = client.connect_sync().await {
+            if client.connect_sync().await.is_ok() {
                 // Try subscribing with a custom timeout
                 let result = client
                     .subscribe_sync_with_timeout("test/topic/#", 1, 3000)
@@ -360,7 +360,7 @@ async fn test_ping_sync_with_timeout() {
 
     match TokioAsyncMqttClient::new(options, Box::new(handler), config).await {
         Ok(client) => {
-            if let Ok(_) = client.connect_sync().await {
+            if client.connect_sync().await.is_ok() {
                 // Test ping with custom timeout
                 let start = std::time::Instant::now();
                 let result = client.ping_sync_with_timeout(2000).await;

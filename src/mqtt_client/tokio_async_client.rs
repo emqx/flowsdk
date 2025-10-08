@@ -3369,8 +3369,8 @@ mod subscribe_builder_tests {
         assert_eq!(cmd.subscriptions.len(), 1);
         assert_eq!(cmd.subscriptions[0].topic_filter, "sensors/temp");
         assert_eq!(cmd.subscriptions[0].qos, 1);
-        assert_eq!(cmd.subscriptions[0].no_local, false);
-        assert_eq!(cmd.subscriptions[0].retain_as_published, false);
+        assert!(!cmd.subscriptions[0].no_local);
+        assert!(!cmd.subscriptions[0].retain_as_published);
         assert_eq!(cmd.subscriptions[0].retain_handling, 0);
         assert!(cmd.packet_id.is_none());
         assert!(cmd.properties.is_empty());
@@ -3387,8 +3387,8 @@ mod subscribe_builder_tests {
         let sub = &cmd.subscriptions[0];
         assert_eq!(sub.topic_filter, "sensors/+/temp");
         assert_eq!(sub.qos, 1);
-        assert_eq!(sub.no_local, true);
-        assert_eq!(sub.retain_as_published, false);
+        assert!(sub.no_local);
+        assert!(!sub.retain_as_published);
         assert_eq!(sub.retain_handling, 0);
     }
 
@@ -3403,8 +3403,8 @@ mod subscribe_builder_tests {
         let sub = &cmd.subscriptions[0];
         assert_eq!(sub.topic_filter, "sensors/#");
         assert_eq!(sub.qos, 2);
-        assert_eq!(sub.no_local, false);
-        assert_eq!(sub.retain_as_published, true);
+        assert!(!sub.no_local);
+        assert!(sub.retain_as_published);
         assert_eq!(sub.retain_handling, 0);
     }
 
@@ -3435,8 +3435,8 @@ mod subscribe_builder_tests {
         let sub = &cmd.subscriptions[0];
         assert_eq!(sub.topic_filter, "sensors/+/temp");
         assert_eq!(sub.qos, 2);
-        assert_eq!(sub.no_local, true);
-        assert_eq!(sub.retain_as_published, true);
+        assert!(sub.no_local);
+        assert!(sub.retain_as_published);
         assert_eq!(sub.retain_handling, 1);
     }
 
@@ -3455,15 +3455,15 @@ mod subscribe_builder_tests {
         // First subscription
         assert_eq!(cmd.subscriptions[0].topic_filter, "sensors/temp");
         assert_eq!(cmd.subscriptions[0].qos, 1);
-        assert_eq!(cmd.subscriptions[0].no_local, true);
-        assert_eq!(cmd.subscriptions[0].retain_as_published, false);
+        assert!(cmd.subscriptions[0].no_local);
+        assert!(!cmd.subscriptions[0].retain_as_published);
         assert_eq!(cmd.subscriptions[0].retain_handling, 0);
 
         // Second subscription
         assert_eq!(cmd.subscriptions[1].topic_filter, "sensors/humidity");
         assert_eq!(cmd.subscriptions[1].qos, 2);
-        assert_eq!(cmd.subscriptions[1].no_local, false);
-        assert_eq!(cmd.subscriptions[1].retain_as_published, false);
+        assert!(!cmd.subscriptions[1].no_local);
+        assert!(!cmd.subscriptions[1].retain_as_published);
         assert_eq!(cmd.subscriptions[1].retain_handling, 1);
     }
 
@@ -3477,8 +3477,8 @@ mod subscribe_builder_tests {
         let sub = &cmd.subscriptions[0];
         assert_eq!(sub.topic_filter, "sensors/temp");
         assert_eq!(sub.qos, 2);
-        assert_eq!(sub.no_local, true);
-        assert_eq!(sub.retain_as_published, true);
+        assert!(sub.no_local);
+        assert!(sub.retain_as_published);
         assert_eq!(sub.retain_handling, 1);
     }
 
@@ -3637,14 +3637,14 @@ mod subscribe_builder_tests {
         // Verify first topic
         assert_eq!(cmd.subscriptions[0].topic_filter, "sensors/temperature/#");
         assert_eq!(cmd.subscriptions[0].qos, 1);
-        assert_eq!(cmd.subscriptions[0].no_local, false);
+        assert!(!cmd.subscriptions[0].no_local);
         assert_eq!(cmd.subscriptions[0].retain_handling, 0);
 
         // Verify second topic
         assert_eq!(cmd.subscriptions[1].topic_filter, "sensors/humidity/+/data");
         assert_eq!(cmd.subscriptions[1].qos, 2);
-        assert_eq!(cmd.subscriptions[1].no_local, true);
-        assert_eq!(cmd.subscriptions[1].retain_as_published, true);
+        assert!(cmd.subscriptions[1].no_local);
+        assert!(cmd.subscriptions[1].retain_as_published);
         assert_eq!(cmd.subscriptions[1].retain_handling, 2);
 
         // Verify third topic
