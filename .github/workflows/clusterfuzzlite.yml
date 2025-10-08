@@ -29,6 +29,7 @@ permissions:
   contents: read
   issues: write
   pull-requests: write
+  security-events: write
 
 jobs:
   # PR fuzzing - quick checks on pull requests
