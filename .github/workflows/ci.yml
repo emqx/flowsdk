@@ -184,7 +184,7 @@ jobs:
   build-binaries:
     name: Build Release Binaries
     runs-on: ${{ matrix.os }}
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v'))
+    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/temp'))
     
     strategy:
       matrix:
@@ -204,6 +204,12 @@ jobs:
       uses: dtolnay/rust-toolchain@stable
       with:
         targets: ${{ matrix.target }}
+
+    - name: Install protoc
+      uses: arduino/setup-protoc@v3
+      with:
+        version: '25.x'
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Cache dependencies
       uses: actions/cache@v4
