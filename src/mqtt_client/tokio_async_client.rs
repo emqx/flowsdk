@@ -219,6 +219,334 @@ impl SubscribeCommand {
         let subscription = TopicSubscription::new(topic.into(), qos, false, false, 0);
         Self::new(None, vec![subscription], Vec::new())
     }
+
+    /// Create a new builder for constructing a SubscribeCommand
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    ///
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/#", 1)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn builder() -> SubscribeCommandBuilder {
+        SubscribeCommandBuilder::new()
+    }
+}
+
+/// Builder for creating complex MQTT v5 subscription commands
+///
+/// This builder provides a fluent API for constructing `SubscribeCommand` instances
+/// with MQTT v5 subscription options like No Local, Retain As Published, and
+/// Retain Handling.
+///
+/// # Examples
+///
+/// ## Simple Subscription
+/// ```no_run
+/// use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+///
+/// let cmd = SubscribeCommand::builder()
+///     .add_topic("sensors/temp", 1)
+///     .build()
+///     .unwrap();
+/// ```
+///
+/// ## Subscription with Options
+/// ```no_run
+/// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+/// let cmd = SubscribeCommand::builder()
+///     .add_topic("sensors/+/temp", 1)
+///     .with_no_local(true)           // Don't receive own messages
+///     .with_retain_handling(2)       // Don't send retained messages
+///     .with_subscription_id(42)      // Track which subscription matched
+///     .build()
+///     .unwrap();
+/// ```
+///
+/// ## Multiple Topics
+/// ```no_run
+/// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+/// let cmd = SubscribeCommand::builder()
+///     .add_topic("sensors/temp", 1)
+///     .with_no_local(true)
+///     .add_topic("sensors/humidity", 2)
+///     .with_retain_as_published(true)
+///     .build()
+///     .unwrap();
+/// ```
+///
+/// # MQTT v5 Subscription Options
+///
+/// - **No Local**: If true, server won't forward messages published by this client
+/// - **Retain As Published**: If true, retain flag is kept as-is from publisher
+/// - **Retain Handling**:
+///   - 0: Send retained messages at subscribe time (default)
+///   - 1: Send retained only if subscription doesn't exist
+///   - 2: Don't send retained messages
+///
+#[derive(Debug, Clone)]
+pub struct SubscribeCommandBuilder {
+    topics: Vec<TopicSubscription>,
+    properties: Vec<Property>,
+    packet_id: Option<u16>,
+}
+
+/// Error type for builder validation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubscribeBuilderError {
+    /// No topics were added to the subscription
+    NoTopics,
+}
+
+impl std::fmt::Display for SubscribeBuilderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoTopics => write!(
+                f,
+                "No topics added to subscription. Call add_topic() at least once."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SubscribeBuilderError {}
+
+impl SubscribeCommandBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            topics: Vec::new(),
+            properties: Vec::new(),
+            packet_id: None,
+        }
+    }
+
+    /// Add a topic with QoS (uses default options)
+    ///
+    /// Default options:
+    /// - no_local: false
+    /// - retain_as_published: false
+    /// - retain_handling: 0 (send retained messages)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/temp", 1)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn add_topic(mut self, topic: impl Into<String>, qos: u8) -> Self {
+        let subscription = TopicSubscription::new_simple(topic.into(), qos);
+        self.topics.push(subscription);
+        self
+    }
+
+    /// Add a topic with full subscription options
+    ///
+    /// # Arguments
+    /// * `topic` - Topic filter (can include wildcards)
+    /// * `qos` - Quality of Service level (0, 1, or 2)
+    /// * `no_local` - If true, server won't forward messages published by this client
+    /// * `retain_as_published` - If true, retain flag is kept as-is from publisher
+    /// * `retain_handling` - 0: send retained messages, 1: send only on new sub, 2: don't send
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic_with_options("sensors/temp", 1, true, false, 2)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn add_topic_with_options(
+        mut self,
+        topic: impl Into<String>,
+        qos: u8,
+        no_local: bool,
+        retain_as_published: bool,
+        retain_handling: u8,
+    ) -> Self {
+        let subscription = TopicSubscription::new(
+            topic.into(),
+            qos,
+            no_local,
+            retain_as_published,
+            retain_handling,
+        );
+        self.topics.push(subscription);
+        self
+    }
+
+    /// Set No Local flag for the last added topic
+    ///
+    /// If true, the server will not forward messages published by this client
+    /// to its own subscriptions.
+    ///
+    /// # Panics
+    /// Panics if no topics have been added yet.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/temp", 1)
+    ///     .with_no_local(true)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_no_local(mut self, no_local: bool) -> Self {
+        if let Some(last) = self.topics.last_mut() {
+            last.no_local = no_local;
+        } else {
+            panic!("Cannot set no_local: no topics added yet. Call add_topic() first.");
+        }
+        self
+    }
+
+    /// Set Retain As Published flag for the last added topic
+    ///
+    /// If true, the retain flag is forwarded as-is from the publisher.
+    /// If false, the retain flag is always set to 0 for forwarded messages.
+    ///
+    /// # Panics
+    /// Panics if no topics have been added yet.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/temp", 1)
+    ///     .with_retain_as_published(true)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_retain_as_published(mut self, rap: bool) -> Self {
+        if let Some(last) = self.topics.last_mut() {
+            last.retain_as_published = rap;
+        } else {
+            panic!("Cannot set retain_as_published: no topics added yet. Call add_topic() first.");
+        }
+        self
+    }
+
+    /// Set Retain Handling option for the last added topic
+    ///
+    /// Values:
+    /// - 0: Send retained messages at subscribe time
+    /// - 1: Send retained messages only if subscription doesn't exist
+    /// - 2: Don't send retained messages at subscribe time
+    ///
+    /// # Panics
+    /// Panics if no topics have been added yet, or if value > 2.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/temp", 1)
+    ///     .with_retain_handling(2)  // Don't send retained
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_retain_handling(mut self, rh: u8) -> Self {
+        if rh > 2 {
+            panic!("Invalid retain_handling value: {}. Must be 0, 1, or 2.", rh);
+        }
+        if let Some(last) = self.topics.last_mut() {
+            last.retain_handling = rh;
+        } else {
+            panic!("Cannot set retain_handling: no topics added yet. Call add_topic() first.");
+        }
+        self
+    }
+
+    /// Set the Subscription Identifier property
+    ///
+    /// The Subscription Identifier is included in PUBLISH packets to indicate
+    /// which subscription(s) matched the message.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/#", 1)
+    ///     .with_subscription_id(42)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_subscription_id(mut self, id: u32) -> Self {
+        self.properties.push(Property::SubscriptionIdentifier(id));
+        self
+    }
+
+    /// Add a custom MQTT v5 property
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// # use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/#", 1)
+    ///     .add_property(Property::UserProperty("key".into(), "value".into()))
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn add_property(mut self, property: Property) -> Self {
+        self.properties.push(property);
+        self
+    }
+
+    /// Set the packet identifier (usually managed automatically)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/#", 1)
+    ///     .with_packet_id(123)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_packet_id(mut self, id: u16) -> Self {
+        self.packet_id = Some(id);
+        self
+    }
+
+    /// Build the final SubscribeCommand
+    ///
+    /// # Errors
+    /// Returns `SubscribeBuilderError::NoTopics` if no topics were added.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/#", 1)
+    ///     .with_subscription_id(42)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn build(self) -> Result<SubscribeCommand, SubscribeBuilderError> {
+        if self.topics.is_empty() {
+            return Err(SubscribeBuilderError::NoTopics);
+        }
+
+        Ok(SubscribeCommand {
+            packet_id: self.packet_id,
+            subscriptions: self.topics,
+            properties: self.properties,
+        })
+    }
+}
+
+impl Default for SubscribeCommandBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 /// Fully customizable unsubscribe command for MQTT v5
