@@ -142,6 +142,35 @@ cargo test                             # Main library tests
 cd mqtt_grpc_duality && cargo test     # Proxy workspace tests
 ```
 
+### Fuzz Testing
+
+The project includes continuous fuzz testing using [ClusterFuzzLite](https://google.github.io/clusterfuzzlite/) integrated with GitHub Actions.
+
+**Fuzz Targets:**
+- `fuzz_parser_funs`: Tests MQTT packet parsing functions
+- `fuzz_mqtt_packet_symmetric`: Tests packet serialization/deserialization symmetry
+
+**Running Locally:**
+```bash
+# Install cargo-fuzz (requires nightly Rust)
+cargo install cargo-fuzz
+
+# Run a specific fuzz target
+cd fuzz
+cargo fuzz run fuzz_parser_funs -- -max_total_time=60
+
+# Run with coverage
+cargo fuzz coverage fuzz_parser_funs
+```
+
+**Automated Fuzzing:**
+- **PR Fuzzing**: Runs on pull requests for 5 minutes per target
+- **Batch Fuzzing**: Runs on main branch pushes for 10 minutes per target
+- **Continuous Fuzzing**: Runs daily for 1 hour per target
+- **Sanitizers**: Tests with AddressSanitizer, UndefinedBehaviorSanitizer, and MemorySanitizer
+
+Fuzzing results are automatically uploaded as GitHub Security Alerts (SARIF format).
+
 ## Usage Examples
 
 
