@@ -3354,3 +3354,327 @@ impl TokioClientWorker {
         self.mqtt_version = version;
     }
 }
+
+#[cfg(test)]
+mod subscribe_builder_tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_subscription() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/temp", 1)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.subscriptions.len(), 1);
+        assert_eq!(cmd.subscriptions[0].topic_filter, "sensors/temp");
+        assert_eq!(cmd.subscriptions[0].qos, 1);
+        assert_eq!(cmd.subscriptions[0].no_local, false);
+        assert_eq!(cmd.subscriptions[0].retain_as_published, false);
+        assert_eq!(cmd.subscriptions[0].retain_handling, 0);
+        assert!(cmd.packet_id.is_none());
+        assert!(cmd.properties.is_empty());
+    }
+
+    #[test]
+    fn test_subscription_with_no_local() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/+/temp", 1)
+            .with_no_local(true)
+            .build()
+            .unwrap();
+
+        let sub = &cmd.subscriptions[0];
+        assert_eq!(sub.topic_filter, "sensors/+/temp");
+        assert_eq!(sub.qos, 1);
+        assert_eq!(sub.no_local, true);
+        assert_eq!(sub.retain_as_published, false);
+        assert_eq!(sub.retain_handling, 0);
+    }
+
+    #[test]
+    fn test_subscription_with_retain_as_published() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/#", 2)
+            .with_retain_as_published(true)
+            .build()
+            .unwrap();
+
+        let sub = &cmd.subscriptions[0];
+        assert_eq!(sub.topic_filter, "sensors/#");
+        assert_eq!(sub.qos, 2);
+        assert_eq!(sub.no_local, false);
+        assert_eq!(sub.retain_as_published, true);
+        assert_eq!(sub.retain_handling, 0);
+    }
+
+    #[test]
+    fn test_subscription_with_retain_handling() {
+        // Test all valid retain_handling values
+        for rh in 0..=2 {
+            let cmd = SubscribeCommand::builder()
+                .add_topic("test/topic", 1)
+                .with_retain_handling(rh)
+                .build()
+                .unwrap();
+
+            assert_eq!(cmd.subscriptions[0].retain_handling, rh);
+        }
+    }
+
+    #[test]
+    fn test_subscription_with_all_options() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/+/temp", 2)
+            .with_no_local(true)
+            .with_retain_as_published(true)
+            .with_retain_handling(1)
+            .build()
+            .unwrap();
+
+        let sub = &cmd.subscriptions[0];
+        assert_eq!(sub.topic_filter, "sensors/+/temp");
+        assert_eq!(sub.qos, 2);
+        assert_eq!(sub.no_local, true);
+        assert_eq!(sub.retain_as_published, true);
+        assert_eq!(sub.retain_handling, 1);
+    }
+
+    #[test]
+    fn test_multiple_topics() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/temp", 1)
+            .with_no_local(true)
+            .add_topic("sensors/humidity", 2)
+            .with_retain_handling(1)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.subscriptions.len(), 2);
+
+        // First subscription
+        assert_eq!(cmd.subscriptions[0].topic_filter, "sensors/temp");
+        assert_eq!(cmd.subscriptions[0].qos, 1);
+        assert_eq!(cmd.subscriptions[0].no_local, true);
+        assert_eq!(cmd.subscriptions[0].retain_as_published, false);
+        assert_eq!(cmd.subscriptions[0].retain_handling, 0);
+
+        // Second subscription
+        assert_eq!(cmd.subscriptions[1].topic_filter, "sensors/humidity");
+        assert_eq!(cmd.subscriptions[1].qos, 2);
+        assert_eq!(cmd.subscriptions[1].no_local, false);
+        assert_eq!(cmd.subscriptions[1].retain_as_published, false);
+        assert_eq!(cmd.subscriptions[1].retain_handling, 1);
+    }
+
+    #[test]
+    fn test_add_topic_with_options() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic_with_options("sensors/temp", 2, true, true, 1)
+            .build()
+            .unwrap();
+
+        let sub = &cmd.subscriptions[0];
+        assert_eq!(sub.topic_filter, "sensors/temp");
+        assert_eq!(sub.qos, 2);
+        assert_eq!(sub.no_local, true);
+        assert_eq!(sub.retain_as_published, true);
+        assert_eq!(sub.retain_handling, 1);
+    }
+
+    #[test]
+    fn test_with_subscription_id() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/#", 1)
+            .with_subscription_id(42)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            cmd.properties[0],
+            Property::SubscriptionIdentifier(42)
+        ));
+    }
+
+    #[test]
+    fn test_add_property() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("test/topic", 1)
+            .add_property(Property::UserProperty("key".into(), "value".into()))
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::UserProperty(k, v) if k == "key" && v == "value"
+        ));
+    }
+
+    #[test]
+    fn test_multiple_properties() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("test/topic", 1)
+            .with_subscription_id(100)
+            .add_property(Property::UserProperty("key1".into(), "value1".into()))
+            .add_property(Property::UserProperty("key2".into(), "value2".into()))
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 3);
+        assert!(matches!(
+            cmd.properties[0],
+            Property::SubscriptionIdentifier(100)
+        ));
+    }
+
+    #[test]
+    fn test_with_packet_id() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("test/topic", 1)
+            .with_packet_id(123)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.packet_id, Some(123));
+    }
+
+    #[test]
+    fn test_no_topics_error() {
+        let result = SubscribeCommand::builder().build();
+
+        assert!(result.is_err());
+        assert!(matches!(result, Err(SubscribeBuilderError::NoTopics)));
+
+        // Test error message
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("No topics added"));
+    }
+
+    #[test]
+    #[should_panic(expected = "no topics added yet")]
+    fn test_with_no_local_before_topic_panics() {
+        SubscribeCommand::builder().with_no_local(true);
+    }
+
+    #[test]
+    #[should_panic(expected = "no topics added yet")]
+    fn test_with_retain_as_published_before_topic_panics() {
+        SubscribeCommand::builder().with_retain_as_published(true);
+    }
+
+    #[test]
+    #[should_panic(expected = "no topics added yet")]
+    fn test_with_retain_handling_before_topic_panics() {
+        SubscribeCommand::builder().with_retain_handling(1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid retain_handling value")]
+    fn test_invalid_retain_handling_value() {
+        SubscribeCommand::builder()
+            .add_topic("test", 1)
+            .with_retain_handling(3); // Invalid: max is 2
+    }
+
+    #[test]
+    fn test_builder_default() {
+        let builder1 = SubscribeCommandBuilder::default();
+        let builder2 = SubscribeCommandBuilder::new();
+
+        // Both should have the same initial state
+        assert_eq!(builder1.topics.len(), builder2.topics.len());
+        assert_eq!(builder1.properties.len(), builder2.properties.len());
+        assert_eq!(builder1.packet_id, builder2.packet_id);
+    }
+
+    #[test]
+    fn test_string_ownership() {
+        let topic = String::from("sensors/temp");
+        let cmd = SubscribeCommand::builder()
+            .add_topic(topic.clone(), 1) // Clone to test Into<String>
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.subscriptions[0].topic_filter, topic);
+    }
+
+    #[test]
+    fn test_str_slice() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/temp", 1) // &str
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.subscriptions[0].topic_filter, "sensors/temp");
+    }
+
+    #[test]
+    fn test_complex_subscription() {
+        // Test a realistic complex subscription scenario
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/temperature/#", 1)
+            .with_no_local(false)
+            .with_retain_handling(0)
+            .add_topic("sensors/humidity/+/data", 2)
+            .with_no_local(true)
+            .with_retain_as_published(true)
+            .with_retain_handling(2)
+            .add_topic("alerts/#", 1)
+            .with_retain_handling(1)
+            .with_subscription_id(999)
+            .add_property(Property::UserProperty("client".into(), "test".into()))
+            .with_packet_id(42)
+            .build()
+            .unwrap();
+
+        // Verify structure
+        assert_eq!(cmd.subscriptions.len(), 3);
+        assert_eq!(cmd.packet_id, Some(42));
+        assert_eq!(cmd.properties.len(), 2);
+
+        // Verify first topic
+        assert_eq!(cmd.subscriptions[0].topic_filter, "sensors/temperature/#");
+        assert_eq!(cmd.subscriptions[0].qos, 1);
+        assert_eq!(cmd.subscriptions[0].no_local, false);
+        assert_eq!(cmd.subscriptions[0].retain_handling, 0);
+
+        // Verify second topic
+        assert_eq!(cmd.subscriptions[1].topic_filter, "sensors/humidity/+/data");
+        assert_eq!(cmd.subscriptions[1].qos, 2);
+        assert_eq!(cmd.subscriptions[1].no_local, true);
+        assert_eq!(cmd.subscriptions[1].retain_as_published, true);
+        assert_eq!(cmd.subscriptions[1].retain_handling, 2);
+
+        // Verify third topic
+        assert_eq!(cmd.subscriptions[2].topic_filter, "alerts/#");
+        assert_eq!(cmd.subscriptions[2].qos, 1);
+        assert_eq!(cmd.subscriptions[2].retain_handling, 1);
+
+        // Verify properties
+        assert!(matches!(
+            cmd.properties[0],
+            Property::SubscriptionIdentifier(999)
+        ));
+        assert!(matches!(
+            &cmd.properties[1],
+            Property::UserProperty(k, v) if k == "client" && v == "test"
+        ));
+    }
+
+    #[test]
+    fn test_builder_is_clone() {
+        let builder = SubscribeCommand::builder()
+            .add_topic("test", 1)
+            .with_subscription_id(42);
+
+        let builder_clone = builder.clone();
+
+        let cmd1 = builder.build().unwrap();
+        let cmd2 = builder_clone.build().unwrap();
+
+        assert_eq!(cmd1.subscriptions.len(), cmd2.subscriptions.len());
+        assert_eq!(cmd1.properties.len(), cmd2.properties.len());
+    }
+}
