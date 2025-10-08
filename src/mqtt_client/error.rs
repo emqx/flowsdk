@@ -435,7 +435,7 @@ impl From<MqttClientError> for io::Error {
             ),
 
             // Map all other errors to Other with the error's display message
-            other => io::Error::new(io::ErrorKind::Other, other.to_string()),
+            other => io::Error::other(other.to_string()),
         }
     }
 }
