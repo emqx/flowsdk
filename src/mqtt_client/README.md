@@ -47,12 +47,26 @@ async fn main() -> io::Result<()> {
         .keep_alive(60)
         .build();
 
-    // 3. Create the client
+    // 3. Create the client with custom configuration
+    let config = TokioAsyncClientConfig::builder()
+        .auto_reconnect(true)
+        .reconnect_delay_ms(2000)
+        .connect_timeout_ms(30000)
+        .internet_timeouts() // Preset timeout profile
+        .build();
+    
     let client = TokioAsyncMqttClient::new(
         options,
         Box::new(MyHandler),
-        TokioAsyncClientConfig::default()
+        config
     ).await?;
+
+    // Or use defaults:
+    // let client = TokioAsyncMqttClient::new(
+    //     options,
+    //     Box::new(MyHandler),
+    //     TokioAsyncClientConfig::default()
+    // ).await?;
 
     // 4. Connect to broker
     client.connect().await?;
@@ -65,6 +79,61 @@ async fn main() -> io::Result<()> {
 
     Ok(())
 }
+```
+
+## Configuration
+
+The client can be configured using the builder pattern:
+
+```rust
+use flowsdk::mqtt_client::tokio_async_client::TokioAsyncClientConfig;
+
+// Simple configuration with defaults
+let config = TokioAsyncClientConfig::default();
+
+// Custom configuration using builder
+let config = TokioAsyncClientConfig::builder()
+    // Reconnection settings
+    .auto_reconnect(true)
+    .reconnect_delay_ms(1000)
+    .max_reconnect_attempts(10)
+    
+    // Timeout settings
+    .connect_timeout_ms(30000)      // 30 seconds
+    .subscribe_timeout_ms(10000)    // 10 seconds
+    .publish_ack_timeout_ms(10000)  // 10 seconds
+    .ping_timeout_ms(5000)          // 5 seconds
+    
+    // Or disable specific timeouts
+    .no_connect_timeout()           // Wait indefinitely
+    
+    // Buffer settings
+    .send_buffer_size(2000)
+    .recv_buffer_size(2000)
+    .buffer_messages(true)
+    
+    // Other settings
+    .keep_alive_interval(60)
+    .tcp_nodelay(true)
+    .build();
+
+// Use preset timeout profiles
+let local_config = TokioAsyncClientConfig::builder()
+    .local_network_timeouts()  // 2-5 second timeouts
+    .build();
+
+let internet_config = TokioAsyncClientConfig::builder()
+    .internet_timeouts()       // 5-30 second timeouts (default)
+    .build();
+
+let satellite_config = TokioAsyncClientConfig::builder()
+    .satellite_timeouts()      // 30-120 second timeouts
+    .build();
+
+// Disable all timeouts for development
+let dev_config = TokioAsyncClientConfig::builder()
+    .no_timeouts()
+    .build();
 ```
 
 ## API Overview
