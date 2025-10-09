@@ -167,6 +167,7 @@ impl MqttClientOptions {
     ///
     /// # Example
     /// ```
+    /// # use flowsdk::mqtt_client::MqttClientOptions;
     /// let options = MqttClientOptions::builder()
     ///     .maximum_packet_size(268_435_455)  // Maximum allowed value
     ///     .build();
@@ -194,6 +195,7 @@ impl MqttClientOptions {
     ///
     /// # Example
     /// ```
+    /// # use flowsdk::mqtt_client::MqttClientOptions;
     /// let options = MqttClientOptions::builder()
     ///     .request_response_information(true)
     ///     .build();
@@ -210,6 +212,7 @@ impl MqttClientOptions {
     ///
     /// # Example
     /// ```
+    /// # use flowsdk::mqtt_client::MqttClientOptions;
     /// let options = MqttClientOptions::builder()
     ///     .request_problem_information(true)
     ///     .build();

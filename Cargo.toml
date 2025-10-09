@@ -24,4 +24,7 @@ async-trait = "0.1"
 [features]
 default = ["strict-protocol-compliance"]
 strict-protocol-compliance = []
+# ⚠️ DANGEROUS: Enable raw packet API for protocol compliance testing
+# DO NOT enable in production builds
+protocol-testing = []
 

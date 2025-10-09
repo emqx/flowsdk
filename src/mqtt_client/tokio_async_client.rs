@@ -1019,6 +1019,7 @@ impl ConfigBuilder {
     ///
     /// # Example
     /// ```
+    /// use flowsdk::mqtt_client::TokioAsyncClientConfig;
     /// let config = TokioAsyncClientConfig::builder()
     ///     .topic_alias_maximum(10)  // Accept up to 10 topic aliases
     ///     .build();
@@ -1035,6 +1036,7 @@ impl ConfigBuilder {
     ///
     /// # Example
     /// ```
+    /// use flowsdk::mqtt_client::TokioAsyncClientConfig;
     /// let config = TokioAsyncClientConfig::builder()
     ///     .topic_alias_maximum(10)
     ///     .no_topic_alias()  // Disable topic aliases
