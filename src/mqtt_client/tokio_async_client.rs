@@ -664,6 +664,10 @@ pub struct TokioAsyncClientConfig {
     /// is willing to process concurrently (MQTT v5 only)
     /// None = use default (65535), Some(0) is invalid
     pub receive_maximum: Option<u16>,
+    /// Maximum number of topic aliases that the client accepts from the server (MQTT v5 only)
+    /// None or Some(0) = topic aliases not supported
+    /// Valid range: 0-65535
+    pub topic_alias_maximum: Option<u16>,
 }
 
 impl Default for TokioAsyncClientConfig {
@@ -687,6 +691,7 @@ impl Default for TokioAsyncClientConfig {
             ping_timeout_ms: Some(5000),         // 5 seconds
             default_operation_timeout_ms: 30000, // 30 seconds
             receive_maximum: None,               // Use MQTT v5 default (65535)
+            topic_alias_maximum: None,           // Topic aliases not supported by default
         }
     }
 }
@@ -998,6 +1003,45 @@ impl ConfigBuilder {
     /// ```
     pub fn no_receive_maximum(mut self) -> Self {
         self.config.receive_maximum = None;
+        self
+    }
+
+    /// Set the Topic Alias Maximum value
+    ///
+    /// This property indicates the maximum number of topic aliases that the client
+    /// accepts from the server (MQTT v5 only). Topic aliases allow the server to
+    /// send a numeric alias instead of the full topic name to reduce packet size.
+    ///
+    /// # Arguments
+    /// * `max` - Maximum topic aliases (0-65535)
+    ///   - 0 = topic aliases not supported
+    ///   - 1-65535 = maximum number of topic aliases
+    ///
+    /// # Example
+    /// ```
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .topic_alias_maximum(10)  // Accept up to 10 topic aliases
+    ///     .build();
+    /// ```
+    pub fn topic_alias_maximum(mut self, max: u16) -> Self {
+        self.config.topic_alias_maximum = Some(max);
+        self
+    }
+
+    /// Disable topic alias support
+    ///
+    /// Sets topic_alias_maximum to None (default), indicating that topic
+    /// aliases are not supported by the client.
+    ///
+    /// # Example
+    /// ```
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .topic_alias_maximum(10)
+    ///     .no_topic_alias()  // Disable topic aliases
+    ///     .build();
+    /// ```
+    pub fn no_topic_alias(mut self) -> Self {
+        self.config.topic_alias_maximum = None;
         self
     }
 }
@@ -3751,9 +3795,7 @@ mod config_builder_tests {
 
     #[test]
     fn test_receive_maximum_min_value() {
-        let config = TokioAsyncClientConfig::builder()
-            .receive_maximum(1)
-            .build();
+        let config = TokioAsyncClientConfig::builder().receive_maximum(1).build();
 
         assert_eq!(config.receive_maximum, Some(1));
     }
@@ -3770,9 +3812,7 @@ mod config_builder_tests {
     #[test]
     #[should_panic(expected = "receive_maximum must be greater than 0")]
     fn test_receive_maximum_zero_panics() {
-        TokioAsyncClientConfig::builder()
-            .receive_maximum(0)
-            .build();
+        TokioAsyncClientConfig::builder().receive_maximum(0).build();
     }
 
     #[test]
@@ -3839,5 +3879,80 @@ mod config_builder_tests {
         assert_eq!(config.auto_reconnect, true);
         assert_eq!(config.reconnect_delay_ms, 1000);
         assert_eq!(config.tcp_nodelay, true);
+    }
+
+    // ==================== Topic Alias Maximum Tests ====================
+
+    #[test]
+    fn test_topic_alias_maximum_default() {
+        let config = TokioAsyncClientConfig::default();
+        assert_eq!(config.topic_alias_maximum, None);
+    }
+
+    #[test]
+    fn test_topic_alias_maximum_zero() {
+        // 0 means topic aliases not supported
+        let config = TokioAsyncClientConfig::builder()
+            .topic_alias_maximum(0)
+            .build();
+
+        assert_eq!(config.topic_alias_maximum, Some(0));
+    }
+
+    #[test]
+    fn test_topic_alias_maximum_builder() {
+        let config = TokioAsyncClientConfig::builder()
+            .topic_alias_maximum(10)
+            .build();
+
+        assert_eq!(config.topic_alias_maximum, Some(10));
+    }
+
+    #[test]
+    fn test_topic_alias_maximum_max_value() {
+        let config = TokioAsyncClientConfig::builder()
+            .topic_alias_maximum(65535)
+            .build();
+
+        assert_eq!(config.topic_alias_maximum, Some(65535));
+    }
+
+    #[test]
+    fn test_no_topic_alias() {
+        let config = TokioAsyncClientConfig::builder()
+            .topic_alias_maximum(100)
+            .no_topic_alias()
+            .build();
+
+        assert_eq!(config.topic_alias_maximum, None);
+    }
+
+    #[test]
+    fn test_topic_alias_chain() {
+        let config = TokioAsyncClientConfig::builder()
+            .auto_reconnect(false)
+            .topic_alias_maximum(50)
+            .receive_maximum(100)
+            .tcp_nodelay(true)
+            .build();
+
+        assert_eq!(config.topic_alias_maximum, Some(50));
+        assert_eq!(config.receive_maximum, Some(100));
+        assert_eq!(config.auto_reconnect, false);
+        assert_eq!(config.tcp_nodelay, true);
+    }
+
+    #[test]
+    fn test_topic_alias_mqtt_v5_compliance() {
+        // Test various valid values according to MQTT v5 spec
+        let test_values = vec![0, 1, 10, 100, 1000, 32767, 65535];
+
+        for value in test_values {
+            let config = TokioAsyncClientConfig::builder()
+                .topic_alias_maximum(value)
+                .build();
+
+            assert_eq!(config.topic_alias_maximum, Some(value));
+        }
     }
 }
