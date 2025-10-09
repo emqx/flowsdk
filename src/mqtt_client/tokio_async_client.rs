@@ -3838,8 +3838,8 @@ mod config_builder_tests {
             .build();
 
         assert_eq!(config.receive_maximum, Some(50));
-        assert_eq!(config.auto_reconnect, false);
-        assert_eq!(config.tcp_nodelay, true);
+        assert!(!config.auto_reconnect);
+        assert!(config.tcp_nodelay);
         assert_eq!(config.connect_timeout_ms, Some(5000));
     }
 
@@ -3878,9 +3878,9 @@ mod config_builder_tests {
         let config = TokioAsyncClientConfig::default();
 
         assert_eq!(config.receive_maximum, None); // Should use MQTT v5 default (65535)
-        assert_eq!(config.auto_reconnect, true);
+        assert!(config.auto_reconnect);
         assert_eq!(config.reconnect_delay_ms, 1000);
-        assert_eq!(config.tcp_nodelay, true);
+        assert!(config.tcp_nodelay);
     }
 
     // ==================== Topic Alias Maximum Tests ====================
@@ -3940,8 +3940,8 @@ mod config_builder_tests {
 
         assert_eq!(config.topic_alias_maximum, Some(50));
         assert_eq!(config.receive_maximum, Some(100));
-        assert_eq!(config.auto_reconnect, false);
-        assert_eq!(config.tcp_nodelay, true);
+        assert!(!config.auto_reconnect);
+        assert!(config.tcp_nodelay);
     }
 
     #[test]

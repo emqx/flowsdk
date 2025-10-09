@@ -281,10 +281,10 @@ impl RawTestClient {
     pub async fn is_connected(&mut self) -> bool {
         // Try to peek at the stream
         let mut buf = [0u8; 1];
-        match timeout(Duration::from_millis(10), self.stream.peek(&mut buf)).await {
-            Ok(Ok(_)) => true,
-            _ => false,
-        }
+        matches!(
+            timeout(Duration::from_millis(10), self.stream.peek(&mut buf)).await,
+            Ok(Ok(_))
+        )
     }
 
     /// Close the connection

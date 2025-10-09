@@ -238,14 +238,14 @@ mod mqtt_client_options_tests {
 
         assert_eq!(options.peer, "localhost:1883");
         assert_eq!(options.client_id, "mqtt_client");
-        assert_eq!(options.clean_start, true);
+        assert!(options.clean_start);
         assert_eq!(options.keep_alive, 60);
         assert_eq!(options.username, None);
         assert_eq!(options.password, None);
         assert_eq!(options.will, None);
-        assert_eq!(options.reconnect, false);
-        assert_eq!(options.sessionless, false);
-        assert_eq!(options.auto_ack, true);
+        assert!(!options.reconnect);
+        assert!(!options.sessionless);
+        assert!(options.auto_ack);
         assert_eq!(options.session_expiry_interval, None);
         assert_eq!(options.maximum_packet_size, None);
         assert_eq!(options.request_response_information, None);
@@ -391,13 +391,13 @@ mod mqtt_client_options_tests {
 
         assert_eq!(options.peer, "mqtt.example.com:8883");
         assert_eq!(options.client_id, "test_client");
-        assert_eq!(options.clean_start, false);
+        assert!(!options.clean_start);
         assert_eq!(options.keep_alive, 120);
         assert_eq!(options.username, Some("user123".to_string()));
         assert_eq!(options.password, Some(b"secret".to_vec()));
-        assert_eq!(options.reconnect, true);
-        assert_eq!(options.sessionless, true);
-        assert_eq!(options.auto_ack, false);
+        assert!(options.reconnect);
+        assert!(options.sessionless);
+        assert!(!options.auto_ack);
         assert_eq!(options.session_expiry_interval, Some(7200));
         assert_eq!(options.maximum_packet_size, Some(1_048_576));
         assert_eq!(options.request_response_information, Some(true));
