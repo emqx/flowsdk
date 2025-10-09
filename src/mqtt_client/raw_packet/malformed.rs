@@ -131,9 +131,10 @@ impl MalformedPacketGenerator {
     /// # }
     /// ```
     pub fn invalid_qos_both_bits() -> io::Result<Vec<u8>> {
-        let mut publish = MqttPublish::new(0, "test".to_string(), None, vec![], false, false);
+        let mut publish = MqttPublish::new(1, "test".to_string(), Some(1), vec![], false, false);
         publish.topic_name = "test".to_string();
         publish.qos = 1;
+        publish.packet_id = Some(1);
         publish.payload = vec![];
 
         let mut builder = RawPacketBuilder::from_packet(MqttPacket::Publish5(publish))?;
@@ -193,26 +194,28 @@ impl MalformedPacketGenerator {
     /// # }
     /// ```
     pub fn will_flag_without_payload() -> io::Result<Vec<u8>> {
-        let mut connect = MqttConnect::new(
+        use crate::mqtt_serde::mqttv5::will::Will;
+
+        // Create connect with will
+        let will = Will::new("will/topic".to_string(), vec![1, 2, 3], 0, false);
+
+        let connect = MqttConnect::new(
             "test_client".to_string(),
             None,
             None,
-            None,
+            Some(will),
             60,
             true,
             vec![],
         );
-        connect.will_flag = true;
-        connect.will_topic = Some("will/topic".to_string());
-        connect.will_payload = Some(vec![1, 2, 3]);
 
         let mut builder = RawPacketBuilder::from_packet(MqttPacket::Connect5(connect))?;
 
         // Find and remove will payload
-        // This is a simplified version - in real implementation we'd parse and reconstruct
+        // This is a simplified version - we truncate to remove the will message bytes
         let bytes = builder.bytes_mut();
-        // Truncate to remove will payload (simplified)
-        let new_len = bytes.len() - 5; // Remove payload
+        // Remove the last 5 bytes (2 bytes length + 3 bytes payload)
+        let new_len = bytes.len().saturating_sub(5);
         builder.truncate(new_len);
 
         Ok(builder.build())
@@ -308,9 +311,11 @@ impl MalformedPacketGenerator {
     /// # }
     /// ```
     pub fn subscribe_reserved_bits() -> io::Result<Vec<u8>> {
-        let mut subscribe = MqttSubscribe::new(1, vec![], vec![]);
-        subscribe.packet_id = 1;
-        subscribe.topics = vec![("test/topic".to_string(), 0)];
+        use crate::mqtt_serde::mqttv5::subscribe::TopicSubscription;
+
+        let subscription = TopicSubscription::new_simple("test/topic".to_string(), 0);
+
+        let subscribe = MqttSubscribe::new(1, vec![subscription], vec![]);
 
         let mut builder = RawPacketBuilder::from_packet(MqttPacket::Subscribe5(subscribe))?;
 
