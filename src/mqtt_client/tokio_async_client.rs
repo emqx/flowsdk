@@ -660,6 +660,10 @@ pub struct TokioAsyncClientConfig {
     pub ping_timeout_ms: Option<u64>,
     /// Default timeout for operations without specific timeout (milliseconds)
     pub default_operation_timeout_ms: u64,
+    /// Maximum number of QoS 1 and QoS 2 publications that the client
+    /// is willing to process concurrently (MQTT v5 only)
+    /// None = use default (65535), Some(0) is invalid
+    pub receive_maximum: Option<u16>,
 }
 
 impl Default for TokioAsyncClientConfig {
@@ -682,6 +686,7 @@ impl Default for TokioAsyncClientConfig {
             unsubscribe_timeout_ms: Some(10000), // 10 seconds
             ping_timeout_ms: Some(5000),         // 5 seconds
             default_operation_timeout_ms: 30000, // 30 seconds
+            receive_maximum: None,               // Use MQTT v5 default (65535)
         }
     }
 }
@@ -947,6 +952,52 @@ impl ConfigBuilder {
         self.config.unsubscribe_timeout_ms = Some(60000);
         self.config.ping_timeout_ms = Some(30000);
         self.config.default_operation_timeout_ms = 120000;
+        self
+    }
+
+    // ==================== MQTT v5 Flow Control ====================
+
+    /// Set the Receive Maximum value for flow control (MQTT v5)
+    ///
+    /// This limits the number of QoS 1 and QoS 2 publications the client
+    /// will process concurrently. The server must not send more PUBLISH
+    /// packets than this value before receiving acknowledgments.
+    ///
+    /// # Arguments
+    /// * `max` - Maximum concurrent QoS 1/2 messages (1-65535)
+    ///
+    /// # Panics
+    /// Panics if `max` is 0 (protocol violation)
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::tokio_async_client::TokioAsyncClientConfig;
+    ///
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .receive_maximum(100)  // Limit to 100 concurrent messages
+    ///     .build();
+    /// ```
+    pub fn receive_maximum(mut self, max: u16) -> Self {
+        if max == 0 {
+            panic!("receive_maximum must be greater than 0 (MQTT v5 protocol violation)");
+        }
+        self.config.receive_maximum = Some(max);
+        self
+    }
+
+    /// Clear the Receive Maximum value (use MQTT v5 default of 65535)
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::tokio_async_client::TokioAsyncClientConfig;
+    ///
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .receive_maximum(100)
+    ///     .no_receive_maximum()  // Reset to default
+    ///     .build();
+    /// ```
+    pub fn no_receive_maximum(mut self) -> Self {
+        self.config.receive_maximum = None;
         self
     }
 }
@@ -3676,5 +3727,117 @@ mod subscribe_builder_tests {
 
         assert_eq!(cmd1.subscriptions.len(), cmd2.subscriptions.len());
         assert_eq!(cmd1.properties.len(), cmd2.properties.len());
+    }
+}
+
+#[cfg(test)]
+mod config_builder_tests {
+    use super::*;
+
+    #[test]
+    fn test_receive_maximum_default() {
+        let config = TokioAsyncClientConfig::default();
+        assert_eq!(config.receive_maximum, None);
+    }
+
+    #[test]
+    fn test_receive_maximum_builder() {
+        let config = TokioAsyncClientConfig::builder()
+            .receive_maximum(100)
+            .build();
+
+        assert_eq!(config.receive_maximum, Some(100));
+    }
+
+    #[test]
+    fn test_receive_maximum_min_value() {
+        let config = TokioAsyncClientConfig::builder()
+            .receive_maximum(1)
+            .build();
+
+        assert_eq!(config.receive_maximum, Some(1));
+    }
+
+    #[test]
+    fn test_receive_maximum_max_value() {
+        let config = TokioAsyncClientConfig::builder()
+            .receive_maximum(65535)
+            .build();
+
+        assert_eq!(config.receive_maximum, Some(65535));
+    }
+
+    #[test]
+    #[should_panic(expected = "receive_maximum must be greater than 0")]
+    fn test_receive_maximum_zero_panics() {
+        TokioAsyncClientConfig::builder()
+            .receive_maximum(0)
+            .build();
+    }
+
+    #[test]
+    fn test_no_receive_maximum() {
+        let config = TokioAsyncClientConfig::builder()
+            .receive_maximum(100)
+            .no_receive_maximum()
+            .build();
+
+        assert_eq!(config.receive_maximum, None);
+    }
+
+    #[test]
+    fn test_receive_maximum_chain() {
+        // Test that we can chain with other config options
+        let config = TokioAsyncClientConfig::builder()
+            .auto_reconnect(false)
+            .receive_maximum(50)
+            .tcp_nodelay(true)
+            .connect_timeout_ms(5000)
+            .build();
+
+        assert_eq!(config.receive_maximum, Some(50));
+        assert_eq!(config.auto_reconnect, false);
+        assert_eq!(config.tcp_nodelay, true);
+        assert_eq!(config.connect_timeout_ms, Some(5000));
+    }
+
+    #[test]
+    fn test_config_builder_clone() {
+        let builder = TokioAsyncClientConfig::builder()
+            .receive_maximum(200)
+            .auto_reconnect(false);
+
+        let builder_clone = builder.clone();
+
+        let config1 = builder.build();
+        let config2 = builder_clone.build();
+
+        assert_eq!(config1.receive_maximum, config2.receive_maximum);
+        assert_eq!(config1.auto_reconnect, config2.auto_reconnect);
+    }
+
+    #[test]
+    fn test_receive_maximum_mqtt_v5_compliance() {
+        // Test various valid values according to MQTT v5 spec
+        let test_values = vec![1, 10, 100, 1000, 10000, 32767, 65535];
+
+        for value in test_values {
+            let config = TokioAsyncClientConfig::builder()
+                .receive_maximum(value)
+                .build();
+
+            assert_eq!(config.receive_maximum, Some(value));
+        }
+    }
+
+    #[test]
+    fn test_config_default_values() {
+        // Verify default config has correct receive_maximum
+        let config = TokioAsyncClientConfig::default();
+
+        assert_eq!(config.receive_maximum, None); // Should use MQTT v5 default (65535)
+        assert_eq!(config.auto_reconnect, true);
+        assert_eq!(config.reconnect_delay_ms, 1000);
+        assert_eq!(config.tcp_nodelay, true);
     }
 }
