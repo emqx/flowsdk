@@ -1,7 +1,7 @@
 # TokioAsyncMqttClient API Guide
 
-**Version**: 0.1  
-**Last Updated**: October 2025
+**Version**: 1.0  
+**Last Updated**: October 10, 2025
 
 ## Overview
 
@@ -9,13 +9,17 @@
 
 ### Key Features
 - ✅ Full MQTT v5.0 protocol support
+- ✅ Advanced subscription options (No Local, Retain Handling, Retain As Published)
+- ✅ SubscribeCommand builder pattern for complex subscriptions
 - ✅ Async/await based on Tokio runtime
 - ✅ Event-driven architecture with callbacks
 - ✅ Automatic reconnection with exponential backoff
 - ✅ Configurable operation timeouts
 - ✅ Message buffering during disconnection
 - ✅ QoS 0, 1, and 2 support
+- ✅ Flow control (Receive Maximum, Topic Alias Maximum)
 - ✅ Thread-safe and clone-friendly
+- ✅ Raw Packet API for protocol compliance testing (feature-gated)
 
 ---
 
@@ -39,6 +43,9 @@ let options = MqttClientOptions::builder()
     .password(b"password".to_vec())
     .clean_start(true)
     .keep_alive(60)
+    .maximum_packet_size(268435455)  // Optional: MQTT v5 max packet size
+    .request_response_information(true)  // Optional: MQTT v5 request/response
+    .request_problem_information(true)   // Optional: MQTT v5 problem info
     .build();
 
 // 2. Create event handler (implements TokioMqttEventHandler trait)
@@ -48,6 +55,8 @@ let handler = Box::new(MyEventHandler::new());
 let config = TokioAsyncClientConfig::builder()
     .auto_reconnect(true)
     .internet_timeouts()  // Preset timeout profile
+    .receive_maximum(100)  // Optional: MQTT v5 flow control
+    .topic_alias_maximum(10)  // Optional: MQTT v5 topic aliases
     .build();
 
 // 4. Create the client
@@ -76,6 +85,57 @@ let config = TokioAsyncClientConfig::builder()
 let config = TokioAsyncClientConfig::builder()
     .no_timeouts()
     .auto_reconnect(false)
+    .build();
+```
+
+### MQTT v5 Configuration Options
+
+#### Client Options (MqttClientOptions)
+
+**Maximum Packet Size**:
+```rust
+let options = MqttClientOptions::builder()
+    .peer("mqtt.example.com:1883")
+    .maximum_packet_size(1048576)  // 1MB max packet size
+    .build();
+
+// Or disable limit
+let options = MqttClientOptions::builder()
+    .no_maximum_packet_size()
+    .build();
+```
+
+**Request/Response Information**:
+```rust
+let options = MqttClientOptions::builder()
+    .request_response_information(true)  // Request response topic from broker
+    .request_problem_information(true)   // Request detailed error info
+    .build();
+```
+
+#### Client Configuration (TokioAsyncClientConfig)
+
+**Receive Maximum** (Flow Control):
+```rust
+let config = TokioAsyncClientConfig::builder()
+    .receive_maximum(100)  // Max 100 concurrent QoS 1/2 messages
+    .build();
+
+// Or use default (65535)
+let config = TokioAsyncClientConfig::builder()
+    .no_receive_maximum()
+    .build();
+```
+
+**Topic Alias Maximum**:
+```rust
+let config = TokioAsyncClientConfig::builder()
+    .topic_alias_maximum(10)  // Accept up to 10 topic aliases from server
+    .build();
+
+// Or disable topic aliases
+let config = TokioAsyncClientConfig::builder()
+    .no_topic_alias()  // Set to 0
     .build();
 ```
 
@@ -285,19 +345,90 @@ pub async fn subscribe_with_command(
 ) -> io::Result<()>
 ```
 
-**Description**: Subscribe with full MQTT v5 options.  
+**Description**: Subscribe with full MQTT v5 options using the builder pattern.  
 **Use case**: When you need subscription options or multiple topics
 
-**Example**:
+**Example using Builder Pattern** (Recommended):
 ```rust
 use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
 
-let command = SubscribeCommand::new(
-    vec![
-        ("sensors/temp", 1, false, true, 0),  // topic, qos, no_local, retain_as_published, retain_handling
-        ("sensors/humidity", 1, false, true, 0),
-    ],
-    0,  // subscription_id
+// Simple subscription
+let cmd = SubscribeCommand::builder()
+    .add_topic("sensors/temp", 1)
+    .build()
+    .unwrap();
+
+client.subscribe_with_command(cmd).await?;
+
+// Advanced: Subscription with MQTT v5 options
+let cmd = SubscribeCommand::builder()
+    .add_topic("sensors/+/temp", 1)
+    .with_no_local(true)           // Don't receive own messages
+    .with_retain_handling(2)       // Don't send retained messages
+    .with_subscription_id(42)      // Track which subscription matched
+    .build()
+    .unwrap();
+
+client.subscribe_with_command(cmd).await?;
+
+// Multiple topics with different options
+let cmd = SubscribeCommand::builder()
+    .add_topic("sensors/temp", 1)
+    .with_no_local(true)
+    .add_topic("sensors/humidity", 2)
+    .with_retain_as_published(true)
+    .with_retain_handling(1)
+    .build()
+    .unwrap();
+
+client.subscribe_with_command(cmd).await?;
+```
+
+**MQTT v5 Subscription Options**:
+- `no_local`: If true, server won't forward messages published by this client
+- `retain_as_published`: If true, retain flag is kept as-is from publisher
+- `retain_handling`:
+  - `0`: Send retained messages at subscribe time (default)
+  - `1`: Send retained only if subscription doesn't exist
+  - `2`: Don't send retained messages
+- `subscription_id`: Identifier to track which subscription matched (0 = none)
+
+**Builder Methods**:
+- `add_topic(topic, qos)` - Add topic with default options
+- `add_topic_with_options(topic, qos, no_local, retain_as_published, retain_handling)` - Full control
+- `with_no_local(bool)` - Modify last added topic
+- `with_retain_as_published(bool)` - Modify last added topic
+- `with_retain_handling(u8)` - Modify last added topic (0-2)
+- `with_subscription_id(u32)` - Add subscription identifier
+- `add_property(Property)` - Add custom MQTT v5 property
+- `with_packet_id(u16)` - Set packet identifier
+- `build()` - Build the command (validates at least one topic)
+
+---
+
+#### `subscribe_with_command_sync()` - Sync Advanced Subscribe
+```rust
+pub async fn subscribe_with_command_sync(
+    &self,
+    command: SubscribeCommand
+) -> Result<SubscribeResult, MqttClientError>
+```
+
+**Description**: Like `subscribe_with_command()` but waits for SUBACK.
+
+**Example**:
+```rust
+let cmd = SubscribeCommand::builder()
+    .add_topic("sensors/#", 1)
+    .with_no_local(true)
+    .build()
+    .unwrap();
+
+match client.subscribe_with_command_sync(cmd).await {
+    Ok(result) => println!("Subscribed: {:?}", result.reason_codes),
+    Err(e) => eprintln!("Failed: {}", e),
+}
+```
     vec![]  // properties
 );
 client.subscribe_with_command(command).await?;
@@ -1081,14 +1212,213 @@ async fn publish_with_queue_fallback(
 
 ## API Quick Reference
 
+### Core Operations
+
 | Operation | Async (Fire-and-Forget) | Sync (Wait-for-ACK) | Sync with Timeout |
 |-----------|------------------------|---------------------|-------------------|
 | **Connect** | `connect()` | `connect_sync()` | `connect_sync_with_timeout(ms)` |
 | **Disconnect** | `disconnect()` | - | - |
 | **Subscribe** | `subscribe(topic, qos)` | `subscribe_sync(topic, qos)` | `subscribe_sync_with_timeout(topic, qos, ms)` |
+| **Subscribe (Advanced)** | `subscribe_with_command(cmd)` | `subscribe_with_command_sync(cmd)` | `subscribe_with_command_sync_with_timeout(cmd, ms)` |
 | **Unsubscribe** | `unsubscribe(topics)` | `unsubscribe_sync(topics)` | `unsubscribe_sync_with_timeout(topics, ms)` |
 | **Publish** | `publish(topic, payload, qos, retain)` | `publish_sync(topic, payload, qos, retain)` | `publish_sync_with_timeout(topic, payload, qos, retain, ms)` |
+| **Publish (Advanced)** | `publish_with_command(cmd)` | `publish_with_command_sync(cmd)` | `publish_with_command_sync_with_timeout(cmd, ms)` |
 | **Ping** | `ping()` | `ping_sync()` | `ping_sync_with_timeout(ms)` |
+
+### SubscribeCommand Builder
+
+```rust
+// Simple subscription
+SubscribeCommand::builder()
+    .add_topic("sensors/temp", 1)
+    .build()?
+
+// With MQTT v5 options
+SubscribeCommand::builder()
+    .add_topic("sensors/+/temp", 1)
+    .with_no_local(true)           // Don't receive own messages
+    .with_retain_handling(2)       // Don't send retained messages
+    .with_retain_as_published(true) // Keep retain flag as-is
+    .with_subscription_id(42)      // Track subscription matching
+    .build()?
+
+// Multiple topics
+SubscribeCommand::builder()
+    .add_topic("sensors/temp", 1)
+    .with_no_local(true)
+    .add_topic("sensors/humidity", 2)
+    .with_retain_as_published(true)
+    .build()?
+```
+
+### MQTT v5 Configuration
+
+**Client Options** (MqttClientOptions):
+- `maximum_packet_size(size)` / `no_maximum_packet_size()`
+- `request_response_information(bool)`
+- `request_problem_information(bool)`
+
+**Client Config** (TokioAsyncClientConfig):
+- `receive_maximum(max)` / `no_receive_maximum()`
+- `topic_alias_maximum(max)` / `no_topic_alias()`
+
+---
+
+## Raw Packet API (Protocol Testing)
+
+⚠️ **DANGER: Test-Only API** - Only use for protocol compliance testing!
+
+The raw packet API is available behind the `protocol-testing` feature flag and provides low-level packet manipulation capabilities for testing MQTT protocol compliance.
+
+### Enabling the Feature
+
+```toml
+[dependencies]
+flowsdk = { version = "0.1", features = ["protocol-testing"] }
+```
+
+### RawPacketBuilder
+
+Create and manipulate raw MQTT packets:
+
+```rust
+#[cfg(feature = "protocol-testing")]
+use flowsdk::mqtt_client::raw_packet::RawPacketBuilder;
+
+// Create from valid packet
+let packet = MqttPacket::Connect5(connect);
+let mut builder = RawPacketBuilder::from_packet(packet)?;
+
+// Manipulate bytes
+builder.set_byte(0, 0x01);  // Set specific byte
+builder.set_fixed_header_flags(0x01);  // Modify flags
+builder.set_packet_type(15);  // Change packet type
+builder.corrupt_variable_length();  // Corrupt encoding
+builder.insert_bytes(10, &[0xFF, 0xFF]);  // Insert bytes
+builder.remove_bytes(10, 2);  // Remove bytes
+builder.truncate(50);  // Truncate to size
+builder.append_bytes(&[0x00, 0x01]);  // Append bytes
+
+let raw_packet = builder.build();
+```
+
+### RawTestClient
+
+Direct TCP client bypassing MQTT protocol:
+
+```rust
+#[cfg(feature = "protocol-testing")]
+use flowsdk::mqtt_client::raw_packet::test_client::RawTestClient;
+
+// Connect directly via TCP
+let mut client = RawTestClient::connect("localhost:1883").await?;
+
+// Send raw bytes
+let malformed_packet = vec![0x10, 0x00];  // Invalid CONNECT
+client.send_raw(malformed_packet).await?;
+
+// Receive response
+let response = client.receive_raw(5000).await?;
+
+// Expect disconnect
+client.send_expect_disconnect(malformed_packet, 5000).await?;
+
+// Send and receive
+let response = client.send_and_receive(packet, 5000).await?;
+
+// Close connection
+client.close().await?;
+```
+
+### MalformedPacketGenerator
+
+Pre-built malformed packets for testing server rejection:
+
+```rust
+#[cfg(feature = "protocol-testing")]
+use flowsdk::mqtt_client::raw_packet::malformed::MalformedPacketGenerator;
+
+// Reserved bits violations
+let packet = MalformedPacketGenerator::connect_reserved_flag()?;
+let packet = MalformedPacketGenerator::subscribe_reserved_bits()?;
+
+// Encoding violations
+let packet = MalformedPacketGenerator::non_minimal_variable_length()?;
+let packet = MalformedPacketGenerator::qos0_with_packet_id()?;
+let packet = MalformedPacketGenerator::invalid_qos_both_bits()?;
+
+// Protocol violations
+let packet = MalformedPacketGenerator::incorrect_protocol_name()?;
+let packet = MalformedPacketGenerator::second_connect()?;
+let packet = MalformedPacketGenerator::invalid_protocol_version()?;
+
+// Property violations
+let packet = MalformedPacketGenerator::topic_alias_zero()?;
+let packet = MalformedPacketGenerator::subscription_identifier_zero()?;
+let packet = MalformedPacketGenerator::duplicate_topic_alias()?;
+
+// Topic violations
+let packet = MalformedPacketGenerator::topic_with_wildcards()?;
+let packet = MalformedPacketGenerator::empty_topic_name()?;
+
+// Payload violations
+let packet = MalformedPacketGenerator::will_flag_without_payload()?;
+let packet = MalformedPacketGenerator::client_id_too_long()?;
+
+// Size violations
+let packet = MalformedPacketGenerator::remaining_length_too_large()?;
+
+// Valid baseline packets
+let packet = MalformedPacketGenerator::valid_connect()?;
+let packet = MalformedPacketGenerator::valid_pingreq()?;
+```
+
+### Testing Pattern Example
+
+```rust
+#[tokio::test]
+#[cfg(feature = "protocol-testing")]
+#[ignore]  // Requires live broker
+async fn test_mqtt_reserved_bits_rejection() {
+    use flowsdk::mqtt_client::raw_packet::test_client::RawTestClient;
+    use flowsdk::mqtt_client::raw_packet::malformed::MalformedPacketGenerator;
+    
+    // Connect via raw TCP
+    let mut client = RawTestClient::connect("localhost:1883").await.unwrap();
+    
+    // Send malformed CONNECT with reserved bit set
+    let malformed = MalformedPacketGenerator::connect_reserved_flag().unwrap();
+    
+    // Server should disconnect (MQTT-2.1.3-1)
+    client.send_expect_disconnect(malformed, 5000).await.unwrap();
+}
+```
+
+### Safety Warnings
+
+⚠️ **Never use in production**:
+- These APIs create malformed packets that violate MQTT specification
+- Can crash brokers or cause undefined behavior
+- Only for testing server compliance with MQTT normative statements
+- Always use behind `#[cfg(feature = "protocol-testing")]`
+- Mark tests with `#[ignore]` to prevent accidental execution
+
+### Available Generators (20+ methods)
+
+Each generator method creates a packet that violates a specific MQTT normative statement:
+
+- **MQTT-1.5.5-1**: Non-minimal variable byte integers
+- **MQTT-2.1.3-1**: Reserved flag bits
+- **MQTT-2.2.1-2**: QoS 0 with packet identifier
+- **MQTT-3.1.0-2**: Second CONNECT packet
+- **MQTT-3.1.2-1**: Incorrect protocol name
+- **MQTT-3.3.1-4**: Both QoS bits set to 1
+- **MQTT-3.3.2-8**: Topic Alias = 0
+- **MQTT-3.3.4-6**: Subscription Identifier = 0
+- **MQTT-3.8.3-1-2**: SUBSCRIBE reserved bits
+- And many more...
+
+See `src/mqtt_client/raw_packet/malformed.rs` for complete list.
 
 ---
 
@@ -1098,8 +1428,10 @@ async fn publish_with_queue_fallback(
 - **Timeout Tests**: See `tests/timeout_tests.rs`
 - **Protocol Compliance**: See `tests/protocol_compliance_tests.rs`
 - **MQTT v5 Spec**: See `docs/source/mqtt-v5.0.pdf`
+- **Raw Packet API Reference**: See `docs/RAW_PACKET_API_QUICK_REFERENCE.md`
+- **Test Coverage Analysis**: See `docs/MQTT_PROTOCOL_TEST_COVERAGE_ANALYSIS.md`
 
 ---
 
-**Last Updated**: October 2025  
-**Version**: 0.1
+**Last Updated**: October 10, 2025  
+**Version**: 1.0
