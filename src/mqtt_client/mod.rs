@@ -5,6 +5,7 @@ pub mod opts;
 #[cfg(feature = "protocol-testing")]
 pub mod raw_packet;
 pub mod tokio_async_client;
+pub mod transport;
 
 pub use async_client::{AsyncClientConfig, AsyncMqttClient, MqttEvent, MqttEventHandler};
 pub use client::MqttClient;
