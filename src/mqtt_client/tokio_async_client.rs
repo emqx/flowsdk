@@ -6,10 +6,13 @@ use std::time::{Duration, Instant};
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, error::TryRecvError, error::TrySendError, Receiver};
 use tokio::sync::oneshot;
 use tokio::time::Sleep;
+
+#[cfg(feature = "tls")]
+use super::transport::TlsTransport;
+use super::transport::{BoxedTransport, TcpTransport, Transport};
 
 use crate::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket};
 use crate::mqtt_serde::mqttv5::{
@@ -2416,8 +2419,8 @@ struct TokioClientWorker {
     command_rx: mpsc::Receiver<TokioClientCommand>,
     /// Worker configuration
     config: TokioAsyncClientConfig,
-    /// TCP stream to MQTT broker
-    stream: Option<TcpStream>,
+    /// Transport connection to MQTT broker (TCP or TLS)
+    stream: Option<BoxedTransport>,
     /// Async ingress/egress streams
     streams: AsyncMQTTStreams,
     /// Current connection state
@@ -2791,6 +2794,48 @@ impl TokioClientWorker {
         self.keep_alive_timer = Some(Box::pin(tokio::time::sleep(time_until_next_check)));
     }
 
+    /// Create transport based on peer address scheme
+    ///
+    /// Supports:
+    /// - `mqtt://host:port` or `host:port` → TCP transport
+    /// - `mqtts://host:port` → TLS transport (requires `tls` feature)
+    async fn create_transport(&self, peer: &str) -> Result<BoxedTransport, MqttClientError> {
+        // Parse URL scheme
+        if peer.starts_with("mqtts://") {
+            #[cfg(feature = "tls")]
+            {
+                let addr = peer.strip_prefix("mqtts://").unwrap_or(peer);
+                let transport = TlsTransport::connect(addr).await.map_err(|e| {
+                    MqttClientError::ConnectionLost {
+                        reason: format!("TLS connection failed to {}: {}", peer, e),
+                    }
+                })?;
+                Ok(Box::new(transport) as BoxedTransport)
+            }
+            #[cfg(not(feature = "tls"))]
+            {
+                Err(MqttClientError::ProtocolViolation {
+                    message: format!(
+                        "TLS transport not available. Enable the 'tls' feature to use mqtts:// URLs. Peer: {}",
+                        peer
+                    ),
+                })
+            }
+        } else {
+            // Default to TCP for mqtt:// or plain addresses
+            let addr = peer.strip_prefix("mqtt://").unwrap_or(peer);
+
+            let transport =
+                TcpTransport::connect(addr)
+                    .await
+                    .map_err(|e| MqttClientError::ConnectionLost {
+                        reason: format!("TCP connection failed to {}: {}", peer, e),
+                    })?;
+
+            Ok(Box::new(transport) as BoxedTransport)
+        }
+    }
+
     /// Handle connecting to broker
     async fn handle_connect(&mut self) {
         // Avoid concurrent connect attempts if a socket already exists
@@ -2800,19 +2845,22 @@ impl TokioClientWorker {
 
         let peer = self.options.peer.clone();
 
-        match TcpStream::connect(&peer).await {
-            Ok(stream) => {
+        match self.create_transport(&peer).await {
+            Ok(transport) => {
                 if self.config.tcp_nodelay {
-                    if let Err(e) = stream.set_nodelay(true) {
-                        let mqtt_err = MqttClientError::from_io_error(e, "TCP set_nodelay");
+                    if let Err(e) = transport.set_nodelay(true) {
+                        let mqtt_err = MqttClientError::NetworkError {
+                            kind: io::ErrorKind::Other,
+                            message: format!("Failed to set TCP_NODELAY: {}", e),
+                        };
                         self.event_handler.on_error(&mqtt_err).await;
                     }
                 }
 
-                // Install the socket before enqueuing bytes so the writer branch can flush
-                self.stream = Some(stream);
+                // Install the transport before enqueuing bytes so the writer branch can flush
+                self.stream = Some(transport);
 
-                // Reset reconnect attempts on successful TCP connect
+                // Reset reconnect attempts on successful connection
                 self.reconnect_attempts = 0;
 
                 // Session management mirrors the synchronous client behaviour
@@ -2873,8 +2921,7 @@ impl TokioClientWorker {
                     self.flush_message_buffer().await;
                 }
             }
-            Err(e) => {
-                let mqtt_err = MqttClientError::from_io_error(e, "TCP connect");
+            Err(mqtt_err) => {
                 self.event_handler.on_error(&mqtt_err).await;
             }
         }

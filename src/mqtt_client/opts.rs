@@ -1,6 +1,9 @@
 use crate::mqtt_serde::mqttv5::subscribev5;
 use crate::mqtt_serde::mqttv5::willv5::Will;
 
+#[cfg(feature = "tls")]
+use crate::mqtt_client::transport::tls::TlsConfig;
+
 pub struct MqttClientOptions {
     pub peer: String,
     pub client_id: String,
@@ -43,6 +46,13 @@ pub struct MqttClientOptions {
     /// - Some(false): Do not request problem information
     ///   Default: None
     pub request_problem_information: Option<bool>,
+
+    /// TLS configuration for encrypted connections (requires 'tls' feature)
+    /// - None: Use plain TCP connection
+    /// - Some(config): Use TLS with specified configuration
+    ///   Default: None
+    #[cfg(feature = "tls")]
+    pub tls_config: Option<TlsConfig>,
 }
 
 impl Default for MqttClientOptions {
@@ -63,6 +73,8 @@ impl Default for MqttClientOptions {
             maximum_packet_size: None,
             request_response_information: None,
             request_problem_information: None,
+            #[cfg(feature = "tls")]
+            tls_config: None,
         }
     }
 }
@@ -222,6 +234,83 @@ impl MqttClientOptions {
         self
     }
 
+    /// Set TLS configuration for encrypted connections (requires 'tls' feature)
+    ///
+    /// Use this to enable TLS/SSL connections to the MQTT broker with custom
+    /// certificate configuration, client identity, etc.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "tls")]
+    /// # {
+    /// use flowsdk::mqtt_client::MqttClientOptions;
+    /// use flowsdk::mqtt_client::transport::tls::TlsConfig;
+    /// use native_tls::Certificate;
+    ///
+    /// let cert_pem = std::fs::read("ca.crt").unwrap();
+    /// let cert = Certificate::from_pem(&cert_pem).unwrap();
+    ///
+    /// let tls_config = TlsConfig::builder()
+    ///     .add_root_certificate(cert)
+    ///     .build();
+    ///
+    /// let options = MqttClientOptions::builder()
+    ///     .peer("mqtts://broker.example.com:8883")
+    ///     .tls_config(tls_config)
+    ///     .build();
+    /// # }
+    /// ```
+    #[cfg(feature = "tls")]
+    pub fn tls_config(mut self, config: TlsConfig) -> Self {
+        self.tls_config = Some(config);
+        self
+    }
+
+    /// Enable TLS with default system certificates (requires 'tls' feature)
+    ///
+    /// This is a convenience method that creates a default TLS configuration
+    /// using the system's trusted root certificates.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "tls")]
+    /// # {
+    /// use flowsdk::mqtt_client::MqttClientOptions;
+    ///
+    /// let options = MqttClientOptions::builder()
+    ///     .peer("mqtts://broker.example.com:8883")
+    ///     .enable_tls()
+    ///     .build();
+    /// # }
+    /// ```
+    #[cfg(feature = "tls")]
+    pub fn enable_tls(mut self) -> Self {
+        self.tls_config = Some(TlsConfig::default());
+        self
+    }
+
+    /// Disable TLS (use plain TCP connection)
+    ///
+    /// This explicitly disables TLS even if it was previously enabled.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # #[cfg(feature = "tls")]
+    /// # {
+    /// use flowsdk::mqtt_client::MqttClientOptions;
+    ///
+    /// let options = MqttClientOptions::builder()
+    ///     .peer("mqtt://broker.example.com:1883")
+    ///     .disable_tls()
+    ///     .build();
+    /// # }
+    /// ```
+    #[cfg(feature = "tls")]
+    pub fn disable_tls(mut self) -> Self {
+        self.tls_config = None;
+        self
+    }
+
     /// Build the options (consumes self, no additional validation needed)
     pub fn build(self) -> Self {
         self
@@ -250,6 +339,8 @@ mod mqtt_client_options_tests {
         assert_eq!(options.maximum_packet_size, None);
         assert_eq!(options.request_response_information, None);
         assert_eq!(options.request_problem_information, None);
+        #[cfg(feature = "tls")]
+        assert!(options.tls_config.is_none());
     }
 
     // ==================== Maximum Packet Size Tests ====================
@@ -416,5 +507,86 @@ mod mqtt_client_options_tests {
 
             assert_eq!(options.maximum_packet_size, Some(size));
         }
+    }
+
+    // ==================== TLS Configuration Tests ====================
+
+    #[test]
+    #[cfg(feature = "tls")]
+    fn test_tls_config_default() {
+        let options = MqttClientOptions::default();
+        assert!(options.tls_config.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "tls")]
+    fn test_enable_tls() {
+        let options = MqttClientOptions::builder().enable_tls().build();
+
+        assert!(options.tls_config.is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "tls")]
+    fn test_disable_tls() {
+        let options = MqttClientOptions::builder()
+            .enable_tls()
+            .disable_tls()
+            .build();
+
+        assert!(options.tls_config.is_none());
+    }
+
+    #[test]
+    #[cfg(feature = "tls")]
+    fn test_tls_config_custom() {
+        use crate::mqtt_client::transport::tls::TlsConfig;
+
+        let tls_config = TlsConfig::builder()
+            .danger_accept_invalid_certs(true)
+            .build();
+
+        let options = MqttClientOptions::builder().tls_config(tls_config).build();
+
+        assert!(options.tls_config.is_some());
+        let config = options.tls_config.unwrap();
+        assert!(config.accept_invalid_certs);
+    }
+
+    #[test]
+    #[cfg(feature = "tls")]
+    fn test_tls_with_mqtts_url() {
+        let options = MqttClientOptions::builder()
+            .peer("mqtts://broker.example.com:8883")
+            .enable_tls()
+            .build();
+
+        assert_eq!(options.peer, "mqtts://broker.example.com:8883");
+        assert!(options.tls_config.is_some());
+    }
+
+    #[test]
+    #[cfg(feature = "tls")]
+    fn test_builder_chaining_with_tls() {
+        use crate::mqtt_client::transport::tls::TlsConfig;
+
+        let tls_config = TlsConfig::builder()
+            .danger_accept_invalid_hostnames(true)
+            .build();
+
+        let options = MqttClientOptions::builder()
+            .peer("mqtts://secure.example.com:8883")
+            .client_id("tls_client")
+            .username("user")
+            .password(b"pass".to_vec())
+            .tls_config(tls_config)
+            .maximum_packet_size(65536)
+            .build();
+
+        assert_eq!(options.peer, "mqtts://secure.example.com:8883");
+        assert_eq!(options.client_id, "tls_client");
+        assert!(options.tls_config.is_some());
+        let config = options.tls_config.unwrap();
+        assert!(config.accept_invalid_hostnames);
     }
 }

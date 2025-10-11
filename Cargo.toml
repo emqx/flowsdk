@@ -20,11 +20,19 @@ arbitrary = { version = "1", optional = true, features = ["derive"] }
 serde_json = "1.0"
 slab = "0.4.11"
 async-trait = "0.1"
+thiserror = "1.0"
+
+# TLS support (optional)
+tokio-native-tls = { version = "0.3", optional = true }
+native-tls = { version = "0.2", optional = true }
 
 [features]
-default = ["strict-protocol-compliance"]
+default = ["strict-protocol-compliance", "tls"]
+# TLS/SSL transport support
+tls = ["dep:tokio-native-tls", "dep:native-tls"]
 strict-protocol-compliance = []
 # ⚠️ DANGEROUS: Enable raw packet API for protocol compliance testing
 # DO NOT enable in production builds
 protocol-testing = []
+
 
