@@ -181,6 +181,23 @@ impl PublishCommand {
         Self::new(topic.into(), payload, qos, retain, false, None, Vec::new())
     }
 
+    /// Create a new builder for constructing a PublishCommand
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    ///
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .payload(b"23.5")
+    ///     .qos(1)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn builder() -> PublishCommandBuilder {
+        PublishCommandBuilder::new()
+    }
+
     fn to_mqtt_publish(&self) -> MqttPublish {
         MqttPublish::new_with_prop(
             self.qos,
@@ -191,6 +208,357 @@ impl PublishCommand {
             self.dup,
             self.properties.clone(),
         )
+    }
+}
+
+/// Builder for creating MQTT v5 publish commands
+///
+/// This builder provides a fluent API for constructing `PublishCommand` instances
+/// with full control over MQTT v5 publish options and properties.
+///
+/// # Examples
+///
+/// ## Simple Publish
+/// ```no_run
+/// use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+///
+/// let cmd = PublishCommand::builder()
+///     .topic("sensors/temp")
+///     .payload(b"23.5")
+///     .qos(1)
+///     .build()
+///     .unwrap();
+/// ```
+///
+/// ## Publish with Properties
+/// ```no_run
+/// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+/// let cmd = PublishCommand::builder()
+///     .topic("sensors/temp")
+///     .payload(b"23.5")
+///     .qos(2)
+///     .retain(true)
+///     .with_message_expiry_interval(3600)  // Expire after 1 hour
+///     .with_content_type("application/json")
+///     .build()
+///     .unwrap();
+/// ```
+///
+/// ## Publish with Topic Alias
+/// ```no_run
+/// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+/// let cmd = PublishCommand::builder()
+///     .topic("sensors/temperature/room1")
+///     .payload(b"23.5")
+///     .qos(1)
+///     .with_topic_alias(42)  // Use topic alias to reduce packet size
+///     .build()
+///     .unwrap();
+/// ```
+#[derive(Debug, Clone)]
+pub struct PublishCommandBuilder {
+    topic_name: Option<String>,
+    payload: Vec<u8>,
+    qos: u8,
+    retain: bool,
+    dup: bool,
+    packet_id: Option<u16>,
+    properties: Vec<Property>,
+}
+
+/// Error type for publish builder validation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublishBuilderError {
+    /// Topic name was not provided
+    NoTopic,
+}
+
+impl std::fmt::Display for PublishBuilderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoTopic => write!(f, "Topic name not provided. Call topic() to set the topic."),
+        }
+    }
+}
+
+impl std::error::Error for PublishBuilderError {}
+
+impl PublishCommandBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            topic_name: None,
+            payload: Vec::new(),
+            qos: 0,
+            retain: false,
+            dup: false,
+            packet_id: None,
+            properties: Vec::new(),
+        }
+    }
+
+    /// Set the topic name
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .payload(b"23.5")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn topic(mut self, topic: impl Into<String>) -> Self {
+        self.topic_name = Some(topic.into());
+        self
+    }
+
+    /// Set the payload
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .payload(b"23.5")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn payload(mut self, payload: impl Into<Vec<u8>>) -> Self {
+        self.payload = payload.into();
+        self
+    }
+
+    /// Set the Quality of Service level (0, 1, or 2)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .qos(2)  // Exactly once delivery
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn qos(mut self, qos: u8) -> Self {
+        self.qos = qos;
+        self
+    }
+
+    /// Set the retain flag
+    ///
+    /// If true, the broker will store this message and send it to new subscribers.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .payload(b"23.5")
+    ///     .retain(true)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn retain(mut self, retain: bool) -> Self {
+        self.retain = retain;
+        self
+    }
+
+    /// Set the duplicate flag (usually managed automatically)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .dup(true)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn dup(mut self, dup: bool) -> Self {
+        self.dup = dup;
+        self
+    }
+
+    /// Set the packet identifier (usually managed automatically)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .with_packet_id(123)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_packet_id(mut self, id: u16) -> Self {
+        self.packet_id = Some(id);
+        self
+    }
+
+    /// Add a custom MQTT v5 property
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// # use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .add_property(Property::UserProperty("sensor_id".into(), "42".into()))
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn add_property(mut self, property: Property) -> Self {
+        self.properties.push(property);
+        self
+    }
+
+    /// Set the Message Expiry Interval (MQTT v5)
+    ///
+    /// The message will expire after this many seconds if not delivered.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("alerts/temp")
+    ///     .payload(b"warning")
+    ///     .with_message_expiry_interval(300)  // Expire after 5 minutes
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_message_expiry_interval(mut self, seconds: u32) -> Self {
+        self.properties
+            .push(Property::MessageExpiryInterval(seconds));
+        self
+    }
+
+    /// Set the Content Type property (MQTT v5)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("data/json")
+    ///     .payload(br#"{"temp":23.5}"#)
+    ///     .with_content_type("application/json")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_content_type(mut self, content_type: impl Into<String>) -> Self {
+        self.properties
+            .push(Property::ContentType(content_type.into()));
+        self
+    }
+
+    /// Set the Response Topic property (MQTT v5)
+    ///
+    /// Used for request/response patterns.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("requests/temp")
+    ///     .payload(b"get_temp")
+    ///     .with_response_topic("responses/temp")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_response_topic(mut self, topic: impl Into<String>) -> Self {
+        self.properties.push(Property::ResponseTopic(topic.into()));
+        self
+    }
+
+    /// Set the Correlation Data property (MQTT v5)
+    ///
+    /// Used to correlate requests with responses.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("requests/data")
+    ///     .with_correlation_data(b"request-123")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_correlation_data(mut self, data: impl Into<Vec<u8>>) -> Self {
+        self.properties.push(Property::CorrelationData(data.into()));
+        self
+    }
+
+    /// Set the Topic Alias property (MQTT v5)
+    ///
+    /// Allows using a numeric alias instead of the full topic name to reduce packet size.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temperature/room1")
+    ///     .with_topic_alias(42)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_topic_alias(mut self, alias: u16) -> Self {
+        self.properties.push(Property::TopicAlias(alias));
+        self
+    }
+
+    /// Add a User Property (MQTT v5)
+    ///
+    /// User properties are key-value pairs for application-specific metadata.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .with_user_property("sensor_id", "42")
+    ///     .with_user_property("location", "room1")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_user_property(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.properties
+            .push(Property::UserProperty(key.into(), value.into()));
+        self
+    }
+
+    /// Build the final PublishCommand
+    ///
+    /// # Errors
+    /// Returns `PublishBuilderError::NoTopic` if topic was not set.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .payload(b"23.5")
+    ///     .qos(1)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn build(self) -> Result<PublishCommand, PublishBuilderError> {
+        let topic_name = self.topic_name.ok_or(PublishBuilderError::NoTopic)?;
+
+        Ok(PublishCommand {
+            topic_name,
+            payload: self.payload,
+            qos: self.qos,
+            retain: self.retain,
+            dup: self.dup,
+            packet_id: self.packet_id,
+            properties: self.properties,
+        })
+    }
+}
+
+impl Default for PublishCommandBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -3773,6 +4141,336 @@ mod subscribe_builder_tests {
 
         assert_eq!(cmd1.subscriptions.len(), cmd2.subscriptions.len());
         assert_eq!(cmd1.properties.len(), cmd2.properties.len());
+    }
+}
+
+#[cfg(test)]
+mod publish_builder_tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_publish() {
+        let cmd = PublishCommand::builder()
+            .topic("sensors/temp")
+            .payload(b"23.5")
+            .qos(1)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.topic_name, "sensors/temp");
+        assert_eq!(cmd.payload, b"23.5");
+        assert_eq!(cmd.qos, 1);
+        assert!(!cmd.retain);
+        assert!(!cmd.dup);
+        assert!(cmd.packet_id.is_none());
+        assert!(cmd.properties.is_empty());
+    }
+
+    #[test]
+    fn test_publish_with_retain() {
+        let cmd = PublishCommand::builder()
+            .topic("status/online")
+            .payload(b"true")
+            .retain(true)
+            .build()
+            .unwrap();
+
+        assert!(cmd.retain);
+        assert_eq!(cmd.qos, 0); // Default QoS
+    }
+
+    #[test]
+    fn test_publish_with_qos_levels() {
+        for qos in 0..=2 {
+            let cmd = PublishCommand::builder()
+                .topic("test/topic")
+                .qos(qos)
+                .build()
+                .unwrap();
+
+            assert_eq!(cmd.qos, qos);
+        }
+    }
+
+    #[test]
+    fn test_publish_with_packet_id() {
+        let cmd = PublishCommand::builder()
+            .topic("test/topic")
+            .with_packet_id(123)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.packet_id, Some(123));
+    }
+
+    #[test]
+    fn test_publish_with_dup() {
+        let cmd = PublishCommand::builder()
+            .topic("test/topic")
+            .dup(true)
+            .build()
+            .unwrap();
+
+        assert!(cmd.dup);
+    }
+
+    #[test]
+    fn test_publish_with_message_expiry() {
+        let cmd = PublishCommand::builder()
+            .topic("alerts/temp")
+            .payload(b"warning")
+            .with_message_expiry_interval(300)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::MessageExpiryInterval(300)
+        ));
+    }
+
+    #[test]
+    fn test_publish_with_content_type() {
+        let cmd = PublishCommand::builder()
+            .topic("data/json")
+            .payload(br#"{"temp":23.5}"#)
+            .with_content_type("application/json")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::ContentType(ct) if ct == "application/json"
+        ));
+    }
+
+    #[test]
+    fn test_publish_with_response_topic() {
+        let cmd = PublishCommand::builder()
+            .topic("requests/temp")
+            .with_response_topic("responses/temp")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::ResponseTopic(rt) if rt == "responses/temp"
+        ));
+    }
+
+    #[test]
+    fn test_publish_with_correlation_data() {
+        let cmd = PublishCommand::builder()
+            .topic("requests/data")
+            .with_correlation_data(b"request-123")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::CorrelationData(data) if data == b"request-123"
+        ));
+    }
+
+    #[test]
+    fn test_publish_with_topic_alias() {
+        let cmd = PublishCommand::builder()
+            .topic("sensors/temperature/room1")
+            .with_topic_alias(42)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(&cmd.properties[0], Property::TopicAlias(42)));
+    }
+
+    #[test]
+    fn test_publish_with_user_properties() {
+        let cmd = PublishCommand::builder()
+            .topic("sensors/temp")
+            .with_user_property("sensor_id", "42")
+            .with_user_property("location", "room1")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 2);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::UserProperty(k, v) if k == "sensor_id" && v == "42"
+        ));
+        assert!(matches!(
+            &cmd.properties[1],
+            Property::UserProperty(k, v) if k == "location" && v == "room1"
+        ));
+    }
+
+    #[test]
+    fn test_publish_with_custom_property() {
+        let cmd = PublishCommand::builder()
+            .topic("test/topic")
+            .add_property(Property::UserProperty("key".into(), "value".into()))
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::UserProperty(k, v) if k == "key" && v == "value"
+        ));
+    }
+
+    #[test]
+    fn test_publish_with_multiple_properties() {
+        let cmd = PublishCommand::builder()
+            .topic("data/sensor")
+            .payload(br#"{"temp":23.5}"#)
+            .with_content_type("application/json")
+            .with_message_expiry_interval(3600)
+            .with_user_property("sensor_id", "42")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 3);
+    }
+
+    #[test]
+    fn test_publish_complex_command() {
+        let cmd = PublishCommand::builder()
+            .topic("sensors/temperature/room1")
+            .payload(b"23.5")
+            .qos(2)
+            .retain(true)
+            .with_packet_id(456)
+            .with_topic_alias(10)
+            .with_content_type("text/plain")
+            .with_message_expiry_interval(7200)
+            .with_user_property("location", "building-A")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.topic_name, "sensors/temperature/room1");
+        assert_eq!(cmd.payload, b"23.5");
+        assert_eq!(cmd.qos, 2);
+        assert!(cmd.retain);
+        assert_eq!(cmd.packet_id, Some(456));
+        assert_eq!(cmd.properties.len(), 4);
+    }
+
+    #[test]
+    fn test_publish_no_topic_error() {
+        let result = PublishCommand::builder().payload(b"test").build();
+
+        assert!(result.is_err());
+        assert!(matches!(result, Err(PublishBuilderError::NoTopic)));
+
+        // Test error message
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Topic name not provided"));
+    }
+
+    #[test]
+    fn test_publish_empty_payload() {
+        let cmd = PublishCommand::builder()
+            .topic("test/topic")
+            .build()
+            .unwrap();
+
+        assert!(cmd.payload.is_empty());
+    }
+
+    #[test]
+    fn test_publish_payload_into_conversion() {
+        // Test with &[u8]
+        let cmd1 = PublishCommand::builder()
+            .topic("test/topic")
+            .payload(b"test" as &[u8])
+            .build()
+            .unwrap();
+        assert_eq!(cmd1.payload, b"test");
+
+        // Test with Vec<u8>
+        let cmd2 = PublishCommand::builder()
+            .topic("test/topic")
+            .payload(vec![1, 2, 3, 4])
+            .build()
+            .unwrap();
+        assert_eq!(cmd2.payload, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_publish_topic_into_conversion() {
+        // Test with &str
+        let cmd1 = PublishCommand::builder()
+            .topic("test/topic")
+            .build()
+            .unwrap();
+        assert_eq!(cmd1.topic_name, "test/topic");
+
+        // Test with String
+        let cmd2 = PublishCommand::builder()
+            .topic(String::from("test/topic2"))
+            .build()
+            .unwrap();
+        assert_eq!(cmd2.topic_name, "test/topic2");
+    }
+
+    #[test]
+    fn test_builder_default() {
+        let builder1 = PublishCommandBuilder::default();
+        let builder2 = PublishCommandBuilder::new();
+
+        assert_eq!(builder1.topic_name, builder2.topic_name);
+        assert_eq!(builder1.qos, builder2.qos);
+        assert_eq!(builder1.retain, builder2.retain);
+        assert_eq!(builder1.dup, builder2.dup);
+    }
+
+    #[test]
+    fn test_builder_is_clone() {
+        let builder = PublishCommand::builder()
+            .topic("test/topic")
+            .payload(b"test")
+            .qos(1);
+
+        let builder_clone = builder.clone();
+        let cmd1 = builder.build().unwrap();
+        let cmd2 = builder_clone.build().unwrap();
+
+        assert_eq!(cmd1.topic_name, cmd2.topic_name);
+        assert_eq!(cmd1.payload, cmd2.payload);
+        assert_eq!(cmd1.qos, cmd2.qos);
+    }
+
+    #[test]
+    fn test_request_response_pattern() {
+        let cmd = PublishCommand::builder()
+            .topic("requests/get_temperature")
+            .payload(b"room1")
+            .qos(1)
+            .with_response_topic("responses/temperature")
+            .with_correlation_data(b"req-12345")
+            .with_user_property("request_id", "12345")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 3);
+        // Verify all properties are present
+        assert!(cmd
+            .properties
+            .iter()
+            .any(|p| matches!(p, Property::ResponseTopic(_))));
+        assert!(cmd
+            .properties
+            .iter()
+            .any(|p| matches!(p, Property::CorrelationData(_))));
+        assert!(cmd
+            .properties
+            .iter()
+            .any(|p| matches!(p, Property::UserProperty(_, _))));
     }
 }
 
