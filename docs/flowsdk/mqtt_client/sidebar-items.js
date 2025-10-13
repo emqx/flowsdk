@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["async_client","client","opts","tokio_async_client"]};
+window.SIDEBAR_ITEMS = {"mod":["async_client","client","error","opts","raw_packet","tokio_async_client"]};

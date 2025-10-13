@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["AuthResult","ConnectionResult","Context","MqttClient","PingResult","PublishResult","SubscribeResult","Subscription","UnsubscribeResult"]};
+window.SIDEBAR_ITEMS = {"fn":["reason_code_to_string"],"struct":["AuthResult","ConnectionResult","Context","MqttClient","PingResult","PublishResult","SubscribeResult","Subscription","UnsubscribeResult"]};
