@@ -1,11 +1,12 @@
 use flowsdk::mqtt_client::client::{
     ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
 };
+use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
 use flowsdk::mqtt_client::{
-    MqttClientOptions, TokioAsyncClientConfig, TokioAsyncMqttClient, TokioMqttEventHandler,
+    MqttClientError, MqttClientOptions, TokioAsyncClientConfig, TokioAsyncMqttClient,
+    TokioMqttEventHandler,
 };
 use flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish;
-use std::io;
 use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration};
 
@@ -73,8 +74,10 @@ impl TokioMqttEventHandler for TokioExampleHandler {
             );
         } else {
             println!(
-                "[{}] ❌ Publish failed: {:?}",
-                self.name, result.reason_code
+                "[{}] ❌ Publish failed: {} (code: {:?})",
+                self.name,
+                result.reason_description(),
+                result.reason_code
             );
         }
     }
@@ -131,8 +134,8 @@ impl TokioMqttEventHandler for TokioExampleHandler {
         }
     }
 
-    async fn on_error(&mut self, error: &io::Error) {
-        println!("[{}] ❌ Error: {}", self.name, error);
+    async fn on_error(&mut self, error: &MqttClientError) {
+        println!("[{}] ❌ Error: {}", self.name, error.user_message());
     }
 
     async fn on_connection_lost(&mut self) {
@@ -165,19 +168,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     // Configure tokio async client settings
-    let async_config = TokioAsyncClientConfig {
-        auto_reconnect: true,
-        reconnect_delay_ms: 1000,
-        max_reconnect_delay_ms: 30000,
-        max_reconnect_attempts: 5,
-        command_queue_size: 1000,
-        buffer_messages: true,
-        max_buffer_size: 1000,
-        send_buffer_size: 1000,
-        recv_buffer_size: 1000,
-        keep_alive_interval: 60,
-        tcp_nodelay: false,
-    };
+    let async_config = TokioAsyncClientConfig::builder()
+        .auto_reconnect(true)
+        .reconnect_delay_ms(1000)
+        .max_reconnect_delay_ms(30000)
+        .max_reconnect_attempts(5)
+        .command_queue_size(1000)
+        .buffer_messages(true)
+        .max_buffer_size(1000)
+        .send_buffer_size(1000)
+        .recv_buffer_size(1000)
+        .keep_alive_interval(60)
+        .tcp_nodelay(false)
+        .build();
 
     let context = Arc::new(Mutex::new(None::<u16>));
     // Create event handler
@@ -200,20 +203,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     client.subscribe("tokio/async/+", 2).await?;
 
     println!("📤 Publishing test messages...");
-    client
-        .publish(
-            "test/tokio/topic",
-            b"Hello from Tokio Async Client!",
-            1,
-            false,
-        )
-        .await?;
-    client
-        .publish("tokio/async/test", b"Async message with QoS 2", 2, true)
-        .await?;
-    client
-        .publish("tokio/async/qos0", b"Quick QoS 0 message", 0, false)
-        .await?;
+
+    // Example 1: Simple publish using the builder
+    let simple_cmd = PublishCommand::builder()
+        .topic("test/tokio/topic")
+        .payload(b"Hello from Tokio Async Client!")
+        .qos(1)
+        .build()?;
+    client.publish_with_command(simple_cmd).await?;
+
+    // Example 2: Publish with MQTT v5 properties (content type, expiry, user properties)
+    let rich_cmd = PublishCommand::builder()
+        .topic("tokio/async/test")
+        .payload(br#"{"temperature": 23.5, "humidity": 45}"#)
+        .qos(2)
+        .retain(true)
+        .with_content_type("application/json")
+        .with_message_expiry_interval(3600) // Expire after 1 hour
+        .with_user_property("sensor_id", "42")
+        .with_user_property("location", "room1")
+        .build()?;
+    client.publish_with_command(rich_cmd).await?;
+
+    // Example 3: QoS 0 publish (fire and forget)
+    let qos0_cmd = PublishCommand::builder()
+        .topic("tokio/async/qos0")
+        .payload(b"Quick QoS 0 message")
+        .qos(0)
+        .build()?;
+    client.publish_with_command(qos0_cmd).await?;
+
+    // Example 4: Request/Response pattern using response topic and correlation data
+    let request_cmd = PublishCommand::builder()
+        .topic("requests/temperature")
+        .payload(b"get_current_temp")
+        .qos(1)
+        .with_response_topic("responses/temperature")
+        .with_correlation_data(b"req-12345")
+        .with_user_property("request_id", "12345")
+        .build()?;
+    client.publish_with_command(request_cmd).await?;
+
+    // Example 5: Publish with topic alias (MQTT v5 feature to reduce packet size)
+    let alias_cmd = PublishCommand::builder()
+        .topic("sensors/temperature/building_a/floor_2/room_42")
+        .payload(b"24.1")
+        .qos(1)
+        .with_topic_alias(10) // Use alias to avoid sending long topic repeatedly
+        .build()?;
+    client.publish_with_command(alias_cmd).await?;
 
     println!("🏓 Sending ping...");
     client.ping().await?;

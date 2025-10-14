@@ -491,4 +491,20 @@ mod tests {
         let result = MqttConnect::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));
     }
+
+    #[test]
+    fn test_invalid_client_id() {
+        let connect = MqttConnect::new(
+            "client\0id".to_string(),
+            Some("user".to_string()),
+            Some(b"password".to_vec()),
+            None,
+            0,
+            true,
+            vec![],
+        );
+        let result = connect.to_bytes();
+        println!("Result: {:?}", result);
+        assert!(matches!(result, Err(ParseError::ParseError(_))));
+    }
 }

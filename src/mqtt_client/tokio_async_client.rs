@@ -1,15 +1,18 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{self, ErrorKind};
+use std::io;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
-use tokio::net::TcpStream;
 use tokio::sync::mpsc::{self, error::TryRecvError, error::TrySendError, Receiver};
 use tokio::sync::oneshot;
 use tokio::time::Sleep;
+
+#[cfg(feature = "tls")]
+use super::transport::TlsTransport;
+use super::transport::{BoxedTransport, TcpTransport, Transport};
 
 use crate::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket};
 use crate::mqtt_serde::mqttv5::{
@@ -30,6 +33,7 @@ use crate::mqtt_session::ClientSession;
 use super::client::{
     AuthResult, ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
 };
+use super::error::MqttClientError;
 use super::opts::MqttClientOptions;
 
 /// Events that can occur during MQTT client operation
@@ -49,8 +53,8 @@ pub enum TokioMqttEvent {
     MessageReceived(MqttPublish),
     /// Ping response received
     PingResponse(PingResult),
-    /// Error occurred during operation
-    Error(io::Error),
+    /// Error occurred during operation (enhanced with MqttClientError)
+    Error(MqttClientError),
     /// TLS peer certificate received (for certificate validation)
     PeerCertReceived(Vec<u8>),
     /// Connection lost (will attempt to reconnect if enabled)
@@ -59,8 +63,15 @@ pub enum TokioMqttEvent {
     ReconnectAttempt(u32),
     /// All pending operations cleared (on reconnect with clean_start)
     PendingOperationsCleared,
-    /// Parse error occurred
-    ParseError(String),
+    /// Parse error occurred with details
+    ParseError {
+        /// First 100 bytes of raw data for debugging
+        raw_data: Vec<u8>,
+        /// The parse error that occurred
+        error: ParseError,
+        /// Whether this error is recoverable
+        recoverable: bool,
+    },
     /// Authentication challenge or response received (MQTT v5 enhanced auth)
     AuthReceived(AuthResult),
 }
@@ -103,9 +114,14 @@ pub trait TokioMqttEventHandler: Send + Sync {
         let _ = result;
     }
 
-    /// Called when an error occurs
-    async fn on_error(&mut self, error: &io::Error) {
+    /// Called when an error occurs (enhanced with MqttClientError)
+    async fn on_error(&mut self, error: &MqttClientError) {
         let _ = error;
+    }
+
+    /// Called when a parse error occurs with raw packet data for debugging
+    async fn on_parse_error(&mut self, raw_data: &[u8], error: &ParseError, recoverable: bool) {
+        let _ = (raw_data, error, recoverable);
     }
 
     /// Called when TLS peer certificate is received (for custom validation)
@@ -168,6 +184,23 @@ impl PublishCommand {
         Self::new(topic.into(), payload, qos, retain, false, None, Vec::new())
     }
 
+    /// Create a new builder for constructing a PublishCommand
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    ///
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .payload(b"23.5")
+    ///     .qos(1)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn builder() -> PublishCommandBuilder {
+        PublishCommandBuilder::new()
+    }
+
     fn to_mqtt_publish(&self) -> MqttPublish {
         MqttPublish::new_with_prop(
             self.qos,
@@ -178,6 +211,357 @@ impl PublishCommand {
             self.dup,
             self.properties.clone(),
         )
+    }
+}
+
+/// Builder for creating MQTT v5 publish commands
+///
+/// This builder provides a fluent API for constructing `PublishCommand` instances
+/// with full control over MQTT v5 publish options and properties.
+///
+/// # Examples
+///
+/// ## Simple Publish
+/// ```no_run
+/// use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+///
+/// let cmd = PublishCommand::builder()
+///     .topic("sensors/temp")
+///     .payload(b"23.5")
+///     .qos(1)
+///     .build()
+///     .unwrap();
+/// ```
+///
+/// ## Publish with Properties
+/// ```no_run
+/// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+/// let cmd = PublishCommand::builder()
+///     .topic("sensors/temp")
+///     .payload(b"23.5")
+///     .qos(2)
+///     .retain(true)
+///     .with_message_expiry_interval(3600)  // Expire after 1 hour
+///     .with_content_type("application/json")
+///     .build()
+///     .unwrap();
+/// ```
+///
+/// ## Publish with Topic Alias
+/// ```no_run
+/// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+/// let cmd = PublishCommand::builder()
+///     .topic("sensors/temperature/room1")
+///     .payload(b"23.5")
+///     .qos(1)
+///     .with_topic_alias(42)  // Use topic alias to reduce packet size
+///     .build()
+///     .unwrap();
+/// ```
+#[derive(Debug, Clone)]
+pub struct PublishCommandBuilder {
+    topic_name: Option<String>,
+    payload: Vec<u8>,
+    qos: u8,
+    retain: bool,
+    dup: bool,
+    packet_id: Option<u16>,
+    properties: Vec<Property>,
+}
+
+/// Error type for publish builder validation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PublishBuilderError {
+    /// Topic name was not provided
+    NoTopic,
+}
+
+impl std::fmt::Display for PublishBuilderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoTopic => write!(f, "Topic name not provided. Call topic() to set the topic."),
+        }
+    }
+}
+
+impl std::error::Error for PublishBuilderError {}
+
+impl PublishCommandBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            topic_name: None,
+            payload: Vec::new(),
+            qos: 0,
+            retain: false,
+            dup: false,
+            packet_id: None,
+            properties: Vec::new(),
+        }
+    }
+
+    /// Set the topic name
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .payload(b"23.5")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn topic(mut self, topic: impl Into<String>) -> Self {
+        self.topic_name = Some(topic.into());
+        self
+    }
+
+    /// Set the payload
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .payload(b"23.5")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn payload(mut self, payload: impl Into<Vec<u8>>) -> Self {
+        self.payload = payload.into();
+        self
+    }
+
+    /// Set the Quality of Service level (0, 1, or 2)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .qos(2)  // Exactly once delivery
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn qos(mut self, qos: u8) -> Self {
+        self.qos = qos;
+        self
+    }
+
+    /// Set the retain flag
+    ///
+    /// If true, the broker will store this message and send it to new subscribers.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .payload(b"23.5")
+    ///     .retain(true)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn retain(mut self, retain: bool) -> Self {
+        self.retain = retain;
+        self
+    }
+
+    /// Set the duplicate flag (usually managed automatically)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .dup(true)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn dup(mut self, dup: bool) -> Self {
+        self.dup = dup;
+        self
+    }
+
+    /// Set the packet identifier (usually managed automatically)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .with_packet_id(123)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_packet_id(mut self, id: u16) -> Self {
+        self.packet_id = Some(id);
+        self
+    }
+
+    /// Add a custom MQTT v5 property
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// # use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .add_property(Property::UserProperty("sensor_id".into(), "42".into()))
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn add_property(mut self, property: Property) -> Self {
+        self.properties.push(property);
+        self
+    }
+
+    /// Set the Message Expiry Interval (MQTT v5)
+    ///
+    /// The message will expire after this many seconds if not delivered.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("alerts/temp")
+    ///     .payload(b"warning")
+    ///     .with_message_expiry_interval(300)  // Expire after 5 minutes
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_message_expiry_interval(mut self, seconds: u32) -> Self {
+        self.properties
+            .push(Property::MessageExpiryInterval(seconds));
+        self
+    }
+
+    /// Set the Content Type property (MQTT v5)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("data/json")
+    ///     .payload(br#"{"temp":23.5}"#)
+    ///     .with_content_type("application/json")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_content_type(mut self, content_type: impl Into<String>) -> Self {
+        self.properties
+            .push(Property::ContentType(content_type.into()));
+        self
+    }
+
+    /// Set the Response Topic property (MQTT v5)
+    ///
+    /// Used for request/response patterns.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("requests/temp")
+    ///     .payload(b"get_temp")
+    ///     .with_response_topic("responses/temp")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_response_topic(mut self, topic: impl Into<String>) -> Self {
+        self.properties.push(Property::ResponseTopic(topic.into()));
+        self
+    }
+
+    /// Set the Correlation Data property (MQTT v5)
+    ///
+    /// Used to correlate requests with responses.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("requests/data")
+    ///     .with_correlation_data(b"request-123")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_correlation_data(mut self, data: impl Into<Vec<u8>>) -> Self {
+        self.properties.push(Property::CorrelationData(data.into()));
+        self
+    }
+
+    /// Set the Topic Alias property (MQTT v5)
+    ///
+    /// Allows using a numeric alias instead of the full topic name to reduce packet size.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temperature/room1")
+    ///     .with_topic_alias(42)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_topic_alias(mut self, alias: u16) -> Self {
+        self.properties.push(Property::TopicAlias(alias));
+        self
+    }
+
+    /// Add a User Property (MQTT v5)
+    ///
+    /// User properties are key-value pairs for application-specific metadata.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .with_user_property("sensor_id", "42")
+    ///     .with_user_property("location", "room1")
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_user_property(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.properties
+            .push(Property::UserProperty(key.into(), value.into()));
+        self
+    }
+
+    /// Build the final PublishCommand
+    ///
+    /// # Errors
+    /// Returns `PublishBuilderError::NoTopic` if topic was not set.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("sensors/temp")
+    ///     .payload(b"23.5")
+    ///     .qos(1)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn build(self) -> Result<PublishCommand, PublishBuilderError> {
+        let topic_name = self.topic_name.ok_or(PublishBuilderError::NoTopic)?;
+
+        Ok(PublishCommand {
+            topic_name,
+            payload: self.payload,
+            qos: self.qos,
+            retain: self.retain,
+            dup: self.dup,
+            packet_id: self.packet_id,
+            properties: self.properties,
+        })
+    }
+}
+
+impl Default for PublishCommandBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -205,6 +589,334 @@ impl SubscribeCommand {
     pub fn single(topic: impl Into<String>, qos: u8) -> Self {
         let subscription = TopicSubscription::new(topic.into(), qos, false, false, 0);
         Self::new(None, vec![subscription], Vec::new())
+    }
+
+    /// Create a new builder for constructing a SubscribeCommand
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    ///
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/#", 1)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn builder() -> SubscribeCommandBuilder {
+        SubscribeCommandBuilder::new()
+    }
+}
+
+/// Builder for creating complex MQTT v5 subscription commands
+///
+/// This builder provides a fluent API for constructing `SubscribeCommand` instances
+/// with MQTT v5 subscription options like No Local, Retain As Published, and
+/// Retain Handling.
+///
+/// # Examples
+///
+/// ## Simple Subscription
+/// ```no_run
+/// use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+///
+/// let cmd = SubscribeCommand::builder()
+///     .add_topic("sensors/temp", 1)
+///     .build()
+///     .unwrap();
+/// ```
+///
+/// ## Subscription with Options
+/// ```no_run
+/// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+/// let cmd = SubscribeCommand::builder()
+///     .add_topic("sensors/+/temp", 1)
+///     .with_no_local(true)           // Don't receive own messages
+///     .with_retain_handling(2)       // Don't send retained messages
+///     .with_subscription_id(42)      // Track which subscription matched
+///     .build()
+///     .unwrap();
+/// ```
+///
+/// ## Multiple Topics
+/// ```no_run
+/// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+/// let cmd = SubscribeCommand::builder()
+///     .add_topic("sensors/temp", 1)
+///     .with_no_local(true)
+///     .add_topic("sensors/humidity", 2)
+///     .with_retain_as_published(true)
+///     .build()
+///     .unwrap();
+/// ```
+///
+/// # MQTT v5 Subscription Options
+///
+/// - **No Local**: If true, server won't forward messages published by this client
+/// - **Retain As Published**: If true, retain flag is kept as-is from publisher
+/// - **Retain Handling**:
+///   - 0: Send retained messages at subscribe time (default)
+///   - 1: Send retained only if subscription doesn't exist
+///   - 2: Don't send retained messages
+///
+#[derive(Debug, Clone)]
+pub struct SubscribeCommandBuilder {
+    topics: Vec<TopicSubscription>,
+    properties: Vec<Property>,
+    packet_id: Option<u16>,
+}
+
+/// Error type for builder validation
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SubscribeBuilderError {
+    /// No topics were added to the subscription
+    NoTopics,
+}
+
+impl std::fmt::Display for SubscribeBuilderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoTopics => write!(
+                f,
+                "No topics added to subscription. Call add_topic() at least once."
+            ),
+        }
+    }
+}
+
+impl std::error::Error for SubscribeBuilderError {}
+
+impl SubscribeCommandBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        Self {
+            topics: Vec::new(),
+            properties: Vec::new(),
+            packet_id: None,
+        }
+    }
+
+    /// Add a topic with QoS (uses default options)
+    ///
+    /// Default options:
+    /// - no_local: false
+    /// - retain_as_published: false
+    /// - retain_handling: 0 (send retained messages)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/temp", 1)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn add_topic(mut self, topic: impl Into<String>, qos: u8) -> Self {
+        let subscription = TopicSubscription::new_simple(topic.into(), qos);
+        self.topics.push(subscription);
+        self
+    }
+
+    /// Add a topic with full subscription options
+    ///
+    /// # Arguments
+    /// * `topic` - Topic filter (can include wildcards)
+    /// * `qos` - Quality of Service level (0, 1, or 2)
+    /// * `no_local` - If true, server won't forward messages published by this client
+    /// * `retain_as_published` - If true, retain flag is kept as-is from publisher
+    /// * `retain_handling` - 0: send retained messages, 1: send only on new sub, 2: don't send
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic_with_options("sensors/temp", 1, true, false, 2)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn add_topic_with_options(
+        mut self,
+        topic: impl Into<String>,
+        qos: u8,
+        no_local: bool,
+        retain_as_published: bool,
+        retain_handling: u8,
+    ) -> Self {
+        let subscription = TopicSubscription::new(
+            topic.into(),
+            qos,
+            no_local,
+            retain_as_published,
+            retain_handling,
+        );
+        self.topics.push(subscription);
+        self
+    }
+
+    /// Set No Local flag for the last added topic
+    ///
+    /// If true, the server will not forward messages published by this client
+    /// to its own subscriptions.
+    ///
+    /// # Panics
+    /// Panics if no topics have been added yet.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/temp", 1)
+    ///     .with_no_local(true)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_no_local(mut self, no_local: bool) -> Self {
+        if let Some(last) = self.topics.last_mut() {
+            last.no_local = no_local;
+        } else {
+            panic!("Cannot set no_local: no topics added yet. Call add_topic() first.");
+        }
+        self
+    }
+
+    /// Set Retain As Published flag for the last added topic
+    ///
+    /// If true, the retain flag is forwarded as-is from the publisher.
+    /// If false, the retain flag is always set to 0 for forwarded messages.
+    ///
+    /// # Panics
+    /// Panics if no topics have been added yet.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/temp", 1)
+    ///     .with_retain_as_published(true)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_retain_as_published(mut self, rap: bool) -> Self {
+        if let Some(last) = self.topics.last_mut() {
+            last.retain_as_published = rap;
+        } else {
+            panic!("Cannot set retain_as_published: no topics added yet. Call add_topic() first.");
+        }
+        self
+    }
+
+    /// Set Retain Handling option for the last added topic
+    ///
+    /// Values:
+    /// - 0: Send retained messages at subscribe time
+    /// - 1: Send retained messages only if subscription doesn't exist
+    /// - 2: Don't send retained messages at subscribe time
+    ///
+    /// # Panics
+    /// Panics if no topics have been added yet, or if value > 2.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/temp", 1)
+    ///     .with_retain_handling(2)  // Don't send retained
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_retain_handling(mut self, rh: u8) -> Self {
+        if rh > 2 {
+            panic!("Invalid retain_handling value: {}. Must be 0, 1, or 2.", rh);
+        }
+        if let Some(last) = self.topics.last_mut() {
+            last.retain_handling = rh;
+        } else {
+            panic!("Cannot set retain_handling: no topics added yet. Call add_topic() first.");
+        }
+        self
+    }
+
+    /// Set the Subscription Identifier property
+    ///
+    /// The Subscription Identifier is included in PUBLISH packets to indicate
+    /// which subscription(s) matched the message.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/#", 1)
+    ///     .with_subscription_id(42)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_subscription_id(mut self, id: u32) -> Self {
+        self.properties.push(Property::SubscriptionIdentifier(id));
+        self
+    }
+
+    /// Add a custom MQTT v5 property
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// # use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/#", 1)
+    ///     .add_property(Property::UserProperty("key".into(), "value".into()))
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn add_property(mut self, property: Property) -> Self {
+        self.properties.push(property);
+        self
+    }
+
+    /// Set the packet identifier (usually managed automatically)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/#", 1)
+    ///     .with_packet_id(123)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn with_packet_id(mut self, id: u16) -> Self {
+        self.packet_id = Some(id);
+        self
+    }
+
+    /// Build the final SubscribeCommand
+    ///
+    /// # Errors
+    /// Returns `SubscribeBuilderError::NoTopics` if no topics were added.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::SubscribeCommand;
+    /// let cmd = SubscribeCommand::builder()
+    ///     .add_topic("sensors/#", 1)
+    ///     .with_subscription_id(42)
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn build(self) -> Result<SubscribeCommand, SubscribeBuilderError> {
+        if self.topics.is_empty() {
+            return Err(SubscribeBuilderError::NoTopics);
+        }
+
+        Ok(SubscribeCommand {
+            packet_id: self.packet_id,
+            subscriptions: self.topics,
+            properties: self.properties,
+        })
+    }
+}
+
+impl Default for SubscribeCommandBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -307,6 +1019,26 @@ pub struct TokioAsyncClientConfig {
     pub keep_alive_interval: u64,
     /// Enable TCP_NODELAY (disable Nagle) on the underlying socket
     pub tcp_nodelay: bool,
+    /// Timeout for connect operation in milliseconds (None = no timeout)
+    pub connect_timeout_ms: Option<u64>,
+    /// Timeout for subscribe operation in milliseconds (None = no timeout)
+    pub subscribe_timeout_ms: Option<u64>,
+    /// Timeout for publish acknowledgment in milliseconds (None = no timeout)
+    pub publish_ack_timeout_ms: Option<u64>,
+    /// Timeout for unsubscribe operation in milliseconds (None = no timeout)
+    pub unsubscribe_timeout_ms: Option<u64>,
+    /// Timeout for ping operation in milliseconds (None = no timeout)
+    pub ping_timeout_ms: Option<u64>,
+    /// Default timeout for operations without specific timeout (milliseconds)
+    pub default_operation_timeout_ms: u64,
+    /// Maximum number of QoS 1 and QoS 2 publications that the client
+    /// is willing to process concurrently (MQTT v5 only)
+    /// None = use default (65535), Some(0) is invalid
+    pub receive_maximum: Option<u16>,
+    /// Maximum number of topic aliases that the client accepts from the server (MQTT v5 only)
+    /// None or Some(0) = topic aliases not supported
+    /// Valid range: 0-65535
+    pub topic_alias_maximum: Option<u16>,
 }
 
 impl Default for TokioAsyncClientConfig {
@@ -323,7 +1055,373 @@ impl Default for TokioAsyncClientConfig {
             recv_buffer_size: 1000,
             keep_alive_interval: 60,
             tcp_nodelay: true,
+            connect_timeout_ms: Some(30000),     // 30 seconds
+            subscribe_timeout_ms: Some(10000),   // 10 seconds
+            publish_ack_timeout_ms: Some(10000), // 10 seconds
+            unsubscribe_timeout_ms: Some(10000), // 10 seconds
+            ping_timeout_ms: Some(5000),         // 5 seconds
+            default_operation_timeout_ms: 30000, // 30 seconds
+            receive_maximum: None,               // Use MQTT v5 default (65535)
+            topic_alias_maximum: None,           // Topic aliases not supported by default
         }
+    }
+}
+
+impl TokioAsyncClientConfig {
+    /// Create a new configuration builder
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::tokio_async_client::TokioAsyncClientConfig;
+    ///
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .auto_reconnect(true)
+    ///     .reconnect_delay_ms(2000)
+    ///     .connect_timeout_ms(60000)
+    ///     .build();
+    /// ```
+    pub fn builder() -> ConfigBuilder {
+        ConfigBuilder::new()
+    }
+}
+
+/// Builder for TokioAsyncClientConfig
+///
+/// Provides a fluent API for constructing client configuration with sensible defaults.
+///
+/// # Example
+/// ```no_run
+/// use flowsdk::mqtt_client::tokio_async_client::TokioAsyncClientConfig;
+///
+/// let config = TokioAsyncClientConfig::builder()
+///     .auto_reconnect(true)
+///     .reconnect_delay_ms(2000)
+///     .max_reconnect_attempts(10)
+///     .connect_timeout_ms(60000)
+///     .subscribe_timeout_ms(5000)
+///     .send_buffer_size(2000)
+///     .tcp_nodelay(false)
+///     .build();
+/// ```
+#[derive(Debug, Clone)]
+pub struct ConfigBuilder {
+    config: TokioAsyncClientConfig,
+}
+
+impl ConfigBuilder {
+    /// Create a new builder with default values
+    pub fn new() -> Self {
+        ConfigBuilder {
+            config: TokioAsyncClientConfig::default(),
+        }
+    }
+
+    /// Build the final configuration
+    pub fn build(self) -> TokioAsyncClientConfig {
+        self.config
+    }
+
+    // ==================== Reconnection Settings ====================
+
+    /// Enable or disable automatic reconnection on connection loss
+    pub fn auto_reconnect(mut self, enabled: bool) -> Self {
+        self.config.auto_reconnect = enabled;
+        self
+    }
+
+    /// Set initial reconnect delay in milliseconds
+    pub fn reconnect_delay_ms(mut self, delay_ms: u64) -> Self {
+        self.config.reconnect_delay_ms = delay_ms;
+        self
+    }
+
+    /// Set maximum reconnect delay in milliseconds
+    pub fn max_reconnect_delay_ms(mut self, max_delay_ms: u64) -> Self {
+        self.config.max_reconnect_delay_ms = max_delay_ms;
+        self
+    }
+
+    /// Set maximum number of reconnect attempts (0 = infinite)
+    pub fn max_reconnect_attempts(mut self, max_attempts: u32) -> Self {
+        self.config.max_reconnect_attempts = max_attempts;
+        self
+    }
+
+    // ==================== Timeout Settings ====================
+
+    /// Set timeout for connect operation in milliseconds
+    pub fn connect_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.connect_timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Disable timeout for connect operation (wait indefinitely)
+    pub fn no_connect_timeout(mut self) -> Self {
+        self.config.connect_timeout_ms = None;
+        self
+    }
+
+    /// Set timeout for subscribe operation in milliseconds
+    pub fn subscribe_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.subscribe_timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Disable timeout for subscribe operation (wait indefinitely)
+    pub fn no_subscribe_timeout(mut self) -> Self {
+        self.config.subscribe_timeout_ms = None;
+        self
+    }
+
+    /// Set timeout for publish acknowledgment in milliseconds
+    pub fn publish_ack_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.publish_ack_timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Disable timeout for publish acknowledgment (wait indefinitely)
+    pub fn no_publish_ack_timeout(mut self) -> Self {
+        self.config.publish_ack_timeout_ms = None;
+        self
+    }
+
+    /// Set timeout for unsubscribe operation in milliseconds
+    pub fn unsubscribe_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.unsubscribe_timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Disable timeout for unsubscribe operation (wait indefinitely)
+    pub fn no_unsubscribe_timeout(mut self) -> Self {
+        self.config.unsubscribe_timeout_ms = None;
+        self
+    }
+
+    /// Set timeout for ping operation in milliseconds
+    pub fn ping_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.ping_timeout_ms = Some(timeout_ms);
+        self
+    }
+
+    /// Disable timeout for ping operation (wait indefinitely)
+    pub fn no_ping_timeout(mut self) -> Self {
+        self.config.ping_timeout_ms = None;
+        self
+    }
+
+    /// Set default timeout for operations without specific timeout (milliseconds)
+    pub fn default_operation_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.config.default_operation_timeout_ms = timeout_ms;
+        self
+    }
+
+    // ==================== Buffer Settings ====================
+
+    /// Set queue size for pending commands
+    pub fn command_queue_size(mut self, size: usize) -> Self {
+        self.config.command_queue_size = size;
+        self
+    }
+
+    /// Enable or disable buffering of messages during disconnection
+    pub fn buffer_messages(mut self, enabled: bool) -> Self {
+        self.config.buffer_messages = enabled;
+        self
+    }
+
+    /// Set maximum size of message buffer
+    pub fn max_buffer_size(mut self, size: usize) -> Self {
+        self.config.max_buffer_size = size;
+        self
+    }
+
+    /// Set send buffer size limit
+    pub fn send_buffer_size(mut self, size: usize) -> Self {
+        self.config.send_buffer_size = size;
+        self
+    }
+
+    /// Set receive buffer size limit
+    pub fn recv_buffer_size(mut self, size: usize) -> Self {
+        self.config.recv_buffer_size = size;
+        self
+    }
+
+    // ==================== Other Settings ====================
+
+    /// Set keep alive interval in seconds
+    pub fn keep_alive_interval(mut self, seconds: u64) -> Self {
+        self.config.keep_alive_interval = seconds;
+        self
+    }
+
+    /// Enable or disable TCP_NODELAY (disable Nagle algorithm)
+    pub fn tcp_nodelay(mut self, enabled: bool) -> Self {
+        self.config.tcp_nodelay = enabled;
+        self
+    }
+
+    // ==================== Convenience Methods ====================
+
+    /// Disable all operation timeouts (operations wait indefinitely)
+    ///
+    /// Useful for development/debugging or networks with unpredictable latency.
+    pub fn no_timeouts(mut self) -> Self {
+        self.config.connect_timeout_ms = None;
+        self.config.subscribe_timeout_ms = None;
+        self.config.publish_ack_timeout_ms = None;
+        self.config.unsubscribe_timeout_ms = None;
+        self.config.ping_timeout_ms = None;
+        self
+    }
+
+    /// Reset all timeouts to their default values
+    pub fn default_timeouts(mut self) -> Self {
+        self.config.connect_timeout_ms = Some(30000);
+        self.config.subscribe_timeout_ms = Some(10000);
+        self.config.publish_ack_timeout_ms = Some(10000);
+        self.config.unsubscribe_timeout_ms = Some(10000);
+        self.config.ping_timeout_ms = Some(5000);
+        self.config.default_operation_timeout_ms = 30000;
+        self
+    }
+
+    /// Apply a timeout profile optimized for local networks
+    ///
+    /// - Connect: 5 seconds
+    /// - Subscribe/Publish/Unsubscribe: 3 seconds
+    /// - Ping: 2 seconds
+    pub fn local_network_timeouts(mut self) -> Self {
+        self.config.connect_timeout_ms = Some(5000);
+        self.config.subscribe_timeout_ms = Some(3000);
+        self.config.publish_ack_timeout_ms = Some(3000);
+        self.config.unsubscribe_timeout_ms = Some(3000);
+        self.config.ping_timeout_ms = Some(2000);
+        self.config.default_operation_timeout_ms = 5000;
+        self
+    }
+
+    /// Apply a timeout profile optimized for internet/cloud networks
+    ///
+    /// - Connect: 30 seconds
+    /// - Subscribe/Publish/Unsubscribe: 10 seconds
+    /// - Ping: 5 seconds
+    pub fn internet_timeouts(mut self) -> Self {
+        self.config.connect_timeout_ms = Some(30000);
+        self.config.subscribe_timeout_ms = Some(10000);
+        self.config.publish_ack_timeout_ms = Some(10000);
+        self.config.unsubscribe_timeout_ms = Some(10000);
+        self.config.ping_timeout_ms = Some(5000);
+        self.config.default_operation_timeout_ms = 30000;
+        self
+    }
+
+    /// Apply a timeout profile optimized for satellite/high-latency networks
+    ///
+    /// - Connect: 120 seconds
+    /// - Subscribe/Publish/Unsubscribe: 60 seconds
+    /// - Ping: 30 seconds
+    pub fn satellite_timeouts(mut self) -> Self {
+        self.config.connect_timeout_ms = Some(120000);
+        self.config.subscribe_timeout_ms = Some(60000);
+        self.config.publish_ack_timeout_ms = Some(60000);
+        self.config.unsubscribe_timeout_ms = Some(60000);
+        self.config.ping_timeout_ms = Some(30000);
+        self.config.default_operation_timeout_ms = 120000;
+        self
+    }
+
+    // ==================== MQTT v5 Flow Control ====================
+
+    /// Set the Receive Maximum value for flow control (MQTT v5)
+    ///
+    /// This limits the number of QoS 1 and QoS 2 publications the client
+    /// will process concurrently. The server must not send more PUBLISH
+    /// packets than this value before receiving acknowledgments.
+    ///
+    /// # Arguments
+    /// * `max` - Maximum concurrent QoS 1/2 messages (1-65535)
+    ///
+    /// # Panics
+    /// Panics if `max` is 0 (protocol violation)
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::tokio_async_client::TokioAsyncClientConfig;
+    ///
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .receive_maximum(100)  // Limit to 100 concurrent messages
+    ///     .build();
+    /// ```
+    pub fn receive_maximum(mut self, max: u16) -> Self {
+        if max == 0 {
+            panic!("receive_maximum must be greater than 0 (MQTT v5 protocol violation)");
+        }
+        self.config.receive_maximum = Some(max);
+        self
+    }
+
+    /// Clear the Receive Maximum value (use MQTT v5 default of 65535)
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::tokio_async_client::TokioAsyncClientConfig;
+    ///
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .receive_maximum(100)
+    ///     .no_receive_maximum()  // Reset to default
+    ///     .build();
+    /// ```
+    pub fn no_receive_maximum(mut self) -> Self {
+        self.config.receive_maximum = None;
+        self
+    }
+
+    /// Set the Topic Alias Maximum value
+    ///
+    /// This property indicates the maximum number of topic aliases that the client
+    /// accepts from the server (MQTT v5 only). Topic aliases allow the server to
+    /// send a numeric alias instead of the full topic name to reduce packet size.
+    ///
+    /// # Arguments
+    /// * `max` - Maximum topic aliases (0-65535)
+    ///   - 0 = topic aliases not supported
+    ///   - 1-65535 = maximum number of topic aliases
+    ///
+    /// # Example
+    /// ```
+    /// use flowsdk::mqtt_client::TokioAsyncClientConfig;
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .topic_alias_maximum(10)  // Accept up to 10 topic aliases
+    ///     .build();
+    /// ```
+    pub fn topic_alias_maximum(mut self, max: u16) -> Self {
+        self.config.topic_alias_maximum = Some(max);
+        self
+    }
+
+    /// Disable topic alias support
+    ///
+    /// Sets topic_alias_maximum to None (default), indicating that topic
+    /// aliases are not supported by the client.
+    ///
+    /// # Example
+    /// ```
+    /// use flowsdk::mqtt_client::TokioAsyncClientConfig;
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .topic_alias_maximum(10)
+    ///     .no_topic_alias()  // Disable topic aliases
+    ///     .build();
+    /// ```
+    pub fn no_topic_alias(mut self) -> Self {
+        self.config.topic_alias_maximum = None;
+        self
+    }
+}
+
+impl Default for ConfigBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -415,7 +1513,7 @@ impl AsyncIngressStream {
     }
 
     /// Push raw transport bytes, parse MQTT packets, and forward to consumers.
-    fn push_raw_data(&mut self, data: &[u8], mqtt_version: u8) -> io::Result<()> {
+    fn push_raw_data(&mut self, data: &[u8], mqtt_version: u8) -> Result<(), MqttClientError> {
         self.raw_buffer.extend_from_slice(data);
         self.flush_pending()?;
 
@@ -426,20 +1524,19 @@ impl AsyncIngressStream {
                 }
                 Err(TrySendError::Full(packet)) => {
                     if self.pending_packets.len() >= self.max_pending {
-                        return Err(io::Error::new(
-                            io::ErrorKind::WouldBlock,
-                            "Ingress buffer full",
-                        ));
+                        return Err(MqttClientError::BufferFull {
+                            buffer_type: "ingress buffer".to_string(),
+                            capacity: self.max_pending,
+                        });
                     }
                     self.pending_packets.push_back(packet);
                     self.raw_buffer.advance(consumed);
                     break;
                 }
                 Err(TrySendError::Closed(_)) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "Ingress stream closed",
-                    ));
+                    return Err(MqttClientError::ChannelClosed {
+                        channel: "ingress stream".to_string(),
+                    });
                 }
             }
         }
@@ -447,7 +1544,7 @@ impl AsyncIngressStream {
     }
 
     /// Allow consumers to wake pending packets after they drain channel capacity.
-    fn flush_pending(&mut self) -> io::Result<()> {
+    fn flush_pending(&mut self) -> Result<(), MqttClientError> {
         while let Some(packet) = self.pending_packets.pop_front() {
             match self.sender.try_send(packet) {
                 Ok(()) => continue,
@@ -456,17 +1553,19 @@ impl AsyncIngressStream {
                     break;
                 }
                 Err(TrySendError::Closed(_)) => {
-                    return Err(io::Error::new(
-                        io::ErrorKind::BrokenPipe,
-                        "Ingress stream closed",
-                    ));
+                    return Err(MqttClientError::ChannelClosed {
+                        channel: "ingress stream".to_string(),
+                    });
                 }
             }
         }
         Ok(())
     }
 
-    fn try_parse_next_packet(&self, mqtt_version: u8) -> io::Result<Option<(MqttPacket, usize)>> {
+    fn try_parse_next_packet(
+        &self,
+        mqtt_version: u8,
+    ) -> Result<Option<(MqttPacket, usize)>, MqttClientError> {
         if self.raw_buffer.is_empty() {
             return Ok(None);
         }
@@ -474,17 +1573,20 @@ impl AsyncIngressStream {
         match MqttPacket::from_bytes_with_version(&self.raw_buffer[..], mqtt_version) {
             Ok(ParseOk::Packet(packet, consumed)) => Ok(Some((packet, consumed))),
             Ok(ParseOk::Continue(_, _)) => Ok(None),
-            Ok(ParseOk::TopicName(_, _)) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "Unexpected ParseOk variant: TopicName",
-            )),
+            Ok(ParseOk::TopicName(_, _)) => Err(MqttClientError::ProtocolViolation {
+                message: "Unexpected ParseOk variant: TopicName".to_string(),
+            }),
             Err(ParseError::More(_, _))
             | Err(ParseError::BufferTooShort)
-            | Err(ParseError::BufferEmpty) => Ok(None),
-            Err(e) => Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!("MQTT packet parsing failed: {:?}", e),
-            )),
+            | Err(ParseError::BufferEmpty) => Ok(None), // Need more data
+            Err(e) => {
+                // Capture raw data for debugging (first 100 bytes)
+                let raw_data = self.raw_buffer.iter().take(100).copied().collect();
+                Err(MqttClientError::PacketParsing {
+                    parse_error: format!("{:?}", e),
+                    raw_data,
+                })
+            }
         }
     }
 }
@@ -517,11 +1619,11 @@ impl AsyncMQTTStreams {
         self.egress.send_bytes(bytes).await
     }
 
-    fn push_ingress_data(&mut self, data: &[u8], mqtt_version: u8) -> io::Result<()> {
+    fn push_ingress_data(&mut self, data: &[u8], mqtt_version: u8) -> Result<(), MqttClientError> {
         self.ingress.push_raw_data(data, mqtt_version)
     }
 
-    fn flush_ingress_pending(&mut self) -> io::Result<()> {
+    fn flush_ingress_pending(&mut self) -> Result<(), MqttClientError> {
         self.ingress.flush_pending()
     }
 
@@ -574,6 +1676,31 @@ impl TokioAsyncMqttClient {
         .await
     }
 
+    /// Internal helper to apply timeout to sync operations
+    async fn with_timeout<F, T>(
+        &self,
+        future: F,
+        timeout_ms: Option<u64>,
+        operation_name: &str,
+    ) -> Result<T, MqttClientError>
+    where
+        F: std::future::Future<Output = io::Result<T>>,
+    {
+        if let Some(timeout) = timeout_ms {
+            match tokio::time::timeout(Duration::from_millis(timeout), future).await {
+                Ok(result) => result.map_err(|e| MqttClientError::from_io_error(e, operation_name)),
+                Err(_) => Err(MqttClientError::OperationTimeout {
+                    operation: operation_name.to_string(),
+                    timeout_ms: timeout,
+                }),
+            }
+        } else {
+            future
+                .await
+                .map_err(|e| MqttClientError::from_io_error(e, operation_name))
+        }
+    }
+
     /// Connect to the MQTT broker (non-blocking)
     pub async fn connect(&self) -> io::Result<()> {
         self.send_command(TokioClientCommand::Connect).await
@@ -616,6 +1743,8 @@ impl TokioAsyncMqttClient {
     /// - QoS 1: Waits for PUBACK from broker
     /// - QoS 2: Waits for PUBCOMP from broker (full QoS 2 flow)
     ///
+    /// Uses the timeout configured in `TokioAsyncClientConfig::publish_ack_timeout_ms`.
+    ///
     /// # Arguments
     /// * `topic` - Topic to publish to
     /// * `payload` - Message payload
@@ -625,28 +1754,23 @@ impl TokioAsyncMqttClient {
     /// # Returns
     /// `PublishResult` containing packet_id, reason_code, and properties
     ///
+    /// # Errors
+    /// Returns `MqttClientError::OperationTimeout` if the operation times out.
+    ///
     /// # Example
     /// ```no_run
     /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
     /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
-    /// # use tokio;
-    /// # use std::time::Duration;
     /// # #[derive(Clone)]
     /// # struct Handler;
     /// # #[async_trait::async_trait]
     /// # impl TokioMqttEventHandler for Handler {}
-    /// # async fn example() -> std::io::Result<()> {
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
     /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// // Simple sync publish
     /// let result = client.publish_sync("sensors/temp", b"23.5", 2, false).await?;
     /// println!("Published with packet ID: {:?}", result.packet_id);
-    ///
-    /// // With timeout
-    /// let result = tokio::time::timeout(
-    ///     Duration::from_secs(5),
-    ///     client.publish_sync("sensors/temp", b"23.5", 2, false)
-    /// ).await??;
     /// # Ok(())
     /// # }
     /// ```
@@ -656,7 +1780,7 @@ impl TokioAsyncMqttClient {
         payload: &[u8],
         qos: u8,
         retain: bool,
-    ) -> io::Result<PublishResult> {
+    ) -> Result<PublishResult, MqttClientError> {
         let command = PublishCommand::simple(topic, payload.to_vec(), qos, retain);
         self.publish_with_command_sync(command).await
     }
@@ -665,7 +1789,14 @@ impl TokioAsyncMqttClient {
     pub async fn publish_with_command_sync(
         &self,
         command: PublishCommand,
-    ) -> io::Result<PublishResult> {
+    ) -> Result<PublishResult, MqttClientError> {
+        let timeout = self._config.publish_ack_timeout_ms;
+        self.with_timeout(self.publish_sync_internal(command), timeout, "publish")
+            .await
+    }
+
+    /// Internal publish implementation without timeout
+    async fn publish_sync_internal(&self, command: PublishCommand) -> io::Result<PublishResult> {
         // QoS 0 messages have no acknowledgment, send fire-and-forget
         if command.qos == 0 {
             self.send_command(TokioClientCommand::Publish(command))
@@ -764,9 +1895,13 @@ impl TokioAsyncMqttClient {
     /// Connect to broker and wait for CONNACK acknowledgment
     ///
     /// This method blocks until the broker acknowledges the connection with CONNACK.
+    /// Uses the timeout configured in `TokioAsyncClientConfig::connect_timeout_ms`.
     ///
     /// # Returns
     /// `ConnectionResult` containing reason_code, session_present, and properties
+    ///
+    /// # Errors
+    /// Returns `MqttClientError::OperationTimeout` if the operation times out.
     ///
     /// # Example
     /// ```no_run
@@ -776,7 +1911,7 @@ impl TokioAsyncMqttClient {
     /// # struct Handler;
     /// # #[async_trait::async_trait]
     /// # impl TokioMqttEventHandler for Handler {}
-    /// # async fn example() -> std::io::Result<()> {
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
     /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// let result = client.connect_sync().await?;
@@ -786,7 +1921,14 @@ impl TokioAsyncMqttClient {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn connect_sync(&self) -> io::Result<ConnectionResult> {
+    pub async fn connect_sync(&self) -> Result<ConnectionResult, MqttClientError> {
+        let timeout = self._config.connect_timeout_ms;
+        self.with_timeout(self.connect_sync_internal(), timeout, "connect")
+            .await
+    }
+
+    /// Internal connect implementation without timeout
+    async fn connect_sync_internal(&self) -> io::Result<ConnectionResult> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         self.send_command(TokioClientCommand::ConnectSync { response_tx: tx })
@@ -803,6 +1945,7 @@ impl TokioAsyncMqttClient {
     /// Subscribe to topics and wait for SUBACK acknowledgment
     ///
     /// This method blocks until the broker acknowledges the subscription with SUBACK.
+    /// Uses the timeout configured in `TokioAsyncClientConfig::subscribe_timeout_ms`.
     ///
     /// # Arguments
     /// * `topic` - Topic to subscribe to
@@ -810,6 +1953,9 @@ impl TokioAsyncMqttClient {
     ///
     /// # Returns
     /// `SubscribeResult` containing packet_id, reason_codes, and properties
+    ///
+    /// # Errors
+    /// Returns `MqttClientError::OperationTimeout` if the operation times out.
     ///
     /// # Example
     /// ```no_run
@@ -819,7 +1965,7 @@ impl TokioAsyncMqttClient {
     /// # struct Handler;
     /// # #[async_trait::async_trait]
     /// # impl TokioMqttEventHandler for Handler {}
-    /// # async fn example() -> std::io::Result<()> {
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
     /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// let result = client.subscribe_sync("sensors/#", 1).await?;
@@ -827,13 +1973,27 @@ impl TokioAsyncMqttClient {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn subscribe_sync(&self, topic: &str, qos: u8) -> io::Result<SubscribeResult> {
+    pub async fn subscribe_sync(
+        &self,
+        topic: &str,
+        qos: u8,
+    ) -> Result<SubscribeResult, MqttClientError> {
         self.subscribe_with_command_sync(SubscribeCommand::single(topic, qos))
             .await
     }
 
     /// Subscribe with fully customized command and wait for acknowledgment
     pub async fn subscribe_with_command_sync(
+        &self,
+        command: SubscribeCommand,
+    ) -> Result<SubscribeResult, MqttClientError> {
+        let timeout = self._config.subscribe_timeout_ms;
+        self.with_timeout(self.subscribe_sync_internal(command), timeout, "subscribe")
+            .await
+    }
+
+    /// Internal subscribe implementation without timeout
+    async fn subscribe_sync_internal(
         &self,
         command: SubscribeCommand,
     ) -> io::Result<SubscribeResult> {
@@ -856,12 +2016,16 @@ impl TokioAsyncMqttClient {
     /// Unsubscribe from topics and wait for UNSUBACK acknowledgment
     ///
     /// This method blocks until the broker acknowledges the unsubscription with UNSUBACK.
+    /// Uses the timeout configured in `TokioAsyncClientConfig::unsubscribe_timeout_ms`.
     ///
     /// # Arguments
     /// * `topics` - List of topics to unsubscribe from
     ///
     /// # Returns
     /// `UnsubscribeResult` containing packet_id, reason_codes, and properties
+    ///
+    /// # Errors
+    /// Returns `MqttClientError::OperationTimeout` if the operation times out.
     ///
     /// # Example
     /// ```no_run
@@ -871,7 +2035,7 @@ impl TokioAsyncMqttClient {
     /// # struct Handler;
     /// # #[async_trait::async_trait]
     /// # impl TokioMqttEventHandler for Handler {}
-    /// # async fn example() -> std::io::Result<()> {
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
     /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
     /// let result = client.unsubscribe_sync(vec!["sensors/#"]).await?;
@@ -879,7 +2043,10 @@ impl TokioAsyncMqttClient {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn unsubscribe_sync(&self, topics: Vec<&str>) -> io::Result<UnsubscribeResult> {
+    pub async fn unsubscribe_sync(
+        &self,
+        topics: Vec<&str>,
+    ) -> Result<UnsubscribeResult, MqttClientError> {
         let topics: Vec<String> = topics.into_iter().map(|s| s.to_string()).collect();
         self.unsubscribe_with_command_sync(UnsubscribeCommand::from_topics(topics))
             .await
@@ -887,6 +2054,20 @@ impl TokioAsyncMqttClient {
 
     /// Unsubscribe with fully customized command and wait for acknowledgment
     pub async fn unsubscribe_with_command_sync(
+        &self,
+        command: UnsubscribeCommand,
+    ) -> Result<UnsubscribeResult, MqttClientError> {
+        let timeout = self._config.unsubscribe_timeout_ms;
+        self.with_timeout(
+            self.unsubscribe_sync_internal(command),
+            timeout,
+            "unsubscribe",
+        )
+        .await
+    }
+
+    /// Internal unsubscribe implementation without timeout
+    async fn unsubscribe_sync_internal(
         &self,
         command: UnsubscribeCommand,
     ) -> io::Result<UnsubscribeResult> {
@@ -909,35 +2090,41 @@ impl TokioAsyncMqttClient {
     /// Send ping and wait for PINGRESP acknowledgment
     ///
     /// This method blocks until the broker responds with PINGRESP.
+    /// Uses the timeout configured in `TokioAsyncClientConfig::ping_timeout_ms`.
     ///
     /// # Returns
     /// `PingResult` indicating successful ping response
+    ///
+    /// # Errors
+    /// Returns `MqttClientError::OperationTimeout` if the operation times out.
     ///
     /// # Example
     /// ```no_run
     /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
     /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
-    /// # use tokio;
-    /// # use std::time::Duration;
     /// # #[derive(Clone)]
     /// # struct Handler;
     /// # #[async_trait::async_trait]
     /// # impl TokioMqttEventHandler for Handler {}
-    /// # async fn example() -> std::io::Result<()> {
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
     /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
     /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
-    /// // Check connection with timeout
-    /// match tokio::time::timeout(
-    ///     Duration::from_secs(5),
-    ///     client.ping_sync()
-    /// ).await {
-    ///     Ok(Ok(_)) => println!("Connection alive!"),
-    ///     _ => println!("Connection timeout or error"),
+    /// // Check connection
+    /// match client.ping_sync().await {
+    ///     Ok(_) => println!("Connection alive!"),
+    ///     Err(e) => println!("Connection error: {}", e),
     /// }
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn ping_sync(&self) -> io::Result<PingResult> {
+    pub async fn ping_sync(&self) -> Result<PingResult, MqttClientError> {
+        let timeout = self._config.ping_timeout_ms;
+        self.with_timeout(self.ping_sync_internal(), timeout, "ping")
+            .await
+    }
+
+    /// Internal ping implementation without timeout
+    async fn ping_sync_internal(&self) -> io::Result<PingResult> {
         let (tx, rx) = tokio::sync::oneshot::channel();
 
         self.send_command(TokioClientCommand::PingSync { response_tx: tx })
@@ -950,6 +2137,225 @@ impl TokioAsyncMqttClient {
             )
         })
     }
+
+    // ==================== Custom Timeout Override Methods ====================
+
+    /// Connect with a custom timeout duration
+    ///
+    /// Allows overriding the default connect timeout for this specific operation.
+    /// Useful for scenarios requiring longer or shorter timeouts than the configured default.
+    ///
+    /// # Arguments
+    /// * `timeout_ms` - Custom timeout in milliseconds
+    ///
+    /// # Returns
+    /// `Result<ConnectionResult, MqttClientError>` - Connection result or timeout error
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
+    /// // Connect with 60 second timeout for satellite network
+    /// let result = client.connect_sync_with_timeout(60000).await?;
+    /// println!("Connected: {:?}", result.session_present);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn connect_sync_with_timeout(
+        &self,
+        timeout_ms: u64,
+    ) -> Result<ConnectionResult, MqttClientError> {
+        self.with_timeout(self.connect_sync_internal(), Some(timeout_ms), "connect")
+            .await
+    }
+
+    /// Subscribe with a custom timeout duration
+    ///
+    /// Allows overriding the default subscribe timeout for this specific operation.
+    ///
+    /// # Arguments
+    /// * `topic` - Topic filter to subscribe to
+    /// * `qos` - Requested Quality of Service level
+    /// * `timeout_ms` - Custom timeout in milliseconds
+    ///
+    /// # Returns
+    /// `Result<SubscribeResult, MqttClientError>` - Subscribe result or timeout error
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
+    /// // Subscribe with 5 second timeout for time-critical subscription
+    /// let result = client.subscribe_sync_with_timeout("sensors/+", 1, 5000).await?;
+    /// println!("Subscribed with reason codes: {:?}", result.reason_codes);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn subscribe_sync_with_timeout(
+        &self,
+        topic: &str,
+        qos: u8,
+        timeout_ms: u64,
+    ) -> Result<SubscribeResult, MqttClientError> {
+        let subscribe_command = SubscribeCommand::single(topic, qos);
+        self.with_timeout(
+            self.subscribe_sync_internal(subscribe_command),
+            Some(timeout_ms),
+            "subscribe",
+        )
+        .await
+    }
+
+    /// Publish with a custom timeout duration
+    ///
+    /// Allows overriding the default publish acknowledgment timeout for this specific operation.
+    ///
+    /// # Arguments
+    /// * `topic` - Topic to publish to
+    /// * `payload` - Message payload
+    /// * `qos` - Quality of Service level (0, 1, or 2)
+    /// * `retain` - Whether broker should retain this message
+    /// * `timeout_ms` - Custom timeout in milliseconds
+    ///
+    /// # Returns
+    /// `Result<PublishResult, MqttClientError>` - Publish result or timeout error
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
+    /// // Publish critical alert with 3 second timeout
+    /// let result = client.publish_sync_with_timeout(
+    ///     "alerts/critical",
+    ///     b"SYSTEM FAILURE",
+    ///     2,
+    ///     false,
+    ///     3000
+    /// ).await?;
+    /// println!("Published with packet ID: {:?}", result.packet_id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn publish_sync_with_timeout(
+        &self,
+        topic: &str,
+        payload: &[u8],
+        qos: u8,
+        retain: bool,
+        timeout_ms: u64,
+    ) -> Result<PublishResult, MqttClientError> {
+        let publish_command = PublishCommand::simple(topic, payload.to_vec(), qos, retain);
+        self.with_timeout(
+            self.publish_sync_internal(publish_command),
+            Some(timeout_ms),
+            "publish",
+        )
+        .await
+    }
+
+    /// Unsubscribe with a custom timeout duration
+    ///
+    /// Allows overriding the default unsubscribe timeout for this specific operation.
+    ///
+    /// # Arguments
+    /// * `topics` - Topic filters to unsubscribe from
+    /// * `timeout_ms` - Custom timeout in milliseconds
+    ///
+    /// # Returns
+    /// `Result<UnsubscribeResult, MqttClientError>` - Unsubscribe result or timeout error
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
+    /// // Unsubscribe with 15 second timeout for slow network
+    /// let result = client.unsubscribe_sync_with_timeout(
+    ///     vec!["sensors/+", "alerts/#"],
+    ///     15000
+    /// ).await?;
+    /// println!("Unsubscribed with reason codes: {:?}", result.reason_codes);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn unsubscribe_sync_with_timeout(
+        &self,
+        topics: Vec<&str>,
+        timeout_ms: u64,
+    ) -> Result<UnsubscribeResult, MqttClientError> {
+        let topics: Vec<String> = topics.into_iter().map(|s| s.to_string()).collect();
+        let unsubscribe_command = UnsubscribeCommand::from_topics(topics);
+        self.with_timeout(
+            self.unsubscribe_sync_internal(unsubscribe_command),
+            Some(timeout_ms),
+            "unsubscribe",
+        )
+        .await
+    }
+
+    /// Send PINGREQ and wait for PINGRESP with a custom timeout duration
+    ///
+    /// Allows overriding the default ping timeout for this specific operation.
+    ///
+    /// # Arguments
+    /// * `timeout_ms` - Custom timeout in milliseconds
+    ///
+    /// # Returns
+    /// `Result<PingResult, MqttClientError>` - Ping result or timeout error
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
+    /// // Quick ping with 2 second timeout for health check
+    /// let result = client.ping_sync_with_timeout(2000).await?;
+    /// println!("Ping successful!");
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn ping_sync_with_timeout(
+        &self,
+        timeout_ms: u64,
+    ) -> Result<PingResult, MqttClientError> {
+        self.with_timeout(self.ping_sync_internal(), Some(timeout_ms), "ping")
+            .await
+    }
+
+    // ==================== End Custom Timeout Override Methods ====================
 
     /// Publish a message and wait for acknowledgment (QoS 1 = PUBACK, QoS 2 = PUBCOMP)
     ///
@@ -1013,8 +2419,8 @@ struct TokioClientWorker {
     command_rx: mpsc::Receiver<TokioClientCommand>,
     /// Worker configuration
     config: TokioAsyncClientConfig,
-    /// TCP stream to MQTT broker
-    stream: Option<TcpStream>,
+    /// Transport connection to MQTT broker (TCP or TLS)
+    stream: Option<BoxedTransport>,
     /// Async ingress/egress streams
     streams: AsyncMQTTStreams,
     /// Current connection state
@@ -1104,8 +2510,8 @@ impl TokioClientWorker {
                 // EGRESS: Drain channel data and write to the transport
                 frame = egress_rx.recv() => {
                     if let Some(frame) = frame {
-                        if let Err(e) = self.handle_egress_frame(frame, &mut egress_rx).await {
-                            self.event_handler.on_error(&e).await;
+                        if let Err(mqtt_err) = self.handle_egress_frame(frame, &mut egress_rx).await {
+                            self.event_handler.on_error(&mqtt_err).await;
                             self.handle_connection_lost().await;
                             continue;
                         }
@@ -1132,20 +2538,33 @@ impl TokioClientWorker {
                 } => {
                     match read_result {
                         Ok(Some(bytes)) => {
-                            if let Err(e) = self.streams.push_ingress_data(&bytes, self.mqtt_version) {
-                                self.event_handler.on_error(&e).await;
+                            if let Err(mqtt_err) = self.streams.push_ingress_data(&bytes, self.mqtt_version) {
+                                // Emit ParseError event if it's a packet parsing error
+                                if let MqttClientError::PacketParsing { parse_error, raw_data } = &mqtt_err {
+                                    let parse_err = ParseError::ParseError(parse_error.clone());
+                                    self.event_handler.on_parse_error(
+                                        raw_data,
+                                        &parse_err,
+                                        mqtt_err.is_recoverable()
+                                    ).await;
+                                }
+
+                                self.event_handler.on_error(&mqtt_err).await;
                                 self.handle_connection_lost().await;
                                 continue;
                             }
                         }
                         Ok(None) => {
-                            let error = io::Error::new(io::ErrorKind::UnexpectedEof, "Connection closed");
-                            self.event_handler.on_error(&error).await;
+                            let mqtt_err = MqttClientError::ConnectionLost {
+                                reason: "Connection closed by server".to_string(),
+                            };
+                            self.event_handler.on_error(&mqtt_err).await;
                             self.handle_connection_lost().await;
                             continue;
                         }
                         Err(e) => {
-                            self.event_handler.on_error(&e).await;
+                            let mqtt_err = MqttClientError::from_io_error(e, "transport read");
+                            self.event_handler.on_error(&mqtt_err).await;
                             self.handle_connection_lost().await;
                             continue;
                         }
@@ -1156,8 +2575,8 @@ impl TokioClientWorker {
                 packet = ingress_rx.recv() => {
                     if let Some(packet) = packet {
                         self.handle_mqtt_packet(packet).await;
-                        if let Err(e) = self.streams.flush_ingress_pending() {
-                            self.event_handler.on_error(&e).await;
+                        if let Err(mqtt_err) = self.streams.flush_ingress_pending() {
+                            self.event_handler.on_error(&mqtt_err).await;
                         }
                     } else {
                         break;
@@ -1232,7 +2651,8 @@ impl TokioClientWorker {
             }
             TokioClientCommand::SendPacket(packet) => {
                 if let Err(e) = self.send_packet_to_broker(&packet).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                 }
             }
             TokioClientCommand::Auth {
@@ -1250,7 +2670,7 @@ impl TokioClientWorker {
         &mut self,
         first: Vec<u8>,
         egress_rx: &mut Receiver<Vec<u8>>,
-    ) -> io::Result<()> {
+    ) -> Result<(), MqttClientError> {
         self.write_to_transport(&first).await?;
 
         // Opportunistically drain any additional frames that are ready.
@@ -1267,19 +2687,44 @@ impl TokioClientWorker {
         Ok(())
     }
 
-    async fn write_to_transport(&mut self, frame: &[u8]) -> io::Result<()> {
+    async fn write_to_transport(&mut self, frame: &[u8]) -> Result<(), MqttClientError> {
         if let Some(stream) = &mut self.stream {
-            let result = stream.write_all(frame).await;
-            if result.is_ok() {
-                // Update last send time for keep-alive tracking
-                self.last_packet_sent = Instant::now();
+            match stream.write_all(frame).await {
+                Ok(_) => {
+                    // Update last send time for keep-alive tracking
+                    self.last_packet_sent = Instant::now();
+                    Ok(())
+                }
+                Err(e) => {
+                    // Categorize network errors for better error handling
+                    let error = match e.kind() {
+                        io::ErrorKind::ConnectionReset => MqttClientError::NetworkError {
+                            kind: e.kind(),
+                            message: "Connection reset by peer".to_string(),
+                        },
+                        io::ErrorKind::BrokenPipe => MqttClientError::NetworkError {
+                            kind: e.kind(),
+                            message: "Broken pipe (connection closed)".to_string(),
+                        },
+                        io::ErrorKind::UnexpectedEof => MqttClientError::NetworkError {
+                            kind: e.kind(),
+                            message: "Unexpected end of file".to_string(),
+                        },
+                        io::ErrorKind::ConnectionAborted => MqttClientError::NetworkError {
+                            kind: e.kind(),
+                            message: "Connection aborted".to_string(),
+                        },
+                        io::ErrorKind::TimedOut => MqttClientError::NetworkError {
+                            kind: e.kind(),
+                            message: "Write operation timed out".to_string(),
+                        },
+                        _ => MqttClientError::from_io_error(e, "write_to_transport"),
+                    };
+                    Err(error)
+                }
             }
-            result
         } else {
-            Err(io::Error::new(
-                io::ErrorKind::NotConnected,
-                "Transport not connected",
-            ))
+            Err(MqttClientError::NotConnected)
         }
     }
 
@@ -1305,18 +2750,18 @@ impl TokioClientWorker {
             match pingreq.to_bytes() {
                 Ok(bytes) => {
                     if let Err(e) = self.streams.send_egress(bytes).await {
-                        self.event_handler.on_error(&e).await;
+                        let mqtt_err = MqttClientError::from_io_error(e, "send keep-alive PINGREQ");
+                        self.event_handler.on_error(&mqtt_err).await;
                         self.handle_connection_lost().await;
                         return; // Don't reset timer if connection lost
                     }
                     // last_packet_sent will be updated in write_to_transport
                 }
                 Err(err) => {
-                    let error = io::Error::new(
-                        io::ErrorKind::InvalidData,
-                        format!("Failed to serialize PINGREQ: {:?}", err),
-                    );
-                    self.event_handler.on_error(&error).await;
+                    let mqtt_err = MqttClientError::ProtocolViolation {
+                        message: format!("Failed to serialize PINGREQ: {:?}", err),
+                    };
+                    self.event_handler.on_error(&mqtt_err).await;
                     return; // Don't reset timer on error
                 }
             }
@@ -1349,6 +2794,48 @@ impl TokioClientWorker {
         self.keep_alive_timer = Some(Box::pin(tokio::time::sleep(time_until_next_check)));
     }
 
+    /// Create transport based on peer address scheme
+    ///
+    /// Supports:
+    /// - `mqtt://host:port` or `host:port` → TCP transport
+    /// - `mqtts://host:port` → TLS transport (requires `tls` feature)
+    async fn create_transport(&self, peer: &str) -> Result<BoxedTransport, MqttClientError> {
+        // Parse URL scheme
+        if peer.starts_with("mqtts://") {
+            #[cfg(feature = "tls")]
+            {
+                let addr = peer.strip_prefix("mqtts://").unwrap_or(peer);
+                let transport = TlsTransport::connect(addr).await.map_err(|e| {
+                    MqttClientError::ConnectionLost {
+                        reason: format!("TLS connection failed to {}: {}", peer, e),
+                    }
+                })?;
+                Ok(Box::new(transport) as BoxedTransport)
+            }
+            #[cfg(not(feature = "tls"))]
+            {
+                Err(MqttClientError::ProtocolViolation {
+                    message: format!(
+                        "TLS transport not available. Enable the 'tls' feature to use mqtts:// URLs. Peer: {}",
+                        peer
+                    ),
+                })
+            }
+        } else {
+            // Default to TCP for mqtt:// or plain addresses
+            let addr = peer.strip_prefix("mqtt://").unwrap_or(peer);
+
+            let transport =
+                TcpTransport::connect(addr)
+                    .await
+                    .map_err(|e| MqttClientError::ConnectionLost {
+                        reason: format!("TCP connection failed to {}: {}", peer, e),
+                    })?;
+
+            Ok(Box::new(transport) as BoxedTransport)
+        }
+    }
+
     /// Handle connecting to broker
     async fn handle_connect(&mut self) {
         // Avoid concurrent connect attempts if a socket already exists
@@ -1358,18 +2845,22 @@ impl TokioClientWorker {
 
         let peer = self.options.peer.clone();
 
-        match TcpStream::connect(&peer).await {
-            Ok(stream) => {
+        match self.create_transport(&peer).await {
+            Ok(transport) => {
                 if self.config.tcp_nodelay {
-                    if let Err(e) = stream.set_nodelay(true) {
-                        self.event_handler.on_error(&e).await;
+                    if let Err(e) = transport.set_nodelay(true) {
+                        let mqtt_err = MqttClientError::NetworkError {
+                            kind: io::ErrorKind::Other,
+                            message: format!("Failed to set TCP_NODELAY: {}", e),
+                        };
+                        self.event_handler.on_error(&mqtt_err).await;
                     }
                 }
 
-                // Install the socket before enqueuing bytes so the writer branch can flush
-                self.stream = Some(stream);
+                // Install the transport before enqueuing bytes so the writer branch can flush
+                self.stream = Some(transport);
 
-                // Reset reconnect attempts on successful TCP connect
+                // Reset reconnect attempts on successful connection
                 self.reconnect_attempts = 0;
 
                 // Session management mirrors the synchronous client behaviour
@@ -1401,17 +2892,17 @@ impl TokioClientWorker {
                 let connect_bytes = match connect_packet.to_bytes() {
                     Ok(bytes) => bytes,
                     Err(err) => {
-                        let error = io::Error::new(
-                            io::ErrorKind::InvalidData,
-                            format!("Failed to serialize CONNECT packet: {:?}", err),
-                        );
-                        self.event_handler.on_error(&error).await;
+                        let mqtt_err = MqttClientError::ProtocolViolation {
+                            message: format!("Failed to serialize CONNECT packet: {:?}", err),
+                        };
+                        self.event_handler.on_error(&mqtt_err).await;
                         return;
                     }
                 };
 
                 if let Err(e) = self.streams.send_egress(connect_bytes).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send CONNECT packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                     self.stream = None;
                     self.is_connected = false;
                     return;
@@ -1430,8 +2921,8 @@ impl TokioClientWorker {
                     self.flush_message_buffer().await;
                 }
             }
-            Err(e) => {
-                self.event_handler.on_error(&e).await;
+            Err(mqtt_err) => {
+                self.event_handler.on_error(&mqtt_err).await;
             }
         }
     }
@@ -1439,11 +2930,11 @@ impl TokioClientWorker {
     /// Handle subscribe command
     async fn handle_subscribe(&mut self, mut command: SubscribeCommand) {
         if command.subscriptions.is_empty() {
-            let error = io::Error::new(
-                ErrorKind::InvalidInput,
-                "SUBSCRIBE requires at least one topic subscription",
-            );
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::InvalidState {
+                expected: "at least one topic subscription".to_string(),
+                actual: "empty subscription list".to_string(),
+            };
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         }
 
@@ -1452,8 +2943,8 @@ impl TokioClientWorker {
         } else if let Some(session) = self.session.as_mut() {
             session.next_packet_id()
         } else {
-            let error = io::Error::other("No active session available for SUBSCRIBE");
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::NoActiveSession;
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         };
 
@@ -1468,7 +2959,8 @@ impl TokioClientWorker {
         match subscribe_packet.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send SUBSCRIBE packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                     return;
                 }
 
@@ -1480,11 +2972,10 @@ impl TokioClientWorker {
                 self.pending_subscribes.insert(packet_id, topics);
             }
             Err(err) => {
-                let error = io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to serialize SUBSCRIBE packet: {:?}", err),
-                );
-                self.event_handler.on_error(&error).await;
+                let mqtt_err = MqttClientError::ProtocolViolation {
+                    message: format!("Failed to serialize SUBSCRIBE packet: {:?}", err),
+                };
+                self.event_handler.on_error(&mqtt_err).await;
             }
         }
     }
@@ -1493,11 +2984,11 @@ impl TokioClientWorker {
     async fn handle_publish(&mut self, command: PublishCommand) {
         if self.stream.is_none() && self.config.buffer_messages {
             if self.message_buffer.len() >= self.config.max_buffer_size {
-                let error = io::Error::new(
-                    ErrorKind::WouldBlock,
-                    "Publish buffer full; dropping message",
-                );
-                self.event_handler.on_error(&error).await;
+                let mqtt_err = MqttClientError::BufferFull {
+                    buffer_type: "publish buffer".to_string(),
+                    capacity: self.config.max_buffer_size,
+                };
+                self.event_handler.on_error(&mqtt_err).await;
                 return;
             }
 
@@ -1506,16 +2997,14 @@ impl TokioClientWorker {
         }
 
         if self.stream.is_none() {
-            let error = io::Error::new(
-                io::ErrorKind::NotConnected,
-                "Cannot publish while disconnected",
-            );
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::NotConnected;
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         }
 
         if let Err(e) = self.send_publish_command(command).await {
-            self.event_handler.on_error(&e).await;
+            let mqtt_err = MqttClientError::from_io_error(e, "send publish");
+            self.event_handler.on_error(&mqtt_err).await;
         }
     }
 
@@ -1602,11 +3091,11 @@ impl TokioClientWorker {
     /// Handle unsubscribe command
     async fn handle_unsubscribe(&mut self, mut command: UnsubscribeCommand) {
         if command.topics.is_empty() {
-            let error = io::Error::new(
-                ErrorKind::InvalidInput,
-                "UNSUBSCRIBE requires at least one topic",
-            );
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::InvalidState {
+                expected: "at least one topic".to_string(),
+                actual: "empty topic list".to_string(),
+            };
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         }
 
@@ -1615,8 +3104,8 @@ impl TokioClientWorker {
         } else if let Some(session) = self.session.as_mut() {
             session.next_packet_id()
         } else {
-            let error = io::Error::other("No active session available for UNSUBSCRIBE");
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::NoActiveSession;
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         };
 
@@ -1631,7 +3120,8 @@ impl TokioClientWorker {
         match unsubscribe_packet.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send UNSUBSCRIBE packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                     return;
                 }
 
@@ -1639,11 +3129,10 @@ impl TokioClientWorker {
                     .insert(packet_id, command.topics.clone());
             }
             Err(err) => {
-                let error = io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to serialize UNSUBSCRIBE packet: {:?}", err),
-                );
-                self.event_handler.on_error(&error).await;
+                let mqtt_err = MqttClientError::ProtocolViolation {
+                    message: format!("Failed to serialize UNSUBSCRIBE packet: {:?}", err),
+                };
+                self.event_handler.on_error(&mqtt_err).await;
             }
         }
     }
@@ -1651,11 +3140,8 @@ impl TokioClientWorker {
     /// Handle ping command
     async fn handle_ping(&mut self) {
         if self.stream.is_none() {
-            let error = io::Error::new(
-                io::ErrorKind::NotConnected,
-                "Cannot send PING while disconnected",
-            );
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::NotConnected;
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         }
 
@@ -1664,15 +3150,15 @@ impl TokioClientWorker {
         match pingreq_packet.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send PINGREQ packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                 }
             }
             Err(err) => {
-                let error = io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to serialize PINGREQ packet: {:?}", err),
-                );
-                self.event_handler.on_error(&error).await;
+                let mqtt_err = MqttClientError::ProtocolViolation {
+                    message: format!("Failed to serialize PINGREQ packet: {:?}", err),
+                };
+                self.event_handler.on_error(&mqtt_err).await;
             }
         }
     }
@@ -1680,11 +3166,8 @@ impl TokioClientWorker {
     /// Handle AUTH command for enhanced authentication (MQTT v5)
     async fn handle_auth(&mut self, reason_code: u8, properties: Vec<Property>) {
         if self.stream.is_none() {
-            let error = io::Error::new(
-                io::ErrorKind::NotConnected,
-                "Cannot send AUTH while disconnected",
-            );
-            self.event_handler.on_error(&error).await;
+            let mqtt_err = MqttClientError::NotConnected;
+            self.event_handler.on_error(&mqtt_err).await;
             return;
         }
 
@@ -1693,15 +3176,15 @@ impl TokioClientWorker {
         match auth_packet.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send AUTH packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                 }
             }
             Err(err) => {
-                let error = io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to serialize AUTH packet: {:?}", err),
-                );
-                self.event_handler.on_error(&error).await;
+                let mqtt_err = MqttClientError::ProtocolViolation {
+                    message: format!("Failed to serialize AUTH packet: {:?}", err),
+                };
+                self.event_handler.on_error(&mqtt_err).await;
             }
         }
     }
@@ -1917,16 +3400,16 @@ impl TokioClientWorker {
         match disconnect_packet.to_bytes() {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send DISCONNECT packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                     return;
                 }
             }
             Err(err) => {
-                let error = io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("Failed to serialize DISCONNECT packet: {:?}", err),
-                );
-                self.event_handler.on_error(&error).await;
+                let mqtt_err = MqttClientError::ProtocolViolation {
+                    message: format!("Failed to serialize DISCONNECT packet: {:?}", err),
+                };
+                self.event_handler.on_error(&mqtt_err).await;
                 return;
             }
         }
@@ -1999,15 +3482,10 @@ impl TokioClientWorker {
                 match self.send_publish_command(command.clone()).await {
                     Ok(()) => continue,
                     Err(e) => {
-                        self.event_handler.on_error(&e).await;
+                        let mqtt_err = MqttClientError::from_io_error(e, "flush publish buffer");
+                        self.event_handler.on_error(&mqtt_err).await;
                         self.message_buffer.push_front(command);
-
-                        if matches!(
-                            e.kind(),
-                            ErrorKind::WouldBlock | ErrorKind::NotConnected | ErrorKind::BrokenPipe
-                        ) {
-                            break;
-                        }
+                        break;
                     }
                 }
             } else {
@@ -2042,7 +3520,9 @@ impl TokioClientWorker {
                     } else if let Some(session) = self.session.as_ref() {
                         for resend_packet in session.resend_pending_messages() {
                             if let Err(e) = self.send_packet_to_broker(&resend_packet).await {
-                                self.event_handler.on_error(&e).await;
+                                let mqtt_err =
+                                    MqttClientError::from_io_error(e, "resend pending message");
+                                self.event_handler.on_error(&mqtt_err).await;
                                 self.handle_connection_lost().await;
                                 return;
                             }
@@ -2155,7 +3635,8 @@ impl TokioClientWorker {
                     if let Some(pubrel) = next_pubrel {
                         let packet = MqttPacket::PubRel5(pubrel.clone());
                         if let Err(e) = self.send_packet_to_broker(&packet).await {
-                            self.event_handler.on_error(&e).await;
+                            let mqtt_err = MqttClientError::from_io_error(e, "send PUBREL packet");
+                            self.event_handler.on_error(&mqtt_err).await;
                             self.handle_connection_lost().await;
                             return;
                         }
@@ -2186,7 +3667,8 @@ impl TokioClientWorker {
 
                     let packet = MqttPacket::PubComp5(pubcomp.clone());
                     if let Err(e) = self.send_packet_to_broker(&packet).await {
-                        self.event_handler.on_error(&e).await;
+                        let mqtt_err = MqttClientError::from_io_error(e, "send PUBCOMP packet");
+                        self.event_handler.on_error(&mqtt_err).await;
                         self.handle_connection_lost().await;
                     }
                 }
@@ -2236,7 +3718,8 @@ impl TokioClientWorker {
 
                 if let Some(ack) = ack_packet {
                     if let Err(e) = self.send_packet_to_broker(&ack).await {
-                        self.event_handler.on_error(&e).await;
+                        let mqtt_err = MqttClientError::from_io_error(e, "send publish ACK");
+                        self.event_handler.on_error(&mqtt_err).await;
                         self.handle_connection_lost().await;
                     }
                 }
@@ -2261,7 +3744,8 @@ impl TokioClientWorker {
                 // Respond to unexpected PINGREQ from broker with PINGRESP
                 let response = MqttPacket::PingResp5(pingrespv5::MqttPingResp::new());
                 if let Err(e) = self.send_packet_to_broker(&response).await {
-                    self.event_handler.on_error(&e).await;
+                    let mqtt_err = MqttClientError::from_io_error(e, "send PINGRESP packet");
+                    self.event_handler.on_error(&mqtt_err).await;
                     self.handle_connection_lost().await;
                 }
             }
@@ -2380,5 +3864,842 @@ impl TokioClientWorker {
     #[allow(dead_code)]
     fn set_mqtt_version(&mut self, version: u8) {
         self.mqtt_version = version;
+    }
+}
+
+#[cfg(test)]
+mod subscribe_builder_tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_subscription() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/temp", 1)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.subscriptions.len(), 1);
+        assert_eq!(cmd.subscriptions[0].topic_filter, "sensors/temp");
+        assert_eq!(cmd.subscriptions[0].qos, 1);
+        assert!(!cmd.subscriptions[0].no_local);
+        assert!(!cmd.subscriptions[0].retain_as_published);
+        assert_eq!(cmd.subscriptions[0].retain_handling, 0);
+        assert!(cmd.packet_id.is_none());
+        assert!(cmd.properties.is_empty());
+    }
+
+    #[test]
+    fn test_subscription_with_no_local() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/+/temp", 1)
+            .with_no_local(true)
+            .build()
+            .unwrap();
+
+        let sub = &cmd.subscriptions[0];
+        assert_eq!(sub.topic_filter, "sensors/+/temp");
+        assert_eq!(sub.qos, 1);
+        assert!(sub.no_local);
+        assert!(!sub.retain_as_published);
+        assert_eq!(sub.retain_handling, 0);
+    }
+
+    #[test]
+    fn test_subscription_with_retain_as_published() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/#", 2)
+            .with_retain_as_published(true)
+            .build()
+            .unwrap();
+
+        let sub = &cmd.subscriptions[0];
+        assert_eq!(sub.topic_filter, "sensors/#");
+        assert_eq!(sub.qos, 2);
+        assert!(!sub.no_local);
+        assert!(sub.retain_as_published);
+        assert_eq!(sub.retain_handling, 0);
+    }
+
+    #[test]
+    fn test_subscription_with_retain_handling() {
+        // Test all valid retain_handling values
+        for rh in 0..=2 {
+            let cmd = SubscribeCommand::builder()
+                .add_topic("test/topic", 1)
+                .with_retain_handling(rh)
+                .build()
+                .unwrap();
+
+            assert_eq!(cmd.subscriptions[0].retain_handling, rh);
+        }
+    }
+
+    #[test]
+    fn test_subscription_with_all_options() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/+/temp", 2)
+            .with_no_local(true)
+            .with_retain_as_published(true)
+            .with_retain_handling(1)
+            .build()
+            .unwrap();
+
+        let sub = &cmd.subscriptions[0];
+        assert_eq!(sub.topic_filter, "sensors/+/temp");
+        assert_eq!(sub.qos, 2);
+        assert!(sub.no_local);
+        assert!(sub.retain_as_published);
+        assert_eq!(sub.retain_handling, 1);
+    }
+
+    #[test]
+    fn test_multiple_topics() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/temp", 1)
+            .with_no_local(true)
+            .add_topic("sensors/humidity", 2)
+            .with_retain_handling(1)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.subscriptions.len(), 2);
+
+        // First subscription
+        assert_eq!(cmd.subscriptions[0].topic_filter, "sensors/temp");
+        assert_eq!(cmd.subscriptions[0].qos, 1);
+        assert!(cmd.subscriptions[0].no_local);
+        assert!(!cmd.subscriptions[0].retain_as_published);
+        assert_eq!(cmd.subscriptions[0].retain_handling, 0);
+
+        // Second subscription
+        assert_eq!(cmd.subscriptions[1].topic_filter, "sensors/humidity");
+        assert_eq!(cmd.subscriptions[1].qos, 2);
+        assert!(!cmd.subscriptions[1].no_local);
+        assert!(!cmd.subscriptions[1].retain_as_published);
+        assert_eq!(cmd.subscriptions[1].retain_handling, 1);
+    }
+
+    #[test]
+    fn test_add_topic_with_options() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic_with_options("sensors/temp", 2, true, true, 1)
+            .build()
+            .unwrap();
+
+        let sub = &cmd.subscriptions[0];
+        assert_eq!(sub.topic_filter, "sensors/temp");
+        assert_eq!(sub.qos, 2);
+        assert!(sub.no_local);
+        assert!(sub.retain_as_published);
+        assert_eq!(sub.retain_handling, 1);
+    }
+
+    #[test]
+    fn test_with_subscription_id() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/#", 1)
+            .with_subscription_id(42)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            cmd.properties[0],
+            Property::SubscriptionIdentifier(42)
+        ));
+    }
+
+    #[test]
+    fn test_add_property() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("test/topic", 1)
+            .add_property(Property::UserProperty("key".into(), "value".into()))
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::UserProperty(k, v) if k == "key" && v == "value"
+        ));
+    }
+
+    #[test]
+    fn test_multiple_properties() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("test/topic", 1)
+            .with_subscription_id(100)
+            .add_property(Property::UserProperty("key1".into(), "value1".into()))
+            .add_property(Property::UserProperty("key2".into(), "value2".into()))
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 3);
+        assert!(matches!(
+            cmd.properties[0],
+            Property::SubscriptionIdentifier(100)
+        ));
+    }
+
+    #[test]
+    fn test_with_packet_id() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("test/topic", 1)
+            .with_packet_id(123)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.packet_id, Some(123));
+    }
+
+    #[test]
+    fn test_no_topics_error() {
+        let result = SubscribeCommand::builder().build();
+
+        assert!(result.is_err());
+        assert!(matches!(result, Err(SubscribeBuilderError::NoTopics)));
+
+        // Test error message
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("No topics added"));
+    }
+
+    #[test]
+    #[should_panic(expected = "no topics added yet")]
+    fn test_with_no_local_before_topic_panics() {
+        SubscribeCommand::builder().with_no_local(true);
+    }
+
+    #[test]
+    #[should_panic(expected = "no topics added yet")]
+    fn test_with_retain_as_published_before_topic_panics() {
+        SubscribeCommand::builder().with_retain_as_published(true);
+    }
+
+    #[test]
+    #[should_panic(expected = "no topics added yet")]
+    fn test_with_retain_handling_before_topic_panics() {
+        SubscribeCommand::builder().with_retain_handling(1);
+    }
+
+    #[test]
+    #[should_panic(expected = "Invalid retain_handling value")]
+    fn test_invalid_retain_handling_value() {
+        SubscribeCommand::builder()
+            .add_topic("test", 1)
+            .with_retain_handling(3); // Invalid: max is 2
+    }
+
+    #[test]
+    fn test_builder_default() {
+        let builder1 = SubscribeCommandBuilder::default();
+        let builder2 = SubscribeCommandBuilder::new();
+
+        // Both should have the same initial state
+        assert_eq!(builder1.topics.len(), builder2.topics.len());
+        assert_eq!(builder1.properties.len(), builder2.properties.len());
+        assert_eq!(builder1.packet_id, builder2.packet_id);
+    }
+
+    #[test]
+    fn test_string_ownership() {
+        let topic = String::from("sensors/temp");
+        let cmd = SubscribeCommand::builder()
+            .add_topic(topic.clone(), 1) // Clone to test Into<String>
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.subscriptions[0].topic_filter, topic);
+    }
+
+    #[test]
+    fn test_str_slice() {
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/temp", 1) // &str
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.subscriptions[0].topic_filter, "sensors/temp");
+    }
+
+    #[test]
+    fn test_complex_subscription() {
+        // Test a realistic complex subscription scenario
+        let cmd = SubscribeCommand::builder()
+            .add_topic("sensors/temperature/#", 1)
+            .with_no_local(false)
+            .with_retain_handling(0)
+            .add_topic("sensors/humidity/+/data", 2)
+            .with_no_local(true)
+            .with_retain_as_published(true)
+            .with_retain_handling(2)
+            .add_topic("alerts/#", 1)
+            .with_retain_handling(1)
+            .with_subscription_id(999)
+            .add_property(Property::UserProperty("client".into(), "test".into()))
+            .with_packet_id(42)
+            .build()
+            .unwrap();
+
+        // Verify structure
+        assert_eq!(cmd.subscriptions.len(), 3);
+        assert_eq!(cmd.packet_id, Some(42));
+        assert_eq!(cmd.properties.len(), 2);
+
+        // Verify first topic
+        assert_eq!(cmd.subscriptions[0].topic_filter, "sensors/temperature/#");
+        assert_eq!(cmd.subscriptions[0].qos, 1);
+        assert!(!cmd.subscriptions[0].no_local);
+        assert_eq!(cmd.subscriptions[0].retain_handling, 0);
+
+        // Verify second topic
+        assert_eq!(cmd.subscriptions[1].topic_filter, "sensors/humidity/+/data");
+        assert_eq!(cmd.subscriptions[1].qos, 2);
+        assert!(cmd.subscriptions[1].no_local);
+        assert!(cmd.subscriptions[1].retain_as_published);
+        assert_eq!(cmd.subscriptions[1].retain_handling, 2);
+
+        // Verify third topic
+        assert_eq!(cmd.subscriptions[2].topic_filter, "alerts/#");
+        assert_eq!(cmd.subscriptions[2].qos, 1);
+        assert_eq!(cmd.subscriptions[2].retain_handling, 1);
+
+        // Verify properties
+        assert!(matches!(
+            cmd.properties[0],
+            Property::SubscriptionIdentifier(999)
+        ));
+        assert!(matches!(
+            &cmd.properties[1],
+            Property::UserProperty(k, v) if k == "client" && v == "test"
+        ));
+    }
+
+    #[test]
+    fn test_builder_is_clone() {
+        let builder = SubscribeCommand::builder()
+            .add_topic("test", 1)
+            .with_subscription_id(42);
+
+        let builder_clone = builder.clone();
+
+        let cmd1 = builder.build().unwrap();
+        let cmd2 = builder_clone.build().unwrap();
+
+        assert_eq!(cmd1.subscriptions.len(), cmd2.subscriptions.len());
+        assert_eq!(cmd1.properties.len(), cmd2.properties.len());
+    }
+}
+
+#[cfg(test)]
+mod publish_builder_tests {
+    use super::*;
+
+    #[test]
+    fn test_simple_publish() {
+        let cmd = PublishCommand::builder()
+            .topic("sensors/temp")
+            .payload(b"23.5")
+            .qos(1)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.topic_name, "sensors/temp");
+        assert_eq!(cmd.payload, b"23.5");
+        assert_eq!(cmd.qos, 1);
+        assert!(!cmd.retain);
+        assert!(!cmd.dup);
+        assert!(cmd.packet_id.is_none());
+        assert!(cmd.properties.is_empty());
+    }
+
+    #[test]
+    fn test_publish_with_retain() {
+        let cmd = PublishCommand::builder()
+            .topic("status/online")
+            .payload(b"true")
+            .retain(true)
+            .build()
+            .unwrap();
+
+        assert!(cmd.retain);
+        assert_eq!(cmd.qos, 0); // Default QoS
+    }
+
+    #[test]
+    fn test_publish_with_qos_levels() {
+        for qos in 0..=2 {
+            let cmd = PublishCommand::builder()
+                .topic("test/topic")
+                .qos(qos)
+                .build()
+                .unwrap();
+
+            assert_eq!(cmd.qos, qos);
+        }
+    }
+
+    #[test]
+    fn test_publish_with_packet_id() {
+        let cmd = PublishCommand::builder()
+            .topic("test/topic")
+            .with_packet_id(123)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.packet_id, Some(123));
+    }
+
+    #[test]
+    fn test_publish_with_dup() {
+        let cmd = PublishCommand::builder()
+            .topic("test/topic")
+            .dup(true)
+            .build()
+            .unwrap();
+
+        assert!(cmd.dup);
+    }
+
+    #[test]
+    fn test_publish_with_message_expiry() {
+        let cmd = PublishCommand::builder()
+            .topic("alerts/temp")
+            .payload(b"warning")
+            .with_message_expiry_interval(300)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::MessageExpiryInterval(300)
+        ));
+    }
+
+    #[test]
+    fn test_publish_with_content_type() {
+        let cmd = PublishCommand::builder()
+            .topic("data/json")
+            .payload(br#"{"temp":23.5}"#)
+            .with_content_type("application/json")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::ContentType(ct) if ct == "application/json"
+        ));
+    }
+
+    #[test]
+    fn test_publish_with_response_topic() {
+        let cmd = PublishCommand::builder()
+            .topic("requests/temp")
+            .with_response_topic("responses/temp")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::ResponseTopic(rt) if rt == "responses/temp"
+        ));
+    }
+
+    #[test]
+    fn test_publish_with_correlation_data() {
+        let cmd = PublishCommand::builder()
+            .topic("requests/data")
+            .with_correlation_data(b"request-123")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::CorrelationData(data) if data == b"request-123"
+        ));
+    }
+
+    #[test]
+    fn test_publish_with_topic_alias() {
+        let cmd = PublishCommand::builder()
+            .topic("sensors/temperature/room1")
+            .with_topic_alias(42)
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(&cmd.properties[0], Property::TopicAlias(42)));
+    }
+
+    #[test]
+    fn test_publish_with_user_properties() {
+        let cmd = PublishCommand::builder()
+            .topic("sensors/temp")
+            .with_user_property("sensor_id", "42")
+            .with_user_property("location", "room1")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 2);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::UserProperty(k, v) if k == "sensor_id" && v == "42"
+        ));
+        assert!(matches!(
+            &cmd.properties[1],
+            Property::UserProperty(k, v) if k == "location" && v == "room1"
+        ));
+    }
+
+    #[test]
+    fn test_publish_with_custom_property() {
+        let cmd = PublishCommand::builder()
+            .topic("test/topic")
+            .add_property(Property::UserProperty("key".into(), "value".into()))
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 1);
+        assert!(matches!(
+            &cmd.properties[0],
+            Property::UserProperty(k, v) if k == "key" && v == "value"
+        ));
+    }
+
+    #[test]
+    fn test_publish_with_multiple_properties() {
+        let cmd = PublishCommand::builder()
+            .topic("data/sensor")
+            .payload(br#"{"temp":23.5}"#)
+            .with_content_type("application/json")
+            .with_message_expiry_interval(3600)
+            .with_user_property("sensor_id", "42")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 3);
+    }
+
+    #[test]
+    fn test_publish_complex_command() {
+        let cmd = PublishCommand::builder()
+            .topic("sensors/temperature/room1")
+            .payload(b"23.5")
+            .qos(2)
+            .retain(true)
+            .with_packet_id(456)
+            .with_topic_alias(10)
+            .with_content_type("text/plain")
+            .with_message_expiry_interval(7200)
+            .with_user_property("location", "building-A")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.topic_name, "sensors/temperature/room1");
+        assert_eq!(cmd.payload, b"23.5");
+        assert_eq!(cmd.qos, 2);
+        assert!(cmd.retain);
+        assert_eq!(cmd.packet_id, Some(456));
+        assert_eq!(cmd.properties.len(), 4);
+    }
+
+    #[test]
+    fn test_publish_no_topic_error() {
+        let result = PublishCommand::builder().payload(b"test").build();
+
+        assert!(result.is_err());
+        assert!(matches!(result, Err(PublishBuilderError::NoTopic)));
+
+        // Test error message
+        let err = result.unwrap_err();
+        assert!(err.to_string().contains("Topic name not provided"));
+    }
+
+    #[test]
+    fn test_publish_empty_payload() {
+        let cmd = PublishCommand::builder()
+            .topic("test/topic")
+            .build()
+            .unwrap();
+
+        assert!(cmd.payload.is_empty());
+    }
+
+    #[test]
+    fn test_publish_payload_into_conversion() {
+        // Test with &[u8]
+        let cmd1 = PublishCommand::builder()
+            .topic("test/topic")
+            .payload(b"test" as &[u8])
+            .build()
+            .unwrap();
+        assert_eq!(cmd1.payload, b"test");
+
+        // Test with Vec<u8>
+        let cmd2 = PublishCommand::builder()
+            .topic("test/topic")
+            .payload(vec![1, 2, 3, 4])
+            .build()
+            .unwrap();
+        assert_eq!(cmd2.payload, vec![1, 2, 3, 4]);
+    }
+
+    #[test]
+    fn test_publish_topic_into_conversion() {
+        // Test with &str
+        let cmd1 = PublishCommand::builder()
+            .topic("test/topic")
+            .build()
+            .unwrap();
+        assert_eq!(cmd1.topic_name, "test/topic");
+
+        // Test with String
+        let cmd2 = PublishCommand::builder()
+            .topic(String::from("test/topic2"))
+            .build()
+            .unwrap();
+        assert_eq!(cmd2.topic_name, "test/topic2");
+    }
+
+    #[test]
+    fn test_builder_default() {
+        let builder1 = PublishCommandBuilder::default();
+        let builder2 = PublishCommandBuilder::new();
+
+        assert_eq!(builder1.topic_name, builder2.topic_name);
+        assert_eq!(builder1.qos, builder2.qos);
+        assert_eq!(builder1.retain, builder2.retain);
+        assert_eq!(builder1.dup, builder2.dup);
+    }
+
+    #[test]
+    fn test_builder_is_clone() {
+        let builder = PublishCommand::builder()
+            .topic("test/topic")
+            .payload(b"test")
+            .qos(1);
+
+        let builder_clone = builder.clone();
+        let cmd1 = builder.build().unwrap();
+        let cmd2 = builder_clone.build().unwrap();
+
+        assert_eq!(cmd1.topic_name, cmd2.topic_name);
+        assert_eq!(cmd1.payload, cmd2.payload);
+        assert_eq!(cmd1.qos, cmd2.qos);
+    }
+
+    #[test]
+    fn test_request_response_pattern() {
+        let cmd = PublishCommand::builder()
+            .topic("requests/get_temperature")
+            .payload(b"room1")
+            .qos(1)
+            .with_response_topic("responses/temperature")
+            .with_correlation_data(b"req-12345")
+            .with_user_property("request_id", "12345")
+            .build()
+            .unwrap();
+
+        assert_eq!(cmd.properties.len(), 3);
+        // Verify all properties are present
+        assert!(cmd
+            .properties
+            .iter()
+            .any(|p| matches!(p, Property::ResponseTopic(_))));
+        assert!(cmd
+            .properties
+            .iter()
+            .any(|p| matches!(p, Property::CorrelationData(_))));
+        assert!(cmd
+            .properties
+            .iter()
+            .any(|p| matches!(p, Property::UserProperty(_, _))));
+    }
+}
+
+#[cfg(test)]
+mod config_builder_tests {
+    use super::*;
+
+    #[test]
+    fn test_receive_maximum_default() {
+        let config = TokioAsyncClientConfig::default();
+        assert_eq!(config.receive_maximum, None);
+    }
+
+    #[test]
+    fn test_receive_maximum_builder() {
+        let config = TokioAsyncClientConfig::builder()
+            .receive_maximum(100)
+            .build();
+
+        assert_eq!(config.receive_maximum, Some(100));
+    }
+
+    #[test]
+    fn test_receive_maximum_min_value() {
+        let config = TokioAsyncClientConfig::builder().receive_maximum(1).build();
+
+        assert_eq!(config.receive_maximum, Some(1));
+    }
+
+    #[test]
+    fn test_receive_maximum_max_value() {
+        let config = TokioAsyncClientConfig::builder()
+            .receive_maximum(65535)
+            .build();
+
+        assert_eq!(config.receive_maximum, Some(65535));
+    }
+
+    #[test]
+    #[should_panic(expected = "receive_maximum must be greater than 0")]
+    fn test_receive_maximum_zero_panics() {
+        TokioAsyncClientConfig::builder().receive_maximum(0).build();
+    }
+
+    #[test]
+    fn test_no_receive_maximum() {
+        let config = TokioAsyncClientConfig::builder()
+            .receive_maximum(100)
+            .no_receive_maximum()
+            .build();
+
+        assert_eq!(config.receive_maximum, None);
+    }
+
+    #[test]
+    fn test_receive_maximum_chain() {
+        // Test that we can chain with other config options
+        let config = TokioAsyncClientConfig::builder()
+            .auto_reconnect(false)
+            .receive_maximum(50)
+            .tcp_nodelay(true)
+            .connect_timeout_ms(5000)
+            .build();
+
+        assert_eq!(config.receive_maximum, Some(50));
+        assert!(!config.auto_reconnect);
+        assert!(config.tcp_nodelay);
+        assert_eq!(config.connect_timeout_ms, Some(5000));
+    }
+
+    #[test]
+    fn test_config_builder_clone() {
+        let builder = TokioAsyncClientConfig::builder()
+            .receive_maximum(200)
+            .auto_reconnect(false);
+
+        let builder_clone = builder.clone();
+
+        let config1 = builder.build();
+        let config2 = builder_clone.build();
+
+        assert_eq!(config1.receive_maximum, config2.receive_maximum);
+        assert_eq!(config1.auto_reconnect, config2.auto_reconnect);
+    }
+
+    #[test]
+    fn test_receive_maximum_mqtt_v5_compliance() {
+        // Test various valid values according to MQTT v5 spec
+        let test_values = vec![1, 10, 100, 1000, 10000, 32767, 65535];
+
+        for value in test_values {
+            let config = TokioAsyncClientConfig::builder()
+                .receive_maximum(value)
+                .build();
+
+            assert_eq!(config.receive_maximum, Some(value));
+        }
+    }
+
+    #[test]
+    fn test_config_default_values() {
+        // Verify default config has correct receive_maximum
+        let config = TokioAsyncClientConfig::default();
+
+        assert_eq!(config.receive_maximum, None); // Should use MQTT v5 default (65535)
+        assert!(config.auto_reconnect);
+        assert_eq!(config.reconnect_delay_ms, 1000);
+        assert!(config.tcp_nodelay);
+    }
+
+    // ==================== Topic Alias Maximum Tests ====================
+
+    #[test]
+    fn test_topic_alias_maximum_default() {
+        let config = TokioAsyncClientConfig::default();
+        assert_eq!(config.topic_alias_maximum, None);
+    }
+
+    #[test]
+    fn test_topic_alias_maximum_zero() {
+        // 0 means topic aliases not supported
+        let config = TokioAsyncClientConfig::builder()
+            .topic_alias_maximum(0)
+            .build();
+
+        assert_eq!(config.topic_alias_maximum, Some(0));
+    }
+
+    #[test]
+    fn test_topic_alias_maximum_builder() {
+        let config = TokioAsyncClientConfig::builder()
+            .topic_alias_maximum(10)
+            .build();
+
+        assert_eq!(config.topic_alias_maximum, Some(10));
+    }
+
+    #[test]
+    fn test_topic_alias_maximum_max_value() {
+        let config = TokioAsyncClientConfig::builder()
+            .topic_alias_maximum(65535)
+            .build();
+
+        assert_eq!(config.topic_alias_maximum, Some(65535));
+    }
+
+    #[test]
+    fn test_no_topic_alias() {
+        let config = TokioAsyncClientConfig::builder()
+            .topic_alias_maximum(100)
+            .no_topic_alias()
+            .build();
+
+        assert_eq!(config.topic_alias_maximum, None);
+    }
+
+    #[test]
+    fn test_topic_alias_chain() {
+        let config = TokioAsyncClientConfig::builder()
+            .auto_reconnect(false)
+            .topic_alias_maximum(50)
+            .receive_maximum(100)
+            .tcp_nodelay(true)
+            .build();
+
+        assert_eq!(config.topic_alias_maximum, Some(50));
+        assert_eq!(config.receive_maximum, Some(100));
+        assert!(!config.auto_reconnect);
+        assert!(config.tcp_nodelay);
+    }
+
+    #[test]
+    fn test_topic_alias_mqtt_v5_compliance() {
+        // Test various valid values according to MQTT v5 spec
+        let test_values = vec![0, 1, 10, 100, 1000, 32767, 65535];
+
+        for value in test_values {
+            let config = TokioAsyncClientConfig::builder()
+                .topic_alias_maximum(value)
+                .build();
+
+            assert_eq!(config.topic_alias_maximum, Some(value));
+        }
     }
 }
