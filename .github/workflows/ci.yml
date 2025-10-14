@@ -184,7 +184,6 @@ jobs:
   build-binaries:
     name: Build Release Binaries
     runs-on: ${{ matrix.os }}
-    if: github.event_name == 'push' && (github.ref == 'refs/heads/main' || startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/temp'))
     
     strategy:
       matrix:
@@ -223,7 +222,7 @@ jobs:
     - name: Build release binaries
       run: |
         cd mqtt_grpc_duality
-        cargo build --release --target ${{ matrix.target }}
+        cargo build --release --target ${{ matrix.target }} --workspace
 
     - name: Create artifact directory
       run: mkdir -p artifacts
