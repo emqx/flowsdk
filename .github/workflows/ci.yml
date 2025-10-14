@@ -220,7 +220,6 @@ jobs:
 
     - name: Build release binaries
       run: |
-        cd mqtt_grpc_duality
         cargo build --release --target ${{ matrix.target }} --workspace
 
     - name: Create artifact directory
@@ -229,14 +228,14 @@ jobs:
     - name: Copy binaries (Unix)
       if: runner.os != 'Windows'
       run: |
-        cp mqtt_grpc_duality/target/${{ matrix.target }}/release/r-proxy artifacts/r-proxy-${{ matrix.target }}
-        cp mqtt_grpc_duality/target/${{ matrix.target }}/release/s-proxy artifacts/s-proxy-${{ matrix.target }}
+        cp target/${{ matrix.target }}/release/r-proxy artifacts/r-proxy-${{ matrix.target }}
+        cp target/${{ matrix.target }}/release/s-proxy artifacts/s-proxy-${{ matrix.target }}
 
     - name: Copy binaries (Windows)
       if: runner.os == 'Windows'
       run: |
-        cp mqtt_grpc_duality/target/${{ matrix.target }}/release/r-proxy.exe artifacts/r-proxy-${{ matrix.target }}.exe
-        cp mqtt_grpc_duality/target/${{ matrix.target }}/release/s-proxy.exe artifacts/s-proxy-${{ matrix.target }}.exe
+        cp target/${{ matrix.target }}/release/r-proxy.exe artifacts/r-proxy-${{ matrix.target }}.exe
+        cp target/${{ matrix.target }}/release/s-proxy.exe artifacts/s-proxy-${{ matrix.target }}.exe
 
     - name: Upload artifacts
       uses: actions/upload-artifact@v4
