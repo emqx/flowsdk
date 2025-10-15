@@ -1,6 +1,6 @@
 # flowSDK
 
-FlowSDK is a safty-first messaging system SDK, used to build any service nodes in messaging systems that are predictable in behavior, observable, and flexible in operations, such as 
+FlowSDK is a safty-first messaging system SDK, it runs in your app and can be used to build any service nodes in messaging systems that are predictable in behavior, observable, and flexible in operations, such as 
 
 - clients
 - servers 
@@ -16,7 +16,7 @@ Messages can be communicated within processes, between processes, over LAN, and 
 
 ## Current Status
 
-** Preview** 
+** Working in progress ** 
 
 ### Recent Updates (October 2025)
 - ✅ **TokioAsyncMqttClient** - Full async MQTT v5.0 client implementation
@@ -389,12 +389,13 @@ This implementation follows the MQTT v5.0 specification with:
 - [x] Protocol testing infrastructure (84% coverage achievable)
 
 ### In Progress 🚧
+- [ ] TLS/SSL support
+- [ ] QUIC support
+- [ ] Client support MQTT v3
 - [ ] Protocol compliance test implementation (0/185 tests)
   - [ ] Phase 1: Foundation tests with current API (30 tests)
   - [ ] Phase 2: MQTT v5 feature tests (40 tests)  
   - [ ] Phase 3-4: Raw packet malformed tests (40 tests)
-- [ ] TLS/SSL support
-- [ ] QUIC support
 - [ ] Enhanced event handler properties (subscription IDs, MQTT v5 properties)
 - [ ] Authentication method support
 
