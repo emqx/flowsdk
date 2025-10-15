@@ -148,6 +148,22 @@ mod imp {
             }
         }
 
+        /// Load custom root certificates from PEM data (may contain multiple CERTIFICATE sections).
+        /// Returns Err(TransportError::Quic) if PEM decoding fails.
+        pub fn custom_roots_from_pem(mut self, pem_data: &[u8]) -> Result<Self, TransportError> {
+            let iter = rustls_pki_types::CertificateDer::pem_slice_iter(pem_data);
+            let roots: Vec<Vec<u8>> = iter
+                .filter_map(|r| r.ok().map(|c| c.into_owned().as_ref().to_vec()))
+                .collect();
+            if roots.is_empty() {
+                return Err(TransportError::Quic(
+                    "no valid certificates found in PEM data".to_string(),
+                ));
+            }
+            self.custom_root_certs = Some(roots);
+            Ok(self)
+        }
+
         /// Provide a client certificate chain for mutual TLS as DER-encoded bytes
         pub fn client_cert_chain(mut self, chain: Vec<Vec<u8>>) -> Self {
             self.client_cert_chain = Some(chain);
@@ -175,6 +191,25 @@ mod imp {
             }
         }
 
+        /// Load a client certificate chain from PEM data (may contain multiple CERTIFICATE sections).
+        /// Returns Err(TransportError::Quic) if PEM decoding fails.
+        pub fn client_cert_chain_from_pem(
+            mut self,
+            pem_data: &[u8],
+        ) -> Result<Self, TransportError> {
+            let iter = rustls_pki_types::CertificateDer::pem_slice_iter(pem_data);
+            let chain: Vec<Vec<u8>> = iter
+                .filter_map(|r| r.ok().map(|c| c.into_owned().as_ref().to_vec()))
+                .collect();
+            if chain.is_empty() {
+                return Err(TransportError::Quic(
+                    "no valid certificates found in PEM data".to_string(),
+                ));
+            }
+            self.client_cert_chain = Some(chain);
+            Ok(self)
+        }
+
         /// Provide a client private key for mutual TLS (DER-encoded bytes)
         pub fn client_private_key(mut self, key: Vec<u8>) -> Self {
             self.client_private_key = Some(key);
@@ -195,6 +230,27 @@ mod imp {
                 }
                 Err(e) => Err(TransportError::Quic(format!(
                     "failed to read/parse client private key PEM file: {:?}",
+                    e
+                ))),
+            }
+        }
+
+        /// Load a client private key from PEM data. This will attempt to decode the first private-key
+        /// PEM section and store its DER bytes. Returns Err(TransportError::Quic) on failure.
+        pub fn client_private_key_from_pem(
+            mut self,
+            pem_data: &[u8],
+        ) -> Result<Self, TransportError> {
+            use std::io::Cursor;
+            let mut cursor = Cursor::new(pem_data);
+            match rustls_pki_types::PrivateKeyDer::from_pem_reader(&mut cursor) {
+                Ok(pk) => {
+                    let der = pk.clone_key().secret_der().to_vec();
+                    self.client_private_key = Some(der);
+                    Ok(self)
+                }
+                Err(e) => Err(TransportError::Quic(format!(
+                    "failed to parse client private key from PEM data: {:?}",
                     e
                 ))),
             }

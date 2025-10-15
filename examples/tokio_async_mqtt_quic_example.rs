@@ -151,12 +151,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .clean_start(true)
         .build();
 
-    // Configure tokio async client settings
+    // Configure tokio async client settings with QUIC options
     let async_config = TokioAsyncClientConfig::builder()
         .auto_reconnect(true)
         .reconnect_delay_ms(1000)
         .max_reconnect_delay_ms(30000)
         .max_reconnect_attempts(5)
+        // QUIC-specific configuration
+        .quic_insecure_skip_verify(true) // ⚠️ For testing only! Use proper certs in production
+        .quic_enable_0rtt(false) // Disable 0-RTT for security
         .build();
 
     // Create event handler
