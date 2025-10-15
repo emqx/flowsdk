@@ -165,16 +165,6 @@ cargo clean                            # Main library
 cd mqtt_grpc_duality && cargo clean    # Proxy workspace
 ```
 
-### Test Coverage Summary
-- **Total Tests**: 397 passing (364 lib + 33 doc)
-- **Raw Packet API**: 27 unit tests (infrastructure complete)
-- **MQTT v5 Features**: 53 tests (all high-priority features)
-- **Protocol Compliance**: 84% coverage **achievable** (0/185 implemented)
-  - Infrastructure ready with raw packet API
-  - 106 tests possible with current API (48%)
-  - 79 tests possible with raw packet API (36%)
-  - 30 tests not testable from client (14%)
-
 ### Testing
 ```bash
 # Run all tests in both workspaces
@@ -325,40 +315,8 @@ See [docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md](docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md)
 
 ### Client API & Usage
 - **[TOKIO_ASYNC_CLIENT_API_GUIDE.md](docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md)** - Complete API reference with examples
-  - Connection management
-  - Subscribe/Publish operations  
-  - MQTT v5 features (Receive Maximum, Topic Alias Maximum, etc.)
-  - SubscribeCommand builder pattern
-  - Event handler implementation
-  - Timeout strategies
-  - Raw Packet API for protocol testing
-
 - **[ASYNC_CLIENT.md](docs/ASYNC_CLIENT.md)** - Async client architecture and design
 - **[BUILDER_PATTERN.md](docs/BUILDER_PATTERN.md)** - Builder pattern implementation details
-
-### Protocol Compliance & Testing
-- **[PROTOCOL_COMPLIANCE.md](docs/PROTOCOL_COMPLIANCE.md)** - Protocol compliance overview
-- **Protocol Test Coverage** (in `~/repo/dev-doc-flowsdk/ongoing/`):
-  - `MQTT_PROTOCOL_TEST_COVERAGE_ANALYSIS.md` - Coverage analysis (84% achievable)
-  - `MQTT_PROTOCOL_TESTS_IMPLEMENTATION_STATUS.md` - Test tracking (220 tests mapped)
-  - `MQTT_Mandatory_normative_test_plan.md` - Detailed test plan for all 220 normative statements
-  
-### Raw Packet API (Protocol Testing)
-- **Raw Packet API Documentation** (in `~/repo/dev-doc-flowsdk/ongoing/`):
-  - `RAW_PACKET_API_QUICK_REFERENCE.md` - Quick reference guide
-  - `RAW_PACKET_API_IMPLEMENTATION_PLAN.md` - 6-phase implementation plan
-  - `RAW_PACKET_API_PHASE_1_2_SUMMARY.md` - Phase 1-2 completion summary
-
-### Implementation Summaries
-- **Feature Implementation** (in `~/repo/dev-doc-flowsdk/ongoing/`):
-  - `MQTT_V5_CONFIG_IMPLEMENTATION_SUMMARY.md` - MQTT v5 config features
-  - `SUBSCRIBE_COMMAND_BUILDER_PLAN.md` - Subscribe builder implementation
-  - `ALL_SYNC_OPERATIONS_SUMMARY.md` - Sync operations summary
-
-### Project Planning
-- **[TODO.md](docs/TODO.md)** - Project roadmap and tasks
-- **[README.md](docs/README.md)** - Documentation index
-
 
 ## Protocol Compliance
 
@@ -377,11 +335,8 @@ This implementation follows the MQTT v5.0 specification with:
 ## Performance & Quality
 
 ### Test Metrics (October 2025)
-- ✅ **397 tests passing** (100% pass rate)
-  - 364 library unit tests
-  - 33 documentation tests
-  - 27 raw packet API tests
-- ✅ **Fuzz testing infrastructure** - 2 fuzz targets with corpus
+- ✅ **400+ unit testing**
+- ✅ **Fuzz testing infrastructure** 
 - ✅ **Zero compiler warnings**
 - ✅ **Zero unsafe code** in core client
 - ✅ **Feature-gated dangerous APIs** (protocol-testing)
@@ -438,19 +393,19 @@ This implementation follows the MQTT v5.0 specification with:
   - [ ] Phase 1: Foundation tests with current API (30 tests)
   - [ ] Phase 2: MQTT v5 feature tests (40 tests)  
   - [ ] Phase 3-4: Raw packet malformed tests (40 tests)
+- [ ] TLS/SSL support
+- [ ] QUIC support
 - [ ] Enhanced event handler properties (subscription IDs, MQTT v5 properties)
 - [ ] Authentication method support
 
 ### Planned 📋
 - [ ] WebSocket transport support
-- [ ] TLS/SSL support
 - [ ] Packet inspection utilities
 - [ ] Multi-broker failover
 - [ ] Message persistence
 - [ ] Metrics and observability
 
-See [docs/TODO.md](docs/TODO.md) for detailed roadmap.
 
 ## License
 
-see [[LICENSE]]
+see [LICENSE](LICENSE)
