@@ -2,6 +2,10 @@
 
 This document tracks the tasks for improving the `flowsdk` project.
 
+# Messaging system goal
+
+Messages can be communicated within processes, between processes, over LAN, and across wide area networks. It supports client-server req/resp, pub/sub mode, or point-to-point mode. The network transport layer supports traditional TCP-based or UDP protocols, as well as security-focused TCP/TLS, and even the latest QUIC protocol.
+
 ## Code Quality 
 
 - [ ] Improve error handling by replacing `unwrap()` with proper error handling and using `?` to propagate errors.

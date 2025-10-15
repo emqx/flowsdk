@@ -1,37 +1,54 @@
-# flowSDK
+# FlowSDK
 
-FlowSDK is a safty-first messaging system SDK, it runs in your app and can be used to build any service nodes in messaging systems that are predictable in behavior, observable, and flexible in operations, such as 
+FlowSDK is a safty-first, realistic, behavior predictable messaging SDK.
 
-- clients
-- servers 
-- proxies 
-- relays
-- firewalls
-- load balancers
-- brokers 
-- and more. 
+With FlowSDK, You could build messaging based [micro middleware functions](#Micro-middleware-functions) that runs in your app.
 
-Messages can be communicated within processes, between processes, over LAN, and across wide area networks. It supports client-server req/resp, pub/sub mode, or point-to-point mode. The network transport layer supports traditional TCP-based or UDP protocols, as well as security-focused TCP/TLS, and even the latest QUIC protocol.
+FlowSDK leverage multiple protocols in different layers and make best use of them for real world scenarios.
 
+
+## What is Flow
+
+Flow is the projection of data streaming from many sources with the help of [micro middleware functions](#Micro-middleware-functions)
+
+## Micro middleware functions
+
+- Messaging client
+- Pub/Sub broker
+- Filter
+- Proxy
+- Protocol relay
+- Queue
+- K/V store
+
+## Be realistic
+
+Message is not created equal.  Messaging comes with costs, resources are not unlimited.
+
+## Communication models
+
+- **Req/Resp**
+- **PUB/SUB**
+- **Stream**
+- **Reliable Delivery**
+- **Unreliable Delivery**
+
+## Protocols
+
+- **MQTT**
+- **gRPC**
+- ...
 
 ## Current Status
 
 ** Working in progress ** 
-
-### Recent Updates (October 2025)
-- ✅ **TokioAsyncMqttClient** - Full async MQTT v5.0 client implementation
-- ✅ **SubscribeCommand Builder** - Fluent API for complex subscriptions
-- ✅ **MQTT v5 Features** - Receive Maximum, Topic Alias Maximum, Maximum Packet Size
-- ✅ **Raw Packet API** - Protocol compliance testing infrastructure (feature-gated)
-- ✅ **Test Infrastructure** - 397 tests passing, protocol test infrastructure ready
-- ✅ **Comprehensive Documentation** - Complete API guide and testing documentation
 
 ## Project Structure
 
 This project is organized as a Cargo workspace with two main components:
 
 ### 📚 Core Library (`flowsdk`)
-- **MQTT v5.0 Protocol**: Complete serialization/deserialization implementation
+- **MQTT Protocol**: Complete serialization/deserialization implementation
 - **MQTT Client Library**: TokioAsyncMqttClient with async/await support
 - **Shared Conversions**: gRPC ↔ MQTT conversion utilities
 - **Example Applications**: Simple client/server demos
@@ -69,17 +86,11 @@ cd mqtt_grpc_duality && cargo run --bin r-proxy
 
 ## Architecture
 
-```
-MQTT Clients → r-proxy → gRPC → s-proxy → MQTT Broker
-                ↑                  ↑
-           Client-facing     Server-side
-           (Port 50516)      (Port 50515)
-```
 
 ### Component Details
 
 #### Core Library Components
-- **`mqtt_serde`**: Encoder and Decoder, serialization and deserialization of MQTT packets
+- **`mqtt_serde`**: MQTT protocol Encoder and Decoder, serialization and deserialization of MQTT packets
 - **`mqtt_client`**: TokioAsyncMqttClient - Production-ready async MQTT v5.0 client
 
 
@@ -97,6 +108,11 @@ see [mqtt_grpc_duality README.md](mqtt_grpc_duality/README.md)
 - ✅ **Auto Reconnection** - Exponential backoff with message buffering
 - ✅ **Event-Driven** - Comprehensive callback system for all MQTT events
 - ✅ **Thread-Safe** - Clone-friendly, safe for concurrent use
+
+### Transport Layer
+- ✅ **TCP Transport** - Traditional TCP connections
+- ✅ **TLS Transport** - Secure TLS/SSL connections (feature-gated)
+- ✅ **QUIC Transport** - Modern QUIC protocol with built-in encryption (feature-gated)
 
 ### MQTT v5.0 Protocol Support
 - ✅ All control packet types (Connect, Publish, Subscribe, etc.)
@@ -121,107 +137,6 @@ see [mqtt_grpc_duality README.md](mqtt_grpc_duality/README.md)
 - ✅ Memory-efficient streaming
 - ✅ Comprehensive error handling
 
-## Development
-
-### Dependencies Management
-The project uses minimal dependencies:
-
-**Core Library**: 
-- Essential: `serde`, `hex`, `bytes`, `tokio`
-- gRPC: `tonic`, `prost` (for conversions module)
-- Testing: `serde_json`, `arbitrary`
-
-**Proxy Workspace**:
-- Additional: `dashmap`, `tracing`, `tokio-stream`
-- Self-contained with own protobuf compilation
-
-### Building and Testing
-```bash
-# Build everything
-cargo build --workspace
-
-# Build with protocol testing features (DANGEROUS - test only!)
-cargo build --workspace --features protocol-testing
-
-# Build individual workspaces
-cargo build                            # Main library only
-cd mqtt_grpc_duality && cargo build    # Proxy workspace only
-
-# Run tests
-cargo test --workspace                 # All tests
-cargo test --lib                       # Library tests only
-cargo test --features protocol-testing # With raw packet API tests
-cd mqtt_grpc_duality && cargo test     # Proxy tests only
-
-# Run specific test suites
-cargo test tokio_async_client          # Async client tests
-cargo test subscribe_command           # Subscribe builder tests  
-cargo test mqtt_v5                     # MQTT v5 feature tests
-cargo test --features protocol-testing raw_packet  # Raw packet tests
-
-# Clean build artifacts
-cargo clean --workspace                # Everything
-cargo clean                            # Main library
-cd mqtt_grpc_duality && cargo clean    # Proxy workspace
-```
-
-### Testing
-```bash
-# Run all tests in both workspaces
-cargo test --workspace
-
-# Library tests with different feature combinations
-cargo test --lib                              # Standard tests
-cargo test --lib --features protocol-testing  # With raw packet API
-
-# Integration tests
-cargo test --test '*'
-
-# Run ignored tests (require live broker)
-cargo test -- --ignored
-
-# Or individually
-cargo test                             # Main library tests
-cd mqtt_grpc_duality && cargo test     # Proxy workspace tests
-```
-
-### Fuzz Testing
-
-The project includes comprehensive fuzz testing infrastructure for protocol robustness:
-
-**Fuzz Targets**:
-- `fuzz_mqtt_packet_symmetric` - Round-trip encode/decode testing for all MQTT packet types
-- `fuzz_parser_funs` - Parser functions with random input validation
-
-**Running Fuzz Tests**:
-```bash
-# Install cargo-fuzz (one-time setup)
-cargo install cargo-fuzz
-
-# Run specific fuzz target
-cd fuzz
-cargo fuzz run fuzz_mqtt_packet_symmetric
-
-# Run with specific number of iterations
-cargo fuzz run fuzz_mqtt_packet_symmetric -- -runs=1000000
-
-# Run all fuzz targets
-cargo fuzz run fuzz_parser_funs
-```
-
-**Corpus & Coverage**:
-- Pre-built corpus in `fuzz/corpus/` for faster fuzzing
-- Coverage data in `fuzz/coverage/`
-- Artifacts (crashes/hangs) saved in `fuzz/artifacts/`
-
-**Viewing Fuzz Coverage**:
-```bash
-cd fuzz
-cargo fuzz coverage fuzz_mqtt_packet_symmetric
-```
-
-The fuzzing infrastructure uses `libfuzzer-sys` and `arbitrary` crate for property-based testing, ensuring protocol parsers handle malformed input gracefully.
-
 ### Feature Flags (Compiling)
 
 **Standard Features** (always available):
@@ -229,6 +144,12 @@ The fuzzing infrastructure uses `libfuzzer-sys` and `arbitrary` crate for proper
 - All standard operations and APIs
 
 **Optional Features**:
+- `quic` - Enables QUIC transport support (requires `quinn`, `rustls`, `rustls-native-certs`, `rustls-pki-types`)
+  - QuicTransport - QUIC-based transport implementation
+  - QuicConfig - Configuration with ALPN, 0-RTT, custom roots, mTLS support
+  - PEM file loading helpers for certificates and keys
+  - **Use case**: High-performance, low-latency connections with built-in encryption for mobile network.
+
 - `protocol-testing` - ⚠️ **DANGEROUS** - Enables raw packet API for protocol compliance testing
   - RawPacketBuilder - packet manipulation
   - RawTestClient - direct TCP access
@@ -236,6 +157,10 @@ The fuzzing infrastructure uses `libfuzzer-sys` and `arbitrary` crate for proper
   - **WARNING**: Creates malformed packets, test-only, never use in production
 
 ```toml
+# Enable QUIC transport
+[dependencies]
+flowsdk = { version = "0.1", features = ["quic"] }
+
 # Enable protocol testing features
 [dependencies]
 flowsdk = { version = "0.1", features = ["protocol-testing"] }
@@ -380,32 +305,33 @@ This implementation follows the MQTT v5.0 specification with:
 ## Roadmap
 
 ### Completed ✅
-- [x] MQTT v5.0 packet serialization/deserialization
-- [x] TokioAsyncMqttClient with dual API (async/sync)
-- [x] SubscribeCommand builder pattern
+- [x] MQTT v3.1.1, v5.0 packet serialization/deserialization
+- [x] TokioAsyncMqttClient (v5.0) with dual API (async/sync)
+- [x] Builder pattern
 - [x] MQTT v5 flow control (Receive Maximum, Topic Alias Maximum)
 - [x] Raw Packet API for protocol testing
 - [x] Comprehensive documentation
 - [x] Protocol testing infrastructure (84% coverage achievable)
+- [x] TLS/SSL support
+- [x] QUIC support (single stream)
 
 ### In Progress 🚧
-- [ ] TLS/SSL support
-- [ ] QUIC support
-- [ ] Client support MQTT v3
+- [ ] Authentication method support
+- [ ] More TLS configs
 - [ ] Protocol compliance test implementation (0/185 tests)
   - [ ] Phase 1: Foundation tests with current API (30 tests)
   - [ ] Phase 2: MQTT v5 feature tests (40 tests)  
   - [ ] Phase 3-4: Raw packet malformed tests (40 tests)
 - [ ] Enhanced event handler properties (subscription IDs, MQTT v5 properties)
-- [ ] Authentication method support
 
 ### Planned 📋
+- [ ] Client support MQTT v3
+- [ ] QUIC support (multi stream)
 - [ ] WebSocket transport support
 - [ ] Packet inspection utilities
 - [ ] Multi-broker failover
 - [ ] Message persistence
 - [ ] Metrics and observability
-
 
 ## License
 
