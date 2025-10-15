@@ -75,7 +75,7 @@ mod imp {
     }
 
     /// QUIC configuration exposed to the caller. Keep it minimal for now.
-    #[derive(Debug, Clone)]
+    #[derive(Debug, Clone, Default)]
     pub struct QuicConfig {
         /// ALPN protocols to advertise (raw bytes), e.g. b"mqtt"
         pub alpn_protocols: Vec<Vec<u8>>,
@@ -89,19 +89,6 @@ mod imp {
         pub client_private_key: Option<Vec<u8>>,
         /// ⚠️ DANGEROUS: Skip TLS certificate verification (for testing only!)
         pub insecure_skip_verify: bool,
-    }
-
-    impl Default for QuicConfig {
-        fn default() -> Self {
-            Self {
-                alpn_protocols: Vec::new(),
-                enable_0rtt: false,
-                custom_root_certs: None,
-                client_cert_chain: None,
-                client_private_key: None,
-                insecure_skip_verify: false,
-            }
-        }
     }
 
     /// Builder for `QuicConfig` to simplify ergonomic construction.
@@ -273,7 +260,7 @@ mod imp {
         ) -> Result<Self, TransportError> {
             // Derive server name (SNI) from addr by splitting host:port
             let server_name = addr
-                .splitn(2, ':')
+                .split(':')
                 .next()
                 .ok_or_else(|| {
                     TransportError::InvalidAddress(format!("Invalid QUIC address: {}", addr))
@@ -328,7 +315,7 @@ mod imp {
                     cfg.client_private_key.clone(),
                 ) {
                     let cert_chain_der: Vec<CertificateDer<'static>> =
-                        chain.into_iter().map(|c| CertificateDer::from(c)).collect();
+                        chain.into_iter().map(CertificateDer::from).collect();
                     let parsed_key = PrivateKeyDer::try_from(key).map_err(|e| {
                         TransportError::Quic(format!(
                             "failed to parse client private key DER for mTLS: {:?}",
@@ -432,10 +419,7 @@ mod imp {
         fn local_addr(&self) -> Result<String, TransportError> {
             // Use endpoint local_addr as connection doesn't expose local_address
             endpoint_local_addr(&self.endpoint).ok_or_else(|| {
-                TransportError::Io(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    "local address unavailable",
-                ))
+                TransportError::Io(std::io::Error::other("local address unavailable"))
             })
         }
     }
@@ -454,10 +438,10 @@ mod imp {
             match Pin::new(&mut self.recv).poll_read(cx, buf) {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-                Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("QUIC read error: {}", e),
-                ))),
+                Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::other(format!(
+                    "QUIC read error: {}",
+                    e
+                )))),
             }
         }
     }
@@ -471,10 +455,10 @@ mod imp {
             match Pin::new(&mut self.send).poll_write(cx, buf) {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(Ok(n)) => Poll::Ready(Ok(n)),
-                Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("QUIC write error: {}", e),
-                ))),
+                Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::other(format!(
+                    "QUIC write error: {}",
+                    e
+                )))),
             }
         }
 
@@ -482,10 +466,10 @@ mod imp {
             match Pin::new(&mut self.send).poll_flush(cx) {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-                Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("QUIC flush error: {}", e),
-                ))),
+                Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::other(format!(
+                    "QUIC flush error: {}",
+                    e
+                )))),
             }
         }
 
@@ -496,10 +480,10 @@ mod imp {
             match Pin::new(&mut self.send).poll_shutdown(cx) {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(Ok(())) => Poll::Ready(Ok(())),
-                Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::new(
-                    std::io::ErrorKind::Other,
-                    format!("QUIC shutdown error: {}", e),
-                ))),
+                Poll::Ready(Err(e)) => Poll::Ready(Err(std::io::Error::other(format!(
+                    "QUIC shutdown error: {}",
+                    e
+                )))),
             }
         }
     }

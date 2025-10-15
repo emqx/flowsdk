@@ -10,6 +10,8 @@ use tokio::sync::mpsc::{self, error::TryRecvError, error::TrySendError, Receiver
 use tokio::sync::oneshot;
 use tokio::time::Sleep;
 
+#[cfg(feature = "quic")]
+use super::transport::quic::{QuicConfig, QuicTransport};
 #[cfg(feature = "tls")]
 use super::transport::TlsTransport;
 use super::transport::{BoxedTransport, TcpTransport, Transport};
@@ -2799,6 +2801,7 @@ impl TokioClientWorker {
     /// Supports:
     /// - `mqtt://host:port` or `host:port` → TCP transport
     /// - `mqtts://host:port` → TLS transport (requires `tls` feature)
+    /// - `quic://host:port` → QUIC transport (requires `quic` feature)
     async fn create_transport(&self, peer: &str) -> Result<BoxedTransport, MqttClientError> {
         // Parse URL scheme
         if peer.starts_with("mqtts://") {
@@ -2817,6 +2820,34 @@ impl TokioClientWorker {
                 Err(MqttClientError::ProtocolViolation {
                     message: format!(
                         "TLS transport not available. Enable the 'tls' feature to use mqtts:// URLs. Peer: {}",
+                        peer
+                    ),
+                })
+            }
+        } else if peer.starts_with("quic://") {
+            #[cfg(feature = "quic")]
+            {
+                let addr = peer.strip_prefix("quic://").unwrap_or(peer);
+                // Create QUIC config with MQTT ALPN
+                // Note: Using insecure_skip_verify for now - in production, this should be configurable
+                let cfg = QuicConfig::builder()
+                    .alpn(b"mqtt")
+                    .enable_0rtt(false)
+                    .insecure_skip_verify(true) // ⚠️ Skip cert verification - make configurable in future
+                    .build();
+
+                let transport = QuicTransport::connect_with_config(addr, cfg)
+                    .await
+                    .map_err(|e| MqttClientError::ConnectionLost {
+                        reason: format!("QUIC connection failed to {}: {}", peer, e),
+                    })?;
+                Ok(Box::new(transport) as BoxedTransport)
+            }
+            #[cfg(not(feature = "quic"))]
+            {
+                Err(MqttClientError::ProtocolViolation {
+                    message: format!(
+                        "QUIC transport not available. Enable the 'quic' feature to use quic:// URLs. Peer: {}",
                         peer
                     ),
                 })
