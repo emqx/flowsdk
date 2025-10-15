@@ -12,6 +12,9 @@ pub mod tcp;
 #[cfg(feature = "tls")]
 pub mod tls;
 
+#[cfg(feature = "quic")]
+pub mod quic;
+
 /// Error type for transport operations
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
@@ -24,6 +27,10 @@ pub enum TransportError {
     #[cfg(feature = "tls")]
     #[error("TLS error: {0}")]
     Tls(String),
+
+    #[cfg(feature = "quic")]
+    #[error("QUIC error: {0}")]
+    Quic(String),
 
     #[error("Transport not supported: {0}")]
     NotSupported(String),

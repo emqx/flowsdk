@@ -10,6 +10,8 @@ use tokio::sync::mpsc::{self, error::TryRecvError, error::TrySendError, Receiver
 use tokio::sync::oneshot;
 use tokio::time::Sleep;
 
+#[cfg(feature = "quic")]
+use super::transport::quic::{QuicConfig, QuicTransport};
 #[cfg(feature = "tls")]
 use super::transport::TlsTransport;
 use super::transport::{BoxedTransport, TcpTransport, Transport};
@@ -1039,6 +1041,26 @@ pub struct TokioAsyncClientConfig {
     /// None or Some(0) = topic aliases not supported
     /// Valid range: 0-65535
     pub topic_alias_maximum: Option<u16>,
+    /// QUIC transport: Enable 0-RTT (early data) for faster reconnections
+    /// Only used when connecting via quic:// URLs (requires `quic` feature)
+    #[cfg(feature = "quic")]
+    pub quic_enable_0rtt: bool,
+    /// QUIC transport: Skip TLS certificate verification (⚠️ DANGEROUS - testing only!)
+    /// Only used when connecting via quic:// URLs (requires `quic` feature)
+    #[cfg(feature = "quic")]
+    pub quic_insecure_skip_verify: bool,
+    /// QUIC transport: Custom root CA certificates in PEM format
+    /// Only used when connecting via quic:// URLs (requires `quic` feature)
+    #[cfg(feature = "quic")]
+    pub quic_custom_root_ca_pem: Option<String>,
+    /// QUIC transport: Client certificate chain in PEM format for mTLS
+    /// Only used when connecting via quic:// URLs (requires `quic` feature)
+    #[cfg(feature = "quic")]
+    pub quic_client_cert_pem: Option<String>,
+    /// QUIC transport: Client private key in PEM format for mTLS
+    /// Only used when connecting via quic:// URLs (requires `quic` feature)
+    #[cfg(feature = "quic")]
+    pub quic_client_key_pem: Option<String>,
 }
 
 impl Default for TokioAsyncClientConfig {
@@ -1063,6 +1085,16 @@ impl Default for TokioAsyncClientConfig {
             default_operation_timeout_ms: 30000, // 30 seconds
             receive_maximum: None,               // Use MQTT v5 default (65535)
             topic_alias_maximum: None,           // Topic aliases not supported by default
+            #[cfg(feature = "quic")]
+            quic_enable_0rtt: false, // Disable 0-RTT by default for safety
+            #[cfg(feature = "quic")]
+            quic_insecure_skip_verify: false, // Enable certificate verification by default
+            #[cfg(feature = "quic")]
+            quic_custom_root_ca_pem: None, // Use system root CAs by default
+            #[cfg(feature = "quic")]
+            quic_client_cert_pem: None, // No client cert by default
+            #[cfg(feature = "quic")]
+            quic_client_key_pem: None, // No client key by default
         }
     }
 }
@@ -1415,6 +1447,114 @@ impl ConfigBuilder {
     /// ```
     pub fn no_topic_alias(mut self) -> Self {
         self.config.topic_alias_maximum = None;
+        self
+    }
+
+    /// Enable 0-RTT (early data) for QUIC connections
+    ///
+    /// ⚠️ Warning: 0-RTT data is vulnerable to replay attacks. Only use if
+    /// you understand the security implications.
+    ///
+    /// Only applies when connecting via quic:// URLs (requires `quic` feature)
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::TokioAsyncClientConfig;
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .quic_enable_0rtt(true)
+    ///     .build();
+    /// ```
+    #[cfg(feature = "quic")]
+    pub fn quic_enable_0rtt(mut self, enable: bool) -> Self {
+        self.config.quic_enable_0rtt = enable;
+        self
+    }
+
+    /// Skip TLS certificate verification for QUIC connections
+    ///
+    /// ⚠️ DANGER: This disables all certificate validation. Only use for
+    /// testing/development. Never use in production!
+    ///
+    /// Only applies when connecting via quic:// URLs (requires `quic` feature)
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::TokioAsyncClientConfig;
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .quic_insecure_skip_verify(true)  // For testing only!
+    ///     .build();
+    /// ```
+    #[cfg(feature = "quic")]
+    pub fn quic_insecure_skip_verify(mut self, skip: bool) -> Self {
+        self.config.quic_insecure_skip_verify = skip;
+        self
+    }
+
+    /// Set custom root CA certificates for QUIC connections (PEM format)
+    ///
+    /// Provide custom root CA certificates to verify the QUIC server's
+    /// certificate. The PEM string should contain one or more certificates
+    /// in PEM format.
+    ///
+    /// Only applies when connecting via quic:// URLs (requires `quic` feature)
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::TokioAsyncClientConfig;
+    /// let ca_pem = std::fs::read_to_string("ca.pem").unwrap();
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .quic_custom_root_ca_pem(ca_pem)
+    ///     .build();
+    /// ```
+    #[cfg(feature = "quic")]
+    pub fn quic_custom_root_ca_pem(mut self, pem: String) -> Self {
+        self.config.quic_custom_root_ca_pem = Some(pem);
+        self
+    }
+
+    /// Set client certificate for QUIC mTLS (PEM format)
+    ///
+    /// Provide a client certificate chain for mutual TLS authentication.
+    /// The PEM string should contain the certificate chain.
+    ///
+    /// Only applies when connecting via quic:// URLs (requires `quic` feature)
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::TokioAsyncClientConfig;
+    /// let cert_pem = std::fs::read_to_string("client.pem").unwrap();
+    /// let key_pem = std::fs::read_to_string("client.key").unwrap();
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .quic_client_cert_pem(cert_pem)
+    ///     .quic_client_key_pem(key_pem)
+    ///     .build();
+    /// ```
+    #[cfg(feature = "quic")]
+    pub fn quic_client_cert_pem(mut self, pem: String) -> Self {
+        self.config.quic_client_cert_pem = Some(pem);
+        self
+    }
+
+    /// Set client private key for QUIC mTLS (PEM format)
+    ///
+    /// Provide a client private key for mutual TLS authentication.
+    /// The PEM string should contain the private key in PEM format.
+    ///
+    /// Only applies when connecting via quic:// URLs (requires `quic` feature)
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::TokioAsyncClientConfig;
+    /// let cert_pem = std::fs::read_to_string("client.pem").unwrap();
+    /// let key_pem = std::fs::read_to_string("client.key").unwrap();
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .quic_client_cert_pem(cert_pem)
+    ///     .quic_client_key_pem(key_pem)
+    ///     .build();
+    /// ```
+    #[cfg(feature = "quic")]
+    pub fn quic_client_key_pem(mut self, pem: String) -> Self {
+        self.config.quic_client_key_pem = Some(pem);
         self
     }
 }
@@ -2799,6 +2939,7 @@ impl TokioClientWorker {
     /// Supports:
     /// - `mqtt://host:port` or `host:port` → TCP transport
     /// - `mqtts://host:port` → TLS transport (requires `tls` feature)
+    /// - `quic://host:port` → QUIC transport (requires `quic` feature)
     async fn create_transport(&self, peer: &str) -> Result<BoxedTransport, MqttClientError> {
         // Parse URL scheme
         if peer.starts_with("mqtts://") {
@@ -2817,6 +2958,64 @@ impl TokioClientWorker {
                 Err(MqttClientError::ProtocolViolation {
                     message: format!(
                         "TLS transport not available. Enable the 'tls' feature to use mqtts:// URLs. Peer: {}",
+                        peer
+                    ),
+                })
+            }
+        } else if peer.starts_with("quic://") {
+            #[cfg(feature = "quic")]
+            {
+                let addr = peer.strip_prefix("quic://").unwrap_or(peer);
+
+                // Build QUIC config from TokioAsyncClientConfig
+                let mut builder = QuicConfig::builder()
+                    .alpn(b"mqtt")
+                    .enable_0rtt(self.config.quic_enable_0rtt);
+
+                // Apply insecure skip verify if configured
+                if self.config.quic_insecure_skip_verify {
+                    builder = builder.insecure_skip_verify(true);
+                }
+
+                // Apply custom root CA if configured
+                if let Some(ref ca_pem) = self.config.quic_custom_root_ca_pem {
+                    builder = builder
+                        .custom_roots_from_pem(ca_pem.as_bytes())
+                        .map_err(|e| MqttClientError::ConnectionLost {
+                            reason: format!("Failed to load custom root CA for QUIC: {}", e),
+                        })?;
+                }
+
+                // Apply client cert and key for mTLS if configured
+                if let (Some(ref cert_pem), Some(ref key_pem)) = (
+                    &self.config.quic_client_cert_pem,
+                    &self.config.quic_client_key_pem,
+                ) {
+                    builder = builder
+                        .client_cert_chain_from_pem(cert_pem.as_bytes())
+                        .map_err(|e| MqttClientError::ConnectionLost {
+                            reason: format!("Failed to load client certificate for QUIC: {}", e),
+                        })?
+                        .client_private_key_from_pem(key_pem.as_bytes())
+                        .map_err(|e| MqttClientError::ConnectionLost {
+                            reason: format!("Failed to load client private key for QUIC: {}", e),
+                        })?;
+                }
+
+                let cfg = builder.build();
+
+                let transport = QuicTransport::connect_with_config(addr, cfg)
+                    .await
+                    .map_err(|e| MqttClientError::ConnectionLost {
+                        reason: format!("QUIC connection failed to {}: {}", peer, e),
+                    })?;
+                Ok(Box::new(transport) as BoxedTransport)
+            }
+            #[cfg(not(feature = "quic"))]
+            {
+                Err(MqttClientError::ProtocolViolation {
+                    message: format!(
+                        "QUIC transport not available. Enable the 'quic' feature to use quic:// URLs. Peer: {}",
                         peer
                     ),
                 })
