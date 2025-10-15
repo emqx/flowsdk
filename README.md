@@ -1,10 +1,10 @@
 # FlowSDK
 
-FlowSDK is a safty-first, realistic, behavior predictable messaging SDK.
+FlowSDK is a safety-first, realistic, behavior predictable messaging SDK.
 
-With FlowSDK, You could build messaging based [micro middleware functions](#Micro-middleware-functions) that runs in your app.
+With FlowSDK, You can build messaging based [micro middleware](#Micro-middleware-functions) that runs in your app.
 
-FlowSDK leverage multiple protocols in different layers and make best use of them for real world scenarios.
+FlowSDK leverages multiple protocols in different layers and make best use of them for real world scenarios.
 
 
 ## What is Flow
@@ -19,7 +19,8 @@ Flow is the projection of data streaming from many sources with the help of [mic
 - Proxy
 - Protocol relay
 - Queue
-- K/V store
+- Table
+- Relay
 
 ## Be realistic
 
@@ -130,7 +131,6 @@ see [mqtt_grpc_duality README.md](mqtt_grpc_duality/README.md)
 - 📋 **Protocol Compliance Tests** - Infrastructure ready, 84% coverage achievable (0/185 implemented)
 - ⚠️ **Test-Only** - Behind `protocol-testing` feature flag for safety
 
-
 ### Performance & Reliability
 - ✅ Zero-copy deserialization where possible
 - ✅ Concurrent connection handling with `tokio`
@@ -221,19 +221,6 @@ let cmd = SubscribeCommand::builder()
 client.subscribe_with_command_sync(cmd).await?;
 ```
 
-### Protocol Testing (Feature-Gated)
-
-```rust
-#[cfg(feature = "protocol-testing")]
-use flowsdk::mqtt_client::raw_packet::malformed::MalformedPacketGenerator;
-use flowsdk::mqtt_client::raw_packet::test_client::RawTestClient;
-
-// Test server rejection of malformed packets
-let mut client = RawTestClient::connect("localhost:1883").await?;
-let malformed = MalformedPacketGenerator::connect_reserved_flag()?;
-client.send_expect_disconnect(malformed, 5000).await?;
-```
-
 See [docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md](docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md) for complete API documentation.
 
 ## Documentation
@@ -243,7 +230,7 @@ See [docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md](docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md)
 - **[ASYNC_CLIENT.md](docs/ASYNC_CLIENT.md)** - Async client architecture and design
 - **[BUILDER_PATTERN.md](docs/BUILDER_PATTERN.md)** - Builder pattern implementation details
 
-## Protocol Compliance
+## MQTT Protocol Compliance
 
 This implementation follows the MQTT v5.0 specification with:
 - ✅ Strict packet format validation
@@ -256,51 +243,6 @@ This implementation follows the MQTT v5.0 specification with:
   - 106 tests possible with standard API
   - 79 tests possible with raw packet API
   - 30 tests require server-side testing (not applicable to client library)
-
-## Performance & Quality
-
-### Test Metrics (October 2025)
-- ✅ **400+ unit testing**
-- ✅ **Fuzz testing infrastructure** 
-- ✅ **Zero compiler warnings**
-- ✅ **Zero unsafe code** in core client
-- ✅ **Feature-gated dangerous APIs** (protocol-testing)
-
-### Code Quality
-- Comprehensive error handling with custom error types
-- Property-based testing support with `arbitrary`
-- Strict protocol compliance mode (feature-gated)
-- Memory-efficient streaming with zero-copy where possible
-
-## Contributing
-
-### Areas for Contribution
-
-1. **Core MQTT Protocol**: Changes go in `src/mqtt_serde/`
-2. **MQTT Client**: Enhancements to `src/mqtt_client/`
-3. **gRPC Conversions**: Shared logic in `src/grpc_conversions.rs` and `mqtt_grpc_duality/src/lib.rs`
-4. **Proxy Applications**: New features in `mqtt_grpc_duality/src/bin/`
-5. **Examples**: Simple demos in `src/bin/`
-6. **Protocol Tests**: Add compliance tests in `tests/protocol_compliance_tests.rs`
-7. **Documentation**: Update docs in `docs/` directory
-
-### Development Workflow
-
-1. Fork the repository
-2. Create a feature branch
-3. Make changes with tests
-4. Ensure all tests pass: `cargo test --workspace`
-5. Run formatter: `cargo fmt --all`
-6. Run clippy: `cargo clippy --workspace -- -D warnings`
-7. Submit pull request
-
-### Testing Guidelines
-
-- Add unit tests for new functionality
-- Add integration tests for client operations
-- Use `#[ignore]` for tests requiring live broker
-- Document protocol violations in raw packet tests
-- Keep test coverage above 80%
 
 ## Roadmap
 
