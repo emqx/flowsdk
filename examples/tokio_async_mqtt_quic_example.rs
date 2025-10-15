@@ -160,6 +160,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // QUIC-specific configuration
         .quic_insecure_skip_verify(true) // ⚠️ For testing only! Use proper certs in production
         .quic_enable_0rtt(false) // Disable 0-RTT for security
+        // For production with custom CA:
+        // let ca_pem = std::fs::read_to_string("ca.pem").unwrap();
+        // .quic_custom_root_ca_pem(ca_pem)
+        // .quic_insecure_skip_verify(false)  // Enable verification
         .build();
 
     // Create event handler
