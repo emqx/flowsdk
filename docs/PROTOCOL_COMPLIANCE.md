@@ -250,6 +250,14 @@ AUTH packets with remaining length > 0 must contain a reason code.
 **Error Message:**
 - `"AUTH packet must contain a reason code"`
 
+
+## Unimplemented Features
+
+### MQTTv5: 4.10: Request/Response
+
+Using request/response in a pub/sub system is error-prone, use HTTP-based request/response instead.
+
+
 ## Testing
 
 The library includes comprehensive tests for all validation features:

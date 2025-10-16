@@ -1,6 +1,41 @@
+# Completed ✅
+- [x] MQTT v3.1.1, v5.0 packet serialization/deserialization
+- [x] TokioAsyncMqttClient (v5.0) with dual API (async/sync)
+- [x] Builder pattern
+- [x] MQTT v5 flow control (Receive Maximum, Topic Alias Maximum)
+- [x] Raw Packet API for protocol testing
+- [x] Comprehensive documentation
+- [x] Protocol testing infrastructure (84% coverage achievable)
+- [x] TLS/SSL support
+- [x] QUIC support (single stream)
+
+# In Progress 🚧
+- [ ] Authentication method support
+- [ ] More TLS configs
+- [ ] MQTT Protocol compliance test implementation (0/185 tests)
+  - [ ] Phase 1: Foundation tests with current API (30 tests)
+  - [ ] Phase 2: MQTT v5 feature tests (40 tests)  
+  - [ ] Phase 3-4: Raw packet malformed tests (40 tests)
+- [ ] Enhanced event handler properties (subscription IDs, MQTT v5 properties)
+
+# Planned 📋
+- [ ] Client support MQTT v3
+- [ ] UnixDomain socket
+- [ ] QUIC support (multi stream)
+- [ ] Service discovery for distributed deployments
+- [ ] WebSocket transport support
+- [ ] Packet inspection utilities
+- [ ] Multi-broker failover
+- [ ] Message persistence
+- [ ] Metrics and observability
+
 # Project Improvement TODO List
 
 This document tracks the tasks for improving the `flowsdk` project.
+
+# Messaging system goal
+
+Messages can be communicated within processes, between processes, over LAN, and across wide area networks. It supports client-server req/resp, pub/sub mode, or point-to-point mode. The network transport layer supports traditional TCP-based or UDP protocols, as well as security-focused TCP/TLS, and even the latest QUIC protocol.
 
 ## Code Quality 
 
