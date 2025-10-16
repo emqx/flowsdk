@@ -28,7 +28,7 @@ These knowledge are not preserved across Network Connections
 
 ### Client Session functions
 
-1. retry messge after reconnect 
+1. retry message after reconnect 
 
 ## Server Session
 

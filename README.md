@@ -29,7 +29,7 @@ FlowSDK is designed to be AI-friendly. The public APIs and documentation are wri
 
 Messages are not created equal. Messaging has costs, resources are limited, and lower network/transport layers are not always reliable. FlowSDK intentionally surfaces errors and resource constraints instead of hiding them; this helps you identify trade-offs early and design a resilient system, reduces surprises in production.
 
-For example, with FlowSDK, user should look for **acceptable** latency instead of **lowerest** latency with all the tunable parts of timeout, QoS, priority, reconnect/backoff policies. 
+For example, with FlowSDK, user should look for **acceptable** latency instead of **lowest** latency with all the tunable parts of timeout, QoS, priority, reconnect/backoff policies. 
 
 ## Communication models
 

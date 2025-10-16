@@ -255,7 +255,7 @@ AUTH packets with remaining length > 0 must contain a reason code.
 
 ### MQTTv5: 4.10: Request/Response
 
-Do request/response in pub/sub system is error-prone, use http based request/response instead.
+Using request/response in a pub/sub system is error-prone, use HTTP-based request/response instead.
 
 
 ## Testing

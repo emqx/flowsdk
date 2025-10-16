@@ -1,6 +1,6 @@
 # Async MQTT Client
 
-This is a async client for the enviroment that [Tokio Runtime](https://tokio.rs) is not available.
+This is an async client for the environment where [Tokio Runtime](https://tokio.rs) is not available.
 
 A thread-safe, event-driven MQTT client that runs in a background thread and communicates via callbacks.
 
