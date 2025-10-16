@@ -2,10 +2,9 @@
 
 FlowSDK is a safety-first, realistic, behavior-predictable messaging SDK.
 
-With FlowSDK, you can build messaging-based [micro-middleware](#micro-middleware-functions) that runs in your app.
+With FlowSDK, you can build messaging-based [micro-middleware](#micro-middleware-functions) that run in your app and communicate with other apps on the same host or remotely.
 
 FlowSDK leverages multiple protocols across different layers and makes the best use of each for real-world scenarios.
-
 
 ## What is Flow?
 

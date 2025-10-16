@@ -12,7 +12,7 @@
 # In Progress 🚧
 - [ ] Authentication method support
 - [ ] More TLS configs
-- [ ] Protocol compliance test implementation (0/185 tests)
+- [ ] MQTT Protocol compliance test implementation (0/185 tests)
   - [ ] Phase 1: Foundation tests with current API (30 tests)
   - [ ] Phase 2: MQTT v5 feature tests (40 tests)  
   - [ ] Phase 3-4: Raw packet malformed tests (40 tests)
@@ -20,13 +20,14 @@
 
 # Planned 📋
 - [ ] Client support MQTT v3
+- [ ] UnixDomain socket
 - [ ] QUIC support (multi stream)
+- [ ] Service discovery for distributed deployments
 - [ ] WebSocket transport support
 - [ ] Packet inspection utilities
 - [ ] Multi-broker failover
 - [ ] Message persistence
 - [ ] Metrics and observability
-
 
 # Project Improvement TODO List
 
