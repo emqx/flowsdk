@@ -223,6 +223,57 @@ client.subscribe_with_command_sync(cmd).await?;
 
 See [docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md](docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md) for complete API documentation.
 
+## Examples (in `examples/`)
+
+This repository includes several runnable examples demonstrating client usage patterns and transports. Build and run them with `cargo run --example <name>` from the repository root (or `cargo run --bin <name>` if they are provided as binaries).
+
+- `mqtt_client_v5` — Synchronous-style example using the legacy `MqttClient` API. Demonstrates connect/subscribe/publish/ping/unsubscribe and receive loops. Run:
+
+```bash
+cargo run --example mqtt_client_v5
+```
+
+- `mqtt_client_builder_example` — Shows the `MqttClientOptions` builder pattern across multiple configurations (minimal, auth, session expiry, full). Also demonstrates creating a `TokioAsyncMqttClient` and attempting a real connection if a broker is available. Run:
+
+```bash
+cargo run --example mqtt_client_builder_example
+```
+
+- `tokio_async_mqtt_client_example` — Full Tokio async client example with an event handler. Demonstrates subscriptions, multiple publish styles (including MQTT v5 properties), ping, unsubscribe, reconnection behavior, and graceful shutdown. Run:
+
+```bash
+cargo run --example tokio_async_mqtt_client_example
+```
+
+- `tokio_async_mqtt_quic_example` / `quic_client_example` — Examples showing QUIC transport usage (feature-gated). Enable the `quic` feature and run; requires QUIC dependencies and a compatible broker or proxy. Example run:
+
+```bash
+cargo run --example tokio_async_mqtt_quic_example --features quic
+```
+
+- `tokio_async_mqtt_auth_example` — Demonstrates authentication options and how to pass username/password or other auth-related properties to the client. Run:
+
+```bash
+cargo run --example tokio_async_mqtt_auth_example
+```
+
+- `tls_client` — TLS transport example that shows how to configure the client for secure connections (feature-gated). Provide valid certificates or use a broker with TLS. Run:
+
+```bash
+cargo run --example tls_client
+```
+
+- `tokio_async_mqtt_all_sync_operations` — Demonstrates the "all sync operations" convenience API for the Tokio client (wait-for-ACK style operations). Run:
+
+```bash
+cargo run --example tokio_async_mqtt_all_sync_operations
+```
+
+Notes:
+- Examples assume a local broker at `localhost:1883` unless otherwise configured. Adjust the code or pass environment variables as needed.
+- Some examples require feature flags (`quic`, `tls`) and extra dependencies. See the Feature Flags section above for details.
+
+
 ## Documentation
 
 ### Client API & Usage
