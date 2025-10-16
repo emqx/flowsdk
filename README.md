@@ -1,17 +1,17 @@
 # FlowSDK
 
-FlowSDK is a safety-first, realistic, behavior predictable messaging SDK.
+FlowSDK is a safety-first, realistic, behavior-predictable messaging SDK.
 
-With FlowSDK, You can build messaging based [micro middleware](#Micro-middleware-functions) that runs in your app.
+With FlowSDK, you can build messaging-based [micro-middleware](#micro-middleware-functions) that runs in your app.
 
-FlowSDK leverages multiple protocols in different layers and make best use of them for real world scenarios.
+FlowSDK leverages multiple protocols across different layers and makes the best use of each for real-world scenarios.
 
 
-## What is Flow
+## What is Flow?
 
-Flow is the projection of data streaming from many sources with the help of [micro middleware functions](#Micro-middleware-functions)
+Flow is the projection of data streaming from many sources with the help of [micro-middleware functions](#micro-middleware-functions).
 
-## Micro middleware functions
+## Micro-middleware functions
 
 - Messaging client
 - Pub/Sub broker
@@ -24,27 +24,27 @@ Flow is the projection of data streaming from many sources with the help of [mic
 
 ## Be realistic
 
-Message is not created equal.  Messaging comes with costs, resources are not unlimited.
+Messages are not created equal. Messaging has costs; resources are not unlimited.
 
 ## Communication models
 
-- **Req/Resp**
-- **PUB/SUB**
-- **Stream**
-- **Reliable Delivery**
-- **Unreliable Delivery**
+- Req/Resp
+- Pub/Sub
+- Stream
+- Reliable delivery
+- Unreliable delivery
 
 ## Protocols
 
-- **MQTT**
-- **gRPC**
+- MQTT
+- gRPC
 - ...
 
-## Current Status
+## Current status
 
-** Working in progress ** 
+Work in progress
 
-## Project Structure
+## Project structure
 
 This project is organized as a Cargo workspace with two main components:
 
@@ -277,4 +277,4 @@ This implementation follows the MQTT v5.0 specification with:
 
 ## License
 
-see [LICENSE](LICENSE)
+See [LICENSE](LICENSE)

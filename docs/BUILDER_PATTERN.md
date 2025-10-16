@@ -101,7 +101,7 @@ let options = MqttClientOptions::builder()
         retain_handling: 0,
     })
     .add_subscription_topic(TopicSubscription {
-        topic("sensors/humidity".to_string(),
+        topic: "sensors/humidity".to_string(),
         qos: 1,
         no_local: false,
         retain_as_published: false,
