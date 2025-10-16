@@ -7,9 +7,14 @@ With FlowSDK, you can build messaging-based [micro-middleware](#micro-middleware
 FlowSDK leverages multiple protocols across different layers and makes the best use of each for real-world scenarios.
 
 
+
 ## What is Flow?
 
 Flow is the projection of data streaming from many sources with the help of [micro-middleware functions](#micro-middleware-functions).
+
+## AI / LLM-friendly
+
+FlowSDK is designed to be AI-friendly. The public APIs and documentation are written with explicit, consistent naming, examples, and structured sections so they can be easily consumed by large language models and other automated tools for code generation, testing, and analysis. This makes it straightforward to integrate Flow into AI-driven workflows, generate example code, or use LLMs to assist with SDK integration.
 
 ## Micro-middleware functions
 
@@ -281,50 +286,20 @@ Notes:
 - **[ASYNC_CLIENT.md](docs/ASYNC_CLIENT.md)** - Async client architecture and design
 - **[BUILDER_PATTERN.md](docs/BUILDER_PATTERN.md)** - Builder pattern implementation details
 
-## MQTT Protocol Compliance
+### Documentation index (in `docs/`)
 
-This implementation follows the MQTT v5.0 specification with:
-- ✅ Strict packet format validation
-- ✅ Proper QoS flow handling  
-- ✅ Session state management
-- ✅ Properties support
-- ✅ Error code compliance
-- 📋 Protocol test coverage: 84% **achievable** (0/185 implemented)
-  - Infrastructure complete with raw packet API
-  - 106 tests possible with standard API
-  - 79 tests possible with raw packet API
-  - 30 tests require server-side testing (not applicable to client library)
+- **[TOKIO_ASYNC_CLIENT_API_GUIDE.md](docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md)** — Complete API guide for `TokioAsyncMqttClient`: initialization, configuration profiles, async vs sync APIs, and full examples.
+- **[ASYNC_CLIENT.md](docs/ASYNC_CLIENT.md)** — Background-thread async client: event-driven callbacks, usage examples, and configuration for non-Tokio environments.
+- **[BUILDER_PATTERN.md](docs/BUILDER_PATTERN.md)** — Builder pattern for `MqttClientOptions` with examples (auto-subscribe, session expiry, auth).
+- **[PROTOCOL_COMPLIANCE.md](docs/PROTOCOL_COMPLIANCE.md)** — Protocol compliance and validation rules, error messages, and feature flags for strict validation.
+- **[MQTT_SESSION.md](docs/MQTT_SESSION.md)** — MQTT v5 session model: client/server session states, inflight buffers, and session expiry semantics.
+- **[DEV.md](docs/DEV.md)** — Developer guide: build, test, and development workflow for contributors.
+- **[TEST.md](docs/TEST.md)** — Testing infrastructure and guidance (fuzzing, integration tests, raw packet testing).
+- **[CONTRIBUTING.md](docs/CONTRIBUTING.md)** — Contribution guidelines and project expectations.
+- **[TODO.md](docs/TODO.md)** — Current roadmap and outstanding tasks for the project.
 
-## Roadmap
+For detailed information, open the corresponding file in the `docs/` directory. These documents provide design notes, examples, and developer guidance for using and contributing to FlowSDK.
 
-### Completed ✅
-- [x] MQTT v3.1.1, v5.0 packet serialization/deserialization
-- [x] TokioAsyncMqttClient (v5.0) with dual API (async/sync)
-- [x] Builder pattern
-- [x] MQTT v5 flow control (Receive Maximum, Topic Alias Maximum)
-- [x] Raw Packet API for protocol testing
-- [x] Comprehensive documentation
-- [x] Protocol testing infrastructure (84% coverage achievable)
-- [x] TLS/SSL support
-- [x] QUIC support (single stream)
-
-### In Progress 🚧
-- [ ] Authentication method support
-- [ ] More TLS configs
-- [ ] Protocol compliance test implementation (0/185 tests)
-  - [ ] Phase 1: Foundation tests with current API (30 tests)
-  - [ ] Phase 2: MQTT v5 feature tests (40 tests)  
-  - [ ] Phase 3-4: Raw packet malformed tests (40 tests)
-- [ ] Enhanced event handler properties (subscription IDs, MQTT v5 properties)
-
-### Planned 📋
-- [ ] Client support MQTT v3
-- [ ] QUIC support (multi stream)
-- [ ] WebSocket transport support
-- [ ] Packet inspection utilities
-- [ ] Multi-broker failover
-- [ ] Message persistence
-- [ ] Metrics and observability
 
 ## License
 
