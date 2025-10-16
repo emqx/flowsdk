@@ -7,14 +7,13 @@ With FlowSDK, you can build messaging-based [micro-middleware](#micro-middleware
 FlowSDK leverages multiple protocols across different layers and makes the best use of each for real-world scenarios.
 
 
-
 ## What is Flow?
 
 Flow is the projection of data streaming from many sources with the help of [micro-middleware functions](#micro-middleware-functions).
 
 ## AI / LLM-friendly
 
-FlowSDK is designed to be AI-friendly. The public APIs and documentation are written with explicit, consistent naming, examples, and structured sections so they can be easily consumed by large language models and other automated tools for code generation, testing, and analysis. This makes it straightforward to integrate Flow into AI-driven workflows, generate example code, or use LLMs to assist with SDK integration.
+FlowSDK is designed to be AI-friendly. The public APIs and documentation are written with explicit, consistent naming, examples, and structured sections so they can be easily consumed by large language models and other automated tools for code generation, testing, and analysis. This makes it straightforward to integrate Flow into AI-driven workflows, generate example code, or use LLMs to assist with SDK integration. SEE [Doc](#Documentation)
 
 ## Micro-middleware functions
 
@@ -29,7 +28,9 @@ FlowSDK is designed to be AI-friendly. The public APIs and documentation are wri
 
 ## Be realistic
 
-Messages are not created equal. Messaging has costs; resources are not unlimited.
+Messages are not created equal. Messaging has costs, resources are limited, and lower network/transport layers are not always reliable. FlowSDK intentionally surfaces errors and resource constraints instead of hiding them; this helps you identify trade-offs early and design a resilient system, reduces surprises in production.
+
+For example, with FlowSDK, user should look for **acceptable** latency instead of **lowerest** latency with all the tunable parts of timeout, QoS, priority, reconnect/backoff policies. 
 
 ## Communication models
 
@@ -91,7 +92,6 @@ cd mqtt_grpc_duality && cargo run --bin r-proxy
 ```
 
 ## Architecture
-
 
 ### Component Details
 
