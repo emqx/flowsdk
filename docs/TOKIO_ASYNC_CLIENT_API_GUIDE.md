@@ -37,7 +37,7 @@ use flowsdk::mqtt_client::{
 
 // 1. Create MQTT connection options
 let options = MqttClientOptions::builder()
-    .peer("mqtt.example.com:1883")
+    .peer("localhost:1883")
     .client_id("my_client")
     .username("user")
     .password(b"password".to_vec())
@@ -95,7 +95,7 @@ let config = TokioAsyncClientConfig::builder()
 **Maximum Packet Size**:
 ```rust
 let options = MqttClientOptions::builder()
-    .peer("mqtt.example.com:1883")
+    .peer("localhost:1883")
     .maximum_packet_size(1048576)  // 1MB max packet size
     .build();
 

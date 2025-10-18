@@ -184,7 +184,7 @@ use flowsdk::mqtt_client::{
 
 // Create client options
 let options = MqttClientOptions::builder()
-    .peer("mqtt.example.com:1883")
+    .peer("localhost:1883")
     .client_id("my_client")
     .clean_start(true)
     .keep_alive(60)

@@ -465,7 +465,7 @@ mod mqtt_client_options_tests {
     #[test]
     fn test_builder_chaining() {
         let options = MqttClientOptions::builder()
-            .peer("mqtt.example.com:8883")
+            .peer("localhost:8883")
             .client_id("test_client")
             .clean_start(false)
             .keep_alive(120)
@@ -480,7 +480,7 @@ mod mqtt_client_options_tests {
             .request_problem_information(false)
             .build();
 
-        assert_eq!(options.peer, "mqtt.example.com:8883");
+        assert_eq!(options.peer, "localhost:8883");
         assert_eq!(options.client_id, "test_client");
         assert!(!options.clean_start);
         assert_eq!(options.keep_alive, 120);

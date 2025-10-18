@@ -22,7 +22,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error + Send + Sync + 'static>
     // NOTE: If connecting to an IP address, the server certificate must include that IP
     // in its Subject Alternative Names (SAN). Otherwise, you'll get an "UnknownIssuer" error.
     // To test with your own broker:
-    // 1. Use a hostname instead of IP (e.g., "mqtt.example.com:14567")
+    // 1. Use a hostname instead of IP (e.g., "localhost:14567")
     // 2. Or provide a custom root CA that signed the server's certificate
     // 3. Or use insecure_skip_verify(true) for testing ONLY (not for production!)
     let cfg = if std::path::Path::new("ca.pem").exists() {

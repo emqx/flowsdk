@@ -280,7 +280,7 @@ Configure using the builder pattern:
 
 ```rust
 let options = MqttClientOptions::builder()
-    .peer("mqtt.example.com:1883")
+    .peer("localhost:1883")
     .client_id("unique_client_id")
     .clean_start(true)
     .keep_alive(60)
