@@ -4,11 +4,15 @@ FlowSDK is a safety-first, realistic, behavior-predictable messaging SDK.
 
 With FlowSDK, you can build messaging-based [micro-middleware](#micro-middleware-functions) that run in your app and communicate with other apps on the same host or remotely.
 
-FlowSDK leverages multiple protocols across different layers and makes the best use of each for real-world scenarios.
+FlowSDK leverages multiple protocols (MQTT and gRPC for now) across different layers and makes the best use of each for real-world scenarios.
 
 ## What is Flow?
 
-Flow is the projection of data streaming from many sources with the help of [micro-middleware functions](#micro-middleware-functions).
+The definition of flow changes from iteration to iteration. 
+
+- 0.1:  `Flow` stands for  **[Everything will flow](https://flowmq.io/blog/everything-will-flow)**
+
+Technically, Flow is the projection of data streaming from many sources with the help of [micro-middleware functions](#micro-middleware-functions).
 
 ## AI / LLM-friendly
 
