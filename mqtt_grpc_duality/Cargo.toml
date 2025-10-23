@@ -13,8 +13,9 @@ path = "src/bin/s-proxy.rs"
 
 [dependencies]
 # gRPC and async runtime
-tonic = "0.12"
-prost = "0.13"
+tonic = "0.14.2"
+tonic-prost = "0.14.2"
+prost = "0.14.1"
 tokio = { version = "1.40", features = ["full"] }
 tokio-stream = "0.1"
 tokio-util = "0.7.16"
@@ -28,7 +29,7 @@ tracing-subscriber = "0.3.20"
 flowsdk = { path = "..", features = [] }
 
 [build-dependencies]
-tonic-build = "0.12"
+tonic-prost-build = "0.14.2"
 
 [lib]
 name = "mqtt_grpc_proxy"

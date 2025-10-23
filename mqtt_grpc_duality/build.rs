@@ -4,17 +4,17 @@ use std::path::PathBuf;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let out_dir = PathBuf::from(env::var("OUT_DIR").unwrap());
 
-    // First, compile the individual protocol files
-    tonic_build::configure()
+    // First, compile mqttv3 and mqttv5 proto files individually
+    tonic_prost_build::configure()
         .file_descriptor_set_path(out_dir.join("mqttv3_descriptor.bin"))
         .compile_protos(&["proto/mqttv3.proto"], &["proto"])?;
 
-    tonic_build::configure()
+    tonic_prost_build::configure()
         .file_descriptor_set_path(out_dir.join("mqttv5_descriptor.bin"))
         .compile_protos(&["proto/mqttv5.proto"], &["proto"])?;
 
-    // Then compile the unified protocol file with extern paths
-    tonic_build::configure()
+    // Then compile the unified mqtt.proto with extern_path pointing to the generated modules
+    tonic_prost_build::configure()
         .file_descriptor_set_path(out_dir.join("mqtt_descriptor.bin"))
         .extern_path(".mqttv3", "crate::mqttv3pb")
         .extern_path(".mqttv5", "crate::mqttv5pb")
