@@ -90,6 +90,7 @@ async fn setup_grpc_connection(
         .connect()
         .await?;
 
+    // Create gRPC client
     let mut grpc_client: MqttRelayServiceClient<tonic::transport::Channel> =
         MqttRelayServiceClient::new(channel);
 
