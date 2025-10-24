@@ -42,6 +42,8 @@ pub struct RProxyState {
     // Atomic counter for unique session IDs
     // @TODO: persist across restarts, maybe use timestamp
     pub sequence_counter: AtomicU64,
+    // Shared gRPC client for all MQTT connections (Phase 1: Channel Reuse)
+    pub grpc_client: Arc<MqttRelayServiceClient<tonic::transport::Channel>>,
 }
 
 async fn run_proxy(
@@ -51,9 +53,24 @@ async fn run_proxy(
     let listener = TcpListener::bind(("0.0.0.0", listen_port)).await?;
     info!("Listening on 0.0.0.0:{}", listen_port);
 
+    // Create shared gRPC channel (Phase 1: Channel Reuse)
+    // This channel will be reused by all MQTT client connections
+    info!(
+        "Establishing shared gRPC connection to s-proxy at {}",
+        destination
+    );
+    let channel = tonic::transport::Channel::from_shared(format!("http://{}", destination))?
+        .keep_alive_while_idle(true)
+        .keep_alive_timeout(std::time::Duration::from_secs(30))
+        .connect_lazy(); // Use connect_lazy for efficient connection pooling
+
+    let grpc_client = Arc::new(MqttRelayServiceClient::new(channel));
+    info!("Shared gRPC channel established and ready for client connections");
+
     let proxy_state = Arc::new(RProxyState {
         connections: Arc::new(DashMap::new()),
         sequence_counter: AtomicU64::new(1),
+        grpc_client, // Share this client across all MQTT connections
     });
 
     loop {
@@ -62,7 +79,7 @@ async fn run_proxy(
         let state = proxy_state.clone();
         info!("Accepted connection from {}", addr);
         spawn(async move {
-            match handle_new_incoming_tcp(incoming_stream, destination, state).await {
+            match handle_new_incoming_tcp(incoming_stream, state).await {
                 Ok(_) => {
                     info!("Client connection handled successfully");
                 }
@@ -74,8 +91,15 @@ async fn run_proxy(
     }
 }
 
-async fn setup_grpc_connection(
-    destination: SocketAddr,
+/// Setup a new gRPC bidirectional stream using the shared channel
+///
+/// Phase 1: This function reuses the shared gRPC channel instead of creating
+/// a new connection for each MQTT client. Each client gets its own isolated
+/// bidirectional stream over the shared channel.
+async fn setup_grpc_streaming(
+    grpc_client: Arc<MqttRelayServiceClient<tonic::transport::Channel>>,
+    session_id: String,
+    client_id: String,
 ) -> Result<
     (
         mpsc::Sender<MqttStreamMessage>,
@@ -83,34 +107,28 @@ async fn setup_grpc_connection(
     ),
     Box<dyn std::error::Error + Send + Sync>,
 > {
-    // Connect to s-proxy with streaming
-    let channel = tonic::transport::Channel::from_shared(format!("http://{}", destination))?
-        .keep_alive_while_idle(true)
-        .keep_alive_timeout(std::time::Duration::from_secs(30))
-        .connect()
-        .await?;
+    // Clone the shared client (cheap Arc clone, shares underlying channel)
+    let mut client = (*grpc_client).clone();
 
-    // Create gRPC client
-    let mut grpc_client: MqttRelayServiceClient<tonic::transport::Channel> =
-        MqttRelayServiceClient::new(channel);
-
-    // Create bidirectional streaming channels
+    // Create bidirectional streaming channels for THIS MQTT client
     let (grpc_stream_sender, grpc_stream_receiver) = mpsc::channel(1000);
 
-    // Establish gRPC streaming connection
+    // Establish NEW streaming RPC (but reuses underlying channel)
     let outbound_gstream = ReceiverStream::new(grpc_stream_receiver);
-    let request = Request::new(outbound_gstream);
-    let inbound_gstream = grpc_client
-        .stream_mqtt_messages(request)
-        .await?
-        .into_inner();
+    let mut request = Request::new(outbound_gstream);
+
+    // Add session_id and client_id as gRPC metadata (HTTP/2 headers)
+    let metadata = request.metadata_mut();
+    metadata.insert("session-id", session_id.parse().unwrap());
+    metadata.insert("client-id", client_id.parse().unwrap());
+
+    let inbound_gstream = client.stream_mqtt_messages(request).await?.into_inner();
 
     Ok((grpc_stream_sender, inbound_gstream))
 }
 
 async fn handle_new_incoming_tcp(
     incoming: TcpStream,
-    destination: SocketAddr,
     state: Arc<RProxyState>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     // Split stream to read and write halves
@@ -134,8 +152,22 @@ async fn handle_new_incoming_tcp(
         client_id, session_id
     );
 
-    // Setup gRPC connection and streaming
-    let (gstream_sender, inbound_gstream) = setup_grpc_connection(destination).await?;
+    // Setup gRPC streaming using shared channel (Phase 1: Channel Reuse)
+    // Session metadata will be sent via gRPC metadata (HTTP/2 headers)
+    debug!(
+        "Setting up gRPC stream for client {} using shared channel",
+        client_id
+    );
+    let (gstream_sender, inbound_gstream) = setup_grpc_streaming(
+        state.grpc_client.clone(),
+        session_id.clone(),
+        client_id.clone(),
+    )
+    .await?;
+    debug!(
+        "gRPC stream established for client {} (reused shared channel) with session metadata",
+        client_id
+    );
 
     let control_type = match mqtt_version {
         5 => mqtt_unified_pb::session_control::ControlType::Establishv5,
@@ -152,7 +184,6 @@ async fn handle_new_incoming_tcp(
         client_id: client_id.clone(),
     };
     let session_control_msg = MqttStreamMessage {
-        session_id: session_id.clone(),
         sequence_id: 0,
         direction: mqtt_unified_pb::MessageDirection::ClientToBroker as i32,
         payload: Some(
@@ -169,7 +200,6 @@ async fn handle_new_incoming_tcp(
 
     let msg = convert_mqtt_to_stream_message(
         &connect_packet,
-        session_id.clone(),
         0,
         mqtt_unified_pb::MessageDirection::ClientToBroker,
     )
@@ -211,19 +241,21 @@ async fn start_streaming_loop(
                         Ok(Some(packet)) => {
                             debug!("Parsed MQTT packet from client {}: {:?}", conn.client_id, packet);
                             // Convert MQTT packet to gRPC stream message using unified approach
+                            // Note: session_id is sent via gRPC metadata, not in the message
                             let stream_msg = convert_mqtt_to_stream_message(
                                 &packet,
-                                conn.session_id.clone(),
                                 sequence_counter.fetch_add(1, Ordering::SeqCst),
                                 mqtt_unified_pb::MessageDirection::ClientToBroker,
                             );
+
 
                             if let Some(msg) = stream_msg {
                                 if let Err(e) = conn.grpc_stream_sender.send(msg).await {
                                     error!("Failed to send MQTT packet to gRPC stream for client {}: {}", conn.client_id, e);
                                     break;
                                 } else {
-                                    debug!("MQTT packet forwarded to s-proxy for client {}: {:?}", conn.client_id, packet);
+                                    debug!("MQTT packet forwarded to s-proxy for client {} (session: {}): {:?}",
+                                           conn.client_id, conn.session_id, packet);
                                 }
                             } else {
                                 error!("Failed to convert MQTT packet to stream message for client {}: {:?}", conn.client_id, packet);

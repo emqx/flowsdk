@@ -985,7 +985,6 @@ impl From<mqttv3pb::Disconnect> for MqttDisconnectV3 {
 
 pub fn convert_mqtt_to_stream_message(
     packet: &MqttPacket,
-    session_id: String,
     sequence_id: u64,
     direction: mqtt_unified_pb::MessageDirection,
 ) -> Option<mqtt_unified_pb::MqttStreamMessage> {
@@ -1143,7 +1142,6 @@ pub fn convert_mqtt_to_stream_message(
     };
 
     payload.map(|p| mqtt_unified_pb::MqttStreamMessage {
-        session_id,
         sequence_id,
         direction: direction as i32,
         payload: Some(p),
