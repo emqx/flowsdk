@@ -1,6 +1,9 @@
 # Build stage for fuzz targets
 FROM gcr.io/oss-fuzz-base/base-builder-rust
 
+# Install libssl-dev
+RUN apt-get update && apt-get install -y libssl-dev pkg-config
+
 # Copy the project files
 COPY . $SRC/flowsdk
 
