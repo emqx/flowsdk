@@ -12,8 +12,8 @@ service MqttRelayService {
 }
 
 // Unified streaming message wrapper for MQTT
+// Note: session_id is passed via gRPC metadata (HTTP/2 headers), not in the message
 message MqttStreamMessage {
-  string session_id = 1;      // Unique identifier for this MQTT session
   uint64 sequence_id = 2;     // For message ordering within session
   MessageDirection direction = 3;
   oneof payload {

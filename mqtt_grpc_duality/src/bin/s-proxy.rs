@@ -56,7 +56,22 @@ impl MqttRelayService for MyRelay {
         &self,
         request: Request<tonic::Streaming<MqttStreamMessage>>,
     ) -> Result<Response<Self::StreamMqttMessagesStream>, Status> {
-        info!("Initiating bidirectional MQTT stream");
+        // Extract metadata (HTTP/2 headers) from the request
+        let metadata = request.metadata();
+        let session_id_from_metadata = metadata
+            .get("session-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .unwrap_or_else(|| "unknown".to_string());
+        let client_id = metadata
+            .get("client-id")
+            .and_then(|v| v.to_str().ok())
+            .unwrap_or("unknown");
+
+        info!(
+            "Initiating bidirectional MQTT stream for session: {}, client: {}",
+            session_id_from_metadata, client_id
+        );
 
         let mut incoming_stream = request.into_inner();
         let (response_tx, response_rx) = tokio::sync::mpsc::channel(128);
@@ -67,6 +82,7 @@ impl MqttRelayService for MyRelay {
 
         // Handle the bidirectional stream
         tokio::spawn(async move {
+            let session_id = session_id_from_metadata; // Use session_id from metadata (owned)
             loop {
                 let cloned_token: CancellationToken = token.clone();
 
@@ -82,10 +98,7 @@ impl MqttRelayService for MyRelay {
                     }
 
                     Some(Ok(stream_msg)) => {
-                        debug!(
-                            "Received stream message for session: {}",
-                            stream_msg.session_id
-                        );
+                        debug!("Received stream message for session: {}", &session_id);
 
                         if let Some(payload) = stream_msg.payload {
                             match payload {
@@ -93,10 +106,9 @@ impl MqttRelayService for MyRelay {
                                     packet,
                                 ) => {
                                     if let Some(p) = packet.packet {
-                                        if let Some(client_id) = find_client_by_session(
-                                            &connections,
-                                            &stream_msg.session_id,
-                                        ) {
+                                        if let Some(client_id) =
+                                            find_client_by_session(&connections, &session_id)
+                                        {
                                             if let Some(conn) = connections.get(&client_id) {
                                                 let (broker_tx, _, _) = conn.value();
                                                 if let Err(e) = broker_tx
@@ -116,10 +128,9 @@ impl MqttRelayService for MyRelay {
                                     packet,
                                 ) => {
                                     if let Some(p) = packet.packet {
-                                        if let Some(client_id) = find_client_by_session(
-                                            &connections,
-                                            &stream_msg.session_id,
-                                        ) {
+                                        if let Some(client_id) =
+                                            find_client_by_session(&connections, &session_id)
+                                        {
                                             if let Some(conn) = connections.get(&client_id) {
                                                 let (broker_tx, _, _) = conn.value();
                                                 if let Err(e) = broker_tx
@@ -153,7 +164,7 @@ impl MqttRelayService for MyRelay {
                                             // Create broker connection for this client
                                             let connections = connections.clone();
                                             let response_tx_for_spawn = response_tx.clone();
-                                            let session_id = stream_msg.session_id.clone();
+                                            let session_id_for_spawn = session_id.clone();
                                                        let (broker_tx, broker_rx) =
                                                             tokio::sync::mpsc::channel::<BrokerControlMessage>(
                                                                 32,
@@ -164,7 +175,7 @@ impl MqttRelayService for MyRelay {
                                                             (
                                                                 broker_tx,
                                                                 response_tx_for_spawn.clone(),
-                                                                session_id.clone(),
+                                                                session_id_for_spawn.clone(),
                                                             ),
                                                         );
 
@@ -183,7 +194,7 @@ impl MqttRelayService for MyRelay {
                                                             broker_rx,
                                                             stream,
                                                             response_tx_for_spawn,
-                                                            session_id,
+                                                            session_id_for_spawn,
                                                             mqtt_version,
                                                         )
                                                         .await;
@@ -199,7 +210,7 @@ impl MqttRelayService for MyRelay {
                                         }
                                         x if x == mqtt_unified_pb::session_control::ControlType::Terminate as i32 => {
                                             if let Some(client_id) =
-                                                find_client_by_session(&connections, &stream_msg.session_id)
+                                                find_client_by_session(&connections, &session_id)
                                             {
                                                 debug!("Client {} disconnecting", client_id);
                                                 connections.remove(&client_id);
@@ -282,9 +293,9 @@ async fn mqtt_client_loop_simple(
                             debug!("Received packet from broker: {:?}", packet);
 
                             // Convert MQTT packet to gRPC stream message and forward to r-proxy
+                            // Note: session_id is sent via gRPC metadata, not in the message
                             if let Some(stream_msg) = convert_mqtt_to_stream_message(
                                 &packet,
-                                session_id.clone(),
                                 sequence_counter,
                                 mqtt_unified_pb::MessageDirection::BrokerToClient,
                             ) {
