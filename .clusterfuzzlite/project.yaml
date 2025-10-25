@@ -1,0 +1,7 @@
+homepage: "https://github.com/emqx/flowsdk"
+language: rust
+main_repo: "https://github.com/emqx/flowsdk"
+sanitizers:
+  - address
+  - undefined
+  - memory
