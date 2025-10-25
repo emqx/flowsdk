@@ -60,7 +60,7 @@ jobs:
           output-sarif: true
 
       - name: Upload SARIF
-        if: always() && steps.run.outcome != 'skipped'
+        if: always() && steps.run.outcome == 'failure'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: ${{ steps.run.outputs.sarif }}
@@ -93,7 +93,7 @@ jobs:
           output-sarif: true
 
       - name: Upload SARIF
-        if: always() && steps.run.outcome != 'skipped'
+        if: always() && steps.run.outcome == 'failure'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: ${{ steps.run.outputs.sarif }}
@@ -126,7 +126,7 @@ jobs:
           output-sarif: true
 
       - name: Upload SARIF
-        if: always() && steps.run.outcome != 'skipped'
+        if: always() && steps.run.outcome == 'failure'
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: ${{ steps.run.outputs.sarif }}
