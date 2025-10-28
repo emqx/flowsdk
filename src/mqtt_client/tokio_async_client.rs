@@ -1061,6 +1061,10 @@ pub struct TokioAsyncClientConfig {
     /// Only used when connecting via quic:// URLs (requires `quic` feature)
     #[cfg(feature = "quic")]
     pub quic_client_key_pem: Option<String>,
+    /// QUIC transport: Datagram receive buffer size in bytes (0 = disable datagrams)
+    /// Only used when connecting via quic:// URLs (requires `quic` feature)
+    #[cfg(feature = "quic")]
+    pub quic_datagram_receive_buffer_size: usize,
 }
 
 impl Default for TokioAsyncClientConfig {
@@ -1095,6 +1099,8 @@ impl Default for TokioAsyncClientConfig {
             quic_client_cert_pem: None, // No client cert by default
             #[cfg(feature = "quic")]
             quic_client_key_pem: None, // No client key by default
+            #[cfg(feature = "quic")]
+            quic_datagram_receive_buffer_size: 0, // Disable datagram
         }
     }
 }
@@ -1555,6 +1561,12 @@ impl ConfigBuilder {
     #[cfg(feature = "quic")]
     pub fn quic_client_key_pem(mut self, pem: String) -> Self {
         self.config.quic_client_key_pem = Some(pem);
+        self
+    }
+
+    #[cfg(feature = "quic")]
+    pub fn quic_datagram_receive_buffer_size(mut self, size: usize) -> Self {
+        self.config.quic_datagram_receive_buffer_size = size;
         self
     }
 }
@@ -3002,6 +3014,11 @@ impl TokioClientWorker {
                         })?;
                 }
 
+                if self.config.quic_datagram_receive_buffer_size > 0 {
+                    builder = builder.datagram_receive_buffer_size(
+                        self.config.quic_datagram_receive_buffer_size,
+                    );
+                }
                 let cfg = builder.build();
 
                 let transport = QuicTransport::connect_with_config(addr, cfg)

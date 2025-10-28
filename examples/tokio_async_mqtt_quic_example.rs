@@ -145,7 +145,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Configure MQTT client options with quic:// scheme
     let mqtt_options = MqttClientOptions::builder()
-        .peer("quic://192.168.64.17:14567") // Use quic:// scheme
+        .peer("quic://broker.emqx.io:14567") // Use quic:// scheme
         .client_id("tokio_quic_example_client")
         .keep_alive(60)
         .clean_start(true)
@@ -160,6 +160,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // QUIC-specific configuration
         .quic_insecure_skip_verify(true) // ⚠️ For testing only! Use proper certs in production
         .quic_enable_0rtt(false) // Disable 0-RTT for security
+        .quic_datagram_receive_buffer_size(0) // disable datagram
         // For production with custom CA:
         // let ca_pem = std::fs::read_to_string("ca.pem").unwrap();
         // .quic_custom_root_ca_pem(ca_pem)
