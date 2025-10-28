@@ -89,6 +89,7 @@ mod imp {
         pub client_private_key: Option<Vec<u8>>,
         /// ⚠️ DANGEROUS: Skip TLS certificate verification (for testing only!)
         pub insecure_skip_verify: bool,
+        pub datagram_receive_buffer_size: usize,
     }
 
     /// Builder for `QuicConfig` to simplify ergonomic construction.
@@ -99,6 +100,7 @@ mod imp {
         client_cert_chain: Option<Vec<Vec<u8>>>,
         client_private_key: Option<Vec<u8>>,
         insecure_skip_verify: bool,
+        datagram_receive_buffer_size: usize,
     }
 
     impl QuicConfigBuilder {
@@ -210,6 +212,11 @@ mod imp {
             Ok(self)
         }
 
+        pub fn datagram_receive_buffer_size(mut self, size: usize) -> Self {
+            self.datagram_receive_buffer_size = size;
+            self
+        }
+
         /// Provide a client private key for mutual TLS (DER-encoded bytes)
         pub fn client_private_key(mut self, key: Vec<u8>) -> Self {
             self.client_private_key = Some(key);
@@ -273,6 +280,7 @@ mod imp {
                 client_cert_chain: self.client_cert_chain,
                 client_private_key: self.client_private_key,
                 insecure_skip_verify: self.insecure_skip_verify,
+                datagram_receive_buffer_size: self.datagram_receive_buffer_size,
             }
         }
     }
@@ -287,6 +295,7 @@ mod imp {
                 client_cert_chain: None,
                 client_private_key: None,
                 insecure_skip_verify: false,
+                datagram_receive_buffer_size: 0,
             }
         }
     }
@@ -418,7 +427,10 @@ mod imp {
                     }
                 };
 
-            let quinn_crypto = ClientConfig::new(Arc::new(quic_client_cfg));
+            let mut quinn_crypto = ClientConfig::new(Arc::new(quic_client_cfg));
+            let mut trpt_cfg = quinn::TransportConfig::default();
+            trpt_cfg.datagram_receive_buffer_size(Some(cfg.datagram_receive_buffer_size));
+            quinn_crypto.transport_config(Arc::new(trpt_cfg));
 
             // Create an endpoint bound to an ephemeral UDP port
             let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap()).map_err(|e| {
