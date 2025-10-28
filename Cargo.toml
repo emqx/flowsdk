@@ -33,7 +33,7 @@ rustls-native-certs = { version = "0.7", optional = true }
 rustls-pki-types = { version = "1", optional = true }
 
 [features]
-default = ["strict-protocol-compliance", "tls"]
+default = ["strict-protocol-compliance"]
 # TLS/SSL transport support
 tls = ["dep:tokio-native-tls", "dep:native-tls"]
 # QUIC transport support
@@ -44,3 +44,8 @@ strict-protocol-compliance = []
 protocol-testing = []
 
 
+
+# Force static linking of the C runtime
+[profile.release.build-override]
+[target.aarch64-unknown-linux-musl]
+rustflags = ["-C", "target-feature=+crt-static"]
