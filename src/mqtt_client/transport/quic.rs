@@ -89,6 +89,7 @@ mod imp {
         pub client_private_key: Option<Vec<u8>>,
         /// ⚠️ DANGEROUS: Skip TLS certificate verification (for testing only!)
         pub insecure_skip_verify: bool,
+        /// Datagram receive buffer size in bytes (0 = disable datagrams)
         pub datagram_receive_buffer_size: usize,
     }
 
@@ -212,6 +213,7 @@ mod imp {
             Ok(self)
         }
 
+        /// Set Datagram receive buffer size in bytes (0 = disable datagrams)
         pub fn datagram_receive_buffer_size(mut self, size: usize) -> Self {
             self.datagram_receive_buffer_size = size;
             self
