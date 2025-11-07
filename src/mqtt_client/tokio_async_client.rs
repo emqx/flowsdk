@@ -1564,6 +1564,19 @@ impl ConfigBuilder {
         self
     }
 
+    /// Set client datagram receive buffer size for QUIC.
+    ///
+    /// Maximum number of incoming application datagram bytes to buffer, set 0 to disable incoming datagrams
+    ///
+    /// Only applies when connecting via quic:// URLs (requires `quic` feature)
+    ///
+    /// # Example
+    /// ```no_run
+    /// use flowsdk::mqtt_client::TokioAsyncClientConfig;
+    /// let config = TokioAsyncClientConfig::builder()
+    ///     .quic_datagram_receive_buffer_size(Some(1000))
+    ///     .build();
+    /// ```
     #[cfg(feature = "quic")]
     pub fn quic_datagram_receive_buffer_size(mut self, size: usize) -> Self {
         self.config.quic_datagram_receive_buffer_size = size;
