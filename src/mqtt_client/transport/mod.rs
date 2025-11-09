@@ -15,6 +15,9 @@ pub mod tls;
 #[cfg(feature = "quic")]
 pub mod quic;
 
+#[cfg(feature = "rustls-tls")]
+pub mod rustls_tls;
+
 /// Error type for transport operations
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
@@ -24,7 +27,7 @@ pub enum TransportError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
-    #[cfg(feature = "tls")]
+    #[cfg(any(feature = "tls", feature = "rustls-tls"))]
     #[error("TLS error: {0}")]
     Tls(String),
 
@@ -80,3 +83,6 @@ pub use tcp::TcpTransport;
 
 #[cfg(feature = "tls")]
 pub use tls::TlsTransport;
+
+#[cfg(feature = "rustls-tls")]
+pub use rustls_tls::RustlsTlsTransport;

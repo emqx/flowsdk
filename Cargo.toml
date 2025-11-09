@@ -32,6 +32,7 @@ quinn = { version = "0.11", optional = true }
 rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std"] }
 rustls-native-certs = { version = "0.7", optional = true }
 rustls-pki-types = { version = "1", optional = true }
+tokio-rustls = { version = "0.26", optional = true }
 
 [features]
 default = ["strict-protocol-compliance", "tls"]
@@ -39,6 +40,13 @@ default = ["strict-protocol-compliance", "tls"]
 tls = ["dep:tokio-native-tls", "dep:native-tls"]
 # QUIC transport support
 quic = ["dep:quinn", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
+# Rustls-based TLS over TCP (mqtts://) transport support
+rustls-tls = [
+	"dep:tokio-rustls",
+	"dep:rustls",
+	"dep:rustls-native-certs",
+	"dep:rustls-pki-types",
+]
 strict-protocol-compliance = []
 # ⚠️ DANGEROUS: Enable raw packet API for protocol compliance testing
 # DO NOT enable in production builds
