@@ -1,8 +1,17 @@
 use crate::mqtt_serde::mqttv5::subscribev5;
 use crate::mqtt_serde::mqttv5::willv5::Will;
 
+#[cfg(feature = "rustls-tls")]
+use crate::mqtt_client::transport::rustls_tls::RustlsTlsConfig;
 #[cfg(feature = "tls")]
 use crate::mqtt_client::transport::tls::TlsConfig;
+
+#[cfg(any(feature = "tls", feature = "rustls-tls"))]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TlsBackend {
+    Native,
+    Rustls,
+}
 
 pub struct MqttClientOptions {
     pub peer: String,
@@ -53,6 +62,12 @@ pub struct MqttClientOptions {
     ///   Default: None
     #[cfg(feature = "tls")]
     pub tls_config: Option<TlsConfig>,
+    /// Rustls TLS configuration (requires 'rustls-tls' feature)
+    #[cfg(feature = "rustls-tls")]
+    pub rustls_tls_config: Option<RustlsTlsConfig>,
+    /// Selected TLS backend (None = no TLS)
+    #[cfg(any(feature = "tls", feature = "rustls-tls"))]
+    pub tls_backend: Option<TlsBackend>,
 }
 
 impl Default for MqttClientOptions {
@@ -75,6 +90,10 @@ impl Default for MqttClientOptions {
             request_problem_information: None,
             #[cfg(feature = "tls")]
             tls_config: None,
+            #[cfg(feature = "rustls-tls")]
+            rustls_tls_config: None,
+            #[cfg(any(feature = "tls", feature = "rustls-tls"))]
+            tls_backend: None,
         }
     }
 }
@@ -263,6 +282,10 @@ impl MqttClientOptions {
     #[cfg(feature = "tls")]
     pub fn tls_config(mut self, config: TlsConfig) -> Self {
         self.tls_config = Some(config);
+        #[cfg(any(feature = "tls", feature = "rustls-tls"))]
+        {
+            self.tls_backend = Some(TlsBackend::Native);
+        }
         self
     }
 
@@ -286,6 +309,10 @@ impl MqttClientOptions {
     #[cfg(feature = "tls")]
     pub fn enable_tls(mut self) -> Self {
         self.tls_config = Some(TlsConfig::default());
+        #[cfg(any(feature = "tls", feature = "rustls-tls"))]
+        {
+            self.tls_backend = Some(TlsBackend::Native);
+        }
         self
     }
 
@@ -308,6 +335,36 @@ impl MqttClientOptions {
     #[cfg(feature = "tls")]
     pub fn disable_tls(mut self) -> Self {
         self.tls_config = None;
+        #[cfg(any(feature = "tls", feature = "rustls-tls"))]
+        {
+            // Only clear backend if it was Native
+            if matches!(self.tls_backend, Some(TlsBackend::Native)) {
+                self.tls_backend = None;
+            }
+        }
+        self
+    }
+
+    /// Enable Rustls TLS with default config (requires 'rustls-tls' feature)
+    #[cfg(feature = "rustls-tls")]
+    pub fn enable_rustls_tls(mut self) -> Self {
+        self.rustls_tls_config = Some(RustlsTlsConfig::default());
+        self.tls_backend = Some(TlsBackend::Rustls);
+        self
+    }
+
+    /// Provide a custom Rustls TLS configuration (requires 'rustls-tls' feature)
+    #[cfg(feature = "rustls-tls")]
+    pub fn rustls_tls_config(mut self, config: RustlsTlsConfig) -> Self {
+        self.rustls_tls_config = Some(config);
+        self.tls_backend = Some(TlsBackend::Rustls);
+        self
+    }
+
+    /// Explicitly select TLS backend (requires at least one TLS feature)
+    #[cfg(any(feature = "tls", feature = "rustls-tls"))]
+    pub fn tls_backend(mut self, backend: TlsBackend) -> Self {
+        self.tls_backend = Some(backend);
         self
     }
 
