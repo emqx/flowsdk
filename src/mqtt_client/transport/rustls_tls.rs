@@ -14,7 +14,7 @@ mod imp {
     use rustls_pki_types::pem::PemObject;
     use rustls_pki_types::{CertificateDer, PrivateKeyDer, UnixTime};
 
-    use tokio_rustls::client::TlsStream as RustlsTlsStream;
+    use tokio_rustls::{client::TlsStream as RustlsTlsStream, TlsConnector as RustlsTlsConnector};
 
     /// TLS configuration for Rustls backend
     #[derive(Clone, Default, Debug)]
@@ -48,23 +48,20 @@ mod imp {
 
             if self.use_system_roots {
                 let native_certs = rustls_native_certs::load_native_certs().map_err(|e| {
-                    TransportError::Tls(format!(
-                        "failed to load platform root certs: {}",
-                        e
-                    ))
+                    TransportError::Tls(format!("failed to load platform root certs: {}", e))
                 })?;
                 for cert in native_certs {
-                    roots
-                        .add(cert)
-                        .map_err(|e| TransportError::Tls(format!("failed to add root cert: {:?}", e)))?;
+                    roots.add(cert).map_err(|e| {
+                        TransportError::Tls(format!("failed to add root cert: {:?}", e))
+                    })?;
                 }
             }
 
             // Add any custom roots
             for cert in &self.custom_root_certs {
-                roots
-                    .add(cert.clone().into())
-                    .map_err(|e| TransportError::Tls(format!("failed to add custom root: {:?}", e)))?;
+                roots.add(cert.clone().into()).map_err(|e| {
+                    TransportError::Tls(format!("failed to add custom root: {:?}", e))
+                })?;
             }
 
             // Build rustls config with or without client auth
@@ -85,10 +82,12 @@ mod imp {
                 RustlsClientConfig::builder()
                     .with_root_certificates(roots)
                     .with_client_auth_cert(chain_der, key_der)
-                    .map_err(|e| TransportError::Tls(format!(
-                        "failed to build rustls client config with client auth: {}",
-                        e
-                    )))?
+                    .map_err(|e| {
+                        TransportError::Tls(format!(
+                            "failed to build rustls client config with client auth: {}",
+                            e
+                        ))
+                    })?
             } else {
                 RustlsClientConfig::builder()
                     .with_root_certificates(roots)
@@ -102,9 +101,10 @@ mod imp {
 
             // Apply dangerous overrides if requested
             if self.danger_accept_invalid_certs || self.danger_accept_invalid_hostnames {
-                cfg.dangerous().set_certificate_verifier(Arc::new(InsecureServerCertVerifier {
-                    skip_name_check: self.danger_accept_invalid_hostnames,
-                }));
+                cfg.dangerous()
+                    .set_certificate_verifier(Arc::new(InsecureServerCertVerifier {
+                        skip_name_check: self.danger_accept_invalid_hostnames,
+                    }));
             }
 
             Ok(cfg)
@@ -327,13 +327,45 @@ mod imp {
 
         /// Connect using an explicit configuration
         pub async fn connect_with_config(
-            _addr: &str,
-            _cfg: RustlsTlsConfig,
+            addr: &str,
+            cfg: RustlsTlsConfig,
         ) -> Result<Self, TransportError> {
-            // Implemented in the next step; return a clear error for now.
-            Err(TransportError::NotSupported(
-                "Rustls TLS connect implementation pending (enable in step 5)".to_string(),
-            ))
+            // Parse address
+            let (host, socket_addr) = parse_mqtt_address(addr)?;
+
+            // Build rustls client config
+            let client_cfg = cfg.to_client_config()?;
+            let connector = RustlsTlsConnector::from(Arc::new(client_cfg));
+
+            // Resolve server name for SNI
+            let server_name = {
+                use std::convert::TryFrom;
+                match ServerName::try_from(host.clone()) {
+                    Ok(sn) => sn,
+                    Err(_e) => {
+                        return Err(TransportError::InvalidAddress(format!(
+                            "invalid DNS name for TLS: {}",
+                            host
+                        )))
+                    }
+                }
+            };
+
+            // Establish TCP
+            let tcp = TcpStream::connect(&socket_addr).await.map_err(|e| {
+                TransportError::ConnectionFailed(format!("TCP connection failed: {}", e))
+            })?;
+
+            // TLS handshake
+            let tls_stream = connector
+                .connect(server_name, tcp)
+                .await
+                .map_err(|e| TransportError::Tls(format!("TLS handshake failed: {}", e)))?;
+
+            Ok(Self {
+                stream: tls_stream,
+                peer_addr: socket_addr,
+            })
         }
 
         /// Access the underlying TLS stream
@@ -366,8 +398,7 @@ mod imp {
         }
 
         fn local_addr(&self) -> Result<String, TransportError> {
-            self
-                .stream
+            self.stream
                 .get_ref()
                 .0
                 .local_addr()
@@ -376,7 +407,11 @@ mod imp {
         }
 
         fn set_nodelay(&self, nodelay: bool) -> Result<(), TransportError> {
-            self.stream.get_ref().0.set_nodelay(nodelay).map_err(TransportError::Io)
+            self.stream
+                .get_ref()
+                .0
+                .set_nodelay(nodelay)
+                .map_err(TransportError::Io)
         }
     }
 
@@ -411,6 +446,23 @@ mod imp {
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<std::io::Result<()>> {
             std::pin::Pin::new(&mut self.stream).poll_shutdown(cx)
+        }
+    }
+
+    /// Parse MQTT address to extract hostname and socket address
+    ///
+    /// Supports formats:
+    /// - "mqtts://host:port" → ("host", "host:port")
+    /// - "host:port" → ("host", "host:port")
+    fn parse_mqtt_address(addr: &str) -> Result<(String, String), TransportError> {
+        let addr = addr.trim_start_matches("mqtts://");
+        if let Some((host, port)) = addr.rsplit_once(':') {
+            Ok((host.to_string(), format!("{}:{}", host, port)))
+        } else {
+            Err(TransportError::InvalidAddress(format!(
+                "Invalid address format: '{}'. Expected 'host:port' or 'mqtts://host:port'",
+                addr
+            )))
         }
     }
 }

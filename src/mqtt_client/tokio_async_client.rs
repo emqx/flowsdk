@@ -2968,24 +2968,79 @@ impl TokioClientWorker {
     async fn create_transport(&self, peer: &str) -> Result<BoxedTransport, MqttClientError> {
         // Parse URL scheme
         if peer.starts_with("mqtts://") {
-            #[cfg(feature = "tls")]
+            // Decide which TLS backend to use based on options.tls_backend
+            #[cfg(any(feature = "tls", feature = "rustls-tls"))]
             {
                 let addr = peer.strip_prefix("mqtts://").unwrap_or(peer);
-                let transport = TlsTransport::connect(addr).await.map_err(|e| {
-                    MqttClientError::ConnectionLost {
-                        reason: format!("TLS connection failed to {}: {}", peer, e),
+                match self.options.tls_backend {
+                    #[cfg(feature = "rustls-tls")]
+                    Some(crate::mqtt_client::opts::TlsBackend::Rustls) => {
+                        let transport =
+                            crate::mqtt_client::transport::RustlsTlsTransport::connect(addr)
+                                .await
+                                .map_err(|e| MqttClientError::ConnectionLost {
+                                    reason: format!(
+                                        "Rustls TLS connection failed to {}: {}",
+                                        peer, e
+                                    ),
+                                })?;
+                        return Ok(Box::new(transport) as BoxedTransport);
                     }
-                })?;
-                Ok(Box::new(transport) as BoxedTransport)
+                    #[cfg(feature = "tls")]
+                    Some(crate::mqtt_client::opts::TlsBackend::Native) => {
+                        let transport = TlsTransport::connect(addr).await.map_err(|e| {
+                            MqttClientError::ConnectionLost {
+                                reason: format!("TLS connection failed to {}: {}", peer, e),
+                            }
+                        })?;
+                        return Ok(Box::new(transport) as BoxedTransport);
+                    }
+                    #[cfg(all(feature = "tls", not(feature = "rustls-tls")))]
+                    Some(crate::mqtt_client::opts::TlsBackend::Rustls) => {
+                        // Rustls backend selected but feature not enabled
+                        return Err(MqttClientError::ProtocolViolation {
+                            message:
+                                "Rustls TLS backend selected but 'rustls-tls' feature not enabled"
+                                    .to_string(),
+                        });
+                    }
+                    None => {
+                        // Backward compatibility: default to Native if available
+                        #[cfg(feature = "tls")]
+                        {
+                            let transport = TlsTransport::connect(addr).await.map_err(|e| {
+                                MqttClientError::ConnectionLost {
+                                    reason: format!("TLS connection failed to {}: {}", peer, e),
+                                }
+                            })?;
+                            return Ok(Box::new(transport) as BoxedTransport);
+                        }
+                        #[cfg(not(feature = "tls"))]
+                        {
+                            return Err(MqttClientError::ProtocolViolation {
+                                message: format!(
+                                    "TLS backend not selected for mqtts:// URL and native TLS unavailable. Enable rustls-tls or set backend explicitly. Peer: {}",
+                                    peer
+                                ),
+                            });
+                        }
+                    }
+                    #[allow(unreachable_patterns)]
+                    _ => {
+                        return Err(MqttClientError::ProtocolViolation {
+                            message: "Unsupported TLS backend configuration".to_string(),
+                        });
+                    }
+                }
             }
-            #[cfg(not(feature = "tls"))]
+            #[cfg(not(any(feature = "tls", feature = "rustls-tls")))]
             {
-                Err(MqttClientError::ProtocolViolation {
+                return Err(MqttClientError::ProtocolViolation {
                     message: format!(
-                        "TLS transport not available. Enable the 'tls' feature to use mqtts:// URLs. Peer: {}",
+                        "TLS transport not available. Enable 'tls' or 'rustls-tls' feature to use mqtts:// URLs. Peer: {}",
                         peer
                     ),
-                })
+                });
             }
         } else if peer.starts_with("quic://") {
             #[cfg(feature = "quic")]
