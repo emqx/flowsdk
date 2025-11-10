@@ -102,7 +102,8 @@ jobs:
   # Continuous fuzzing - long runs on schedule
   continuous-fuzzing:
     name: Continuous Fuzzing
-    runs-on: ubuntu-latest
+    # self-hosted fuzz machine
+    runs-on: fuzz
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     strategy:
       fail-fast: false
