@@ -145,9 +145,21 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    For production, use proper certificate validation!");
     println!();
 
+    // Get broker address from command line or use default
+    let args: Vec<String> = std::env::args().collect();
+    let broker_addr = if args.len() > 1 {
+        args[1].as_str()
+    } else {
+        "broker.emqx.io:14567"
+    };
+
+    let peer_url = format!("quic://{}", broker_addr);
+    println!("📡 Connecting to broker: {}", peer_url);
+    println!();
+
     // Configure MQTT client options with quic:// scheme
     let mqtt_options = MqttClientOptions::builder()
-        .peer("quic://broker.emqx.io:14567") // Use quic:// scheme
+        .peer(&peer_url) // Use quic:// scheme with configurable broker
         .client_id("tokio_quic_example_client")
         .keep_alive(60)
         .clean_start(true)
@@ -175,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create tokio async MQTT client
     let client = TokioAsyncMqttClient::new(mqtt_options, event_handler, async_config).await?;
 
-    println!("📡 Connecting to MQTT broker via QUIC...");
+    println!("📡 Initiating QUIC connection...");
     client.connect().await?;
 
     // Give some time for connection
