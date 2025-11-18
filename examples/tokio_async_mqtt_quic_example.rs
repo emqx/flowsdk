@@ -12,6 +12,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         TokioMqttEventHandler,
     };
     use flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
     use tokio::time::{sleep, Duration};
 
     /// Simple event handler for the QUIC async client
@@ -184,17 +186,37 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     sleep(Duration::from_secs(1)).await;
 
-    println!("📤 Publishing test message...");
-    client
-        .publish("test/quic/topic", b"Hello from QUIC!", 1, false)
-        .await?;
+    println!("📤 Publishing messages continuously (Press Ctrl-C to stop)...");
 
-    sleep(Duration::from_secs(2)).await;
+    // Set up Ctrl-C handler
+    let running = Arc::new(AtomicBool::new(true));
+    let r = running.clone();
+    ctrlc::set_handler(move || {
+        println!("\n🛑 Ctrl-C received, stopping...");
+        r.store(false, Ordering::SeqCst);
+    })
+    .expect("Error setting Ctrl-C handler");
 
-    println!("🏓 Sending ping...");
+    let mut counter = 0u64;
+    while running.load(Ordering::SeqCst) {
+        counter += 1;
+        let message = format!("Hello from QUIC! Message #{}", counter);
+
+        match client
+            .publish("test/quic/topic", message.as_bytes(), 1, false)
+            .await
+        {
+            Ok(_) => println!("📤 Published message #{}", counter),
+            Err(e) => eprintln!("❌ Failed to publish message #{}: {}", counter, e),
+        }
+
+        sleep(Duration::from_secs(1)).await;
+    }
+
+    println!("🏓 Sending final ping...");
     client.ping().await?;
 
-    sleep(Duration::from_secs(2)).await;
+    sleep(Duration::from_secs(1)).await;
 
     println!("👋 Disconnecting...");
     client.disconnect().await?;
