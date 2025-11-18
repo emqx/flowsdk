@@ -29,3 +29,12 @@ cargo clean --workspace                # Everything
 cargo clean                            # Main library
 cd mqtt_grpc_duality && cargo clean    # gRPC Proxy workspace
 ```
+
+## Static compile QUIC example
+```bash
+# Compile
+cargo build --example=tokio_async_mqtt_quic_example  --no-default-features --target=aarch64-unknown-linux-musl --features quic
+
+# run
+./target/aarch64-unknown-linux-musl/debug/examples/tokio_async_mqtt_quic_example
+```
