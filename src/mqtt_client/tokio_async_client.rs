@@ -2993,16 +2993,16 @@ impl TokioClientWorker {
                                 reason: format!("TLS connection failed to {}: {}", peer, e),
                             }
                         })?;
-                        return Ok(Box::new(transport) as BoxedTransport);
+                        Ok(Box::new(transport) as BoxedTransport)
                     }
                     #[cfg(all(feature = "tls", not(feature = "rustls-tls")))]
                     Some(crate::mqtt_client::opts::TlsBackend::Rustls) => {
                         // Rustls backend selected but feature not enabled
-                        return Err(MqttClientError::ProtocolViolation {
+                        Err(MqttClientError::ProtocolViolation {
                             message:
                                 "Rustls TLS backend selected but 'rustls-tls' feature not enabled"
                                     .to_string(),
-                        });
+                        })
                     }
                     None => {
                         // Backward compatibility: default to Native if available
@@ -3013,7 +3013,7 @@ impl TokioClientWorker {
                                     reason: format!("TLS connection failed to {}: {}", peer, e),
                                 }
                             })?;
-                            return Ok(Box::new(transport) as BoxedTransport);
+                            Ok(Box::new(transport) as BoxedTransport)
                         }
                         #[cfg(not(feature = "tls"))]
                         {
@@ -3026,11 +3026,9 @@ impl TokioClientWorker {
                         }
                     }
                     #[allow(unreachable_patterns)]
-                    _ => {
-                        return Err(MqttClientError::ProtocolViolation {
-                            message: "Unsupported TLS backend configuration".to_string(),
-                        });
-                    }
+                    _ => Err(MqttClientError::ProtocolViolation {
+                        message: "Unsupported TLS backend configuration".to_string(),
+                    }),
                 }
             }
             #[cfg(not(any(feature = "tls", feature = "rustls-tls")))]

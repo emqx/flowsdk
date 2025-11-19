@@ -175,7 +175,7 @@ pub struct PublishResult {
 impl PublishResult {
     pub fn is_success(&self) -> bool {
         // Compatible with older Rust: Option::map_or instead of is_none_or
-        self.reason_code.map_or(true, |code| code == 0) // QoS 0 or reason code 0
+        self.reason_code.is_none_or(|code| code == 0) // QoS 0 or reason code 0
     }
 
     /// Returns a description of the PUBACK/PUBREC reason code
