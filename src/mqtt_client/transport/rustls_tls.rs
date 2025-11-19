@@ -134,12 +134,10 @@ mod imp {
         pub fn add_roots_from_pem(mut self, pem_data: &[u8]) -> Result<Self, TransportError> {
             let iter = CertificateDer::pem_slice_iter(pem_data);
             let mut any = false;
-            for item in iter {
-                if let Ok(c) = item {
-                    self.custom_root_certs
-                        .push(c.into_owned().as_ref().to_vec());
-                    any = true;
-                }
+            for c in iter.flatten() {
+                self.custom_root_certs
+                    .push(c.into_owned().as_ref().to_vec());
+                any = true;
             }
             if !any {
                 return Err(TransportError::Tls(
@@ -246,7 +244,7 @@ mod imp {
         /// Build the final `RustlsTlsConfig`.
         pub fn build(self) -> RustlsTlsConfig {
             RustlsTlsConfig {
-                use_system_roots: if self.use_system_roots { true } else { true },
+                use_system_roots: self.use_system_roots,
                 custom_root_certs: self.custom_root_certs,
                 client_cert_chain: self.client_cert_chain,
                 client_private_key: self.client_private_key,
@@ -261,19 +259,24 @@ mod imp {
     /// This should ONLY be used for testing and development!
     #[derive(Debug)]
     struct InsecureServerCertVerifier {
-        /// If true, also skip hostname (SNI) verification.
         skip_name_check: bool,
     }
 
     impl ServerCertVerifier for InsecureServerCertVerifier {
         fn verify_server_cert(
             &self,
-            _end_entity: &CertificateDer<'_>,
+            end_entity: &CertificateDer<'_>,
             _intermediates: &[CertificateDer<'_>],
-            _server_name: &ServerName<'_>,
+            server_name: &ServerName<'_>,
             _ocsp_response: &[u8],
             _now: UnixTime,
         ) -> Result<ServerCertVerified, rustls::Error> {
+            // If skip_name_check is false, we should verify the hostname
+            if !self.skip_name_check {
+                // Perform hostname verification using rustls's built-in verification
+                let cert = rustls::server::ParsedCertificate::try_from(end_entity)?;
+                rustls::client::verify_server_name(&cert, server_name)?;
+            }
             // Accept any certificate without validation; optionally ignore name
             Ok(ServerCertVerified::assertion())
         }

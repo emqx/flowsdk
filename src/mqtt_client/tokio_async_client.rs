@@ -2984,7 +2984,7 @@ impl TokioClientWorker {
                                         peer, e
                                     ),
                                 })?;
-                        return Ok(Box::new(transport) as BoxedTransport);
+                        Ok(Box::new(transport) as BoxedTransport)
                     }
                     #[cfg(feature = "tls")]
                     Some(crate::mqtt_client::opts::TlsBackend::Native) => {
