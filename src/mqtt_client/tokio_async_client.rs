@@ -1574,7 +1574,7 @@ impl ConfigBuilder {
     /// ```no_run
     /// use flowsdk::mqtt_client::TokioAsyncClientConfig;
     /// let config = TokioAsyncClientConfig::builder()
-    ///     .quic_datagram_receive_buffer_size(Some(1000))
+    ///     .quic_datagram_receive_buffer_size(1000)
     ///     .build();
     /// ```
     #[cfg(feature = "quic")]

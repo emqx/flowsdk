@@ -21,7 +21,7 @@
 //!
 //! # async fn example() -> std::io::Result<()> {
 //! // Create malformed CONNECT with reserved bit set
-//! let connect = MqttConnect::default();
+//! let connect = MqttConnect::new("test_client".to_string(), None, None, None, 60, true, vec![]);
 //! let mut builder = RawPacketBuilder::from_packet(
 //!     MqttPacket::Connect5(connect)
 //! )?;
@@ -63,7 +63,7 @@ pub mod test_client;
 /// # use flowsdk::mqtt_serde::control_packet::MqttPacket;
 /// # use flowsdk::mqtt_serde::mqttv5::connectv5::MqttConnect;
 /// # fn example() -> std::io::Result<()> {
-/// let connect = MqttConnect::default();
+/// let connect = MqttConnect::new("test_client".to_string(), None, None, None, 60, true, vec![]);
 /// let mut builder = RawPacketBuilder::from_packet(
 ///     MqttPacket::Connect5(connect)
 /// )?;
@@ -168,7 +168,7 @@ impl RawPacketBuilder {
     /// # use flowsdk::mqtt_serde::control_packet::MqttPacket;
     /// # use flowsdk::mqtt_serde::mqttv5::connectv5::MqttConnect;
     /// # fn example() -> std::io::Result<()> {
-    /// let connect = MqttConnect::default();
+    /// let connect = MqttConnect::new("test_client".to_string(), None, None, None, 60, true, vec![]);
     /// let mut builder = RawPacketBuilder::from_packet(
     ///     MqttPacket::Connect5(connect)
     /// )?;
@@ -244,7 +244,7 @@ impl RawPacketBuilder {
     /// # use flowsdk::mqtt_serde::control_packet::MqttPacket;
     /// # use flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish;
     /// # fn example() -> std::io::Result<()> {
-    /// let publish = MqttPublish::default();
+    /// let publish = MqttPublish::new(0, "test".to_string(), None, vec![], false, false);
     /// let mut builder = RawPacketBuilder::from_packet(
     ///     MqttPacket::Publish5(publish)
     /// )?;
@@ -295,7 +295,7 @@ impl RawPacketBuilder {
     /// # use flowsdk::mqtt_serde::control_packet::MqttPacket;
     /// # use flowsdk::mqtt_serde::mqttv5::connectv5::MqttConnect;
     /// # fn example() -> std::io::Result<()> {
-    /// let connect = MqttConnect::default();
+    /// let connect = MqttConnect::new("test_client".to_string(), None, None, None, 60, true, vec![]);
     /// let mut builder = RawPacketBuilder::from_packet(
     ///     MqttPacket::Connect5(connect)
     /// )?;
