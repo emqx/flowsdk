@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["TransportError"],"mod":["quic","tcp","tls"],"trait":["Transport"],"type":["BoxedTransport"]};
+window.SIDEBAR_ITEMS = {"enum":["TransportError"],"fn":["parse_mqtt_address"],"mod":["quic","rustls_tls","tcp","tls"],"trait":["Transport"],"type":["BoxedTransport"]};
