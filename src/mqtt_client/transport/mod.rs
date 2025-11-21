@@ -42,6 +42,26 @@ pub enum TransportError {
     InvalidAddress(String),
 }
 
+/// Parse MQTT address to extract hostname and socket address
+///
+/// Supports formats:
+/// - "mqtts://host:port" → ("host", "host:port")
+/// - "host:port" → ("host", "host:port")
+pub fn parse_mqtt_address(addr: &str) -> Result<(String, String), TransportError> {
+    // Remove mqtts:// prefix if present
+    let addr = addr.trim_start_matches("mqtts://");
+
+    // Split host and port
+    if let Some((host, port)) = addr.rsplit_once(':') {
+        Ok((host.to_string(), format!("{}:{}", host, port)))
+    } else {
+        Err(TransportError::InvalidAddress(format!(
+            "Invalid address format: '{}'. Expected 'host:port' or 'mqtts://host:port'",
+            addr
+        )))
+    }
+}
+
 /// Transport trait for different connection types
 ///
 /// This trait provides a unified interface for TCP, TLS, WebSocket, and other

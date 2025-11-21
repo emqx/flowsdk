@@ -14,6 +14,7 @@ mod imp {
     use rustls_pki_types::pem::PemObject;
     use rustls_pki_types::{CertificateDer, PrivateKeyDer, UnixTime};
 
+    use crate::mqtt_client::transport::parse_mqtt_address;
     use tokio_rustls::{client::TlsStream as RustlsTlsStream, TlsConnector as RustlsTlsConnector};
 
     /// TLS configuration for Rustls backend
@@ -449,23 +450,6 @@ mod imp {
             cx: &mut std::task::Context<'_>,
         ) -> std::task::Poll<std::io::Result<()>> {
             std::pin::Pin::new(&mut self.stream).poll_shutdown(cx)
-        }
-    }
-
-    /// Parse MQTT address to extract hostname and socket address
-    ///
-    /// Supports formats:
-    /// - "mqtts://host:port" → ("host", "host:port")
-    /// - "host:port" → ("host", "host:port")
-    fn parse_mqtt_address(addr: &str) -> Result<(String, String), TransportError> {
-        let addr = addr.trim_start_matches("mqtts://");
-        if let Some((host, port)) = addr.rsplit_once(':') {
-            Ok((host.to_string(), format!("{}:{}", host, port)))
-        } else {
-            Err(TransportError::InvalidAddress(format!(
-                "Invalid address format: '{}'. Expected 'host:port' or 'mqtts://host:port'",
-                addr
-            )))
         }
     }
 }

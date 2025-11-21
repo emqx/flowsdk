@@ -3004,6 +3004,14 @@ impl TokioClientWorker {
                                     .to_string(),
                         })
                     }
+                    #[cfg(all(feature = "rustls-tls", not(feature = "tls")))]
+                    Some(crate::mqtt_client::opts::TlsBackend::Native) => {
+                        // Native TLS backend selected but feature not enabled
+                        Err(MqttClientError::ProtocolViolation {
+                            message: "Native TLS backend selected but 'tls' feature not enabled"
+                                .to_string(),
+                        })
+                    }
                     None => {
                         // Backward compatibility: default to Native if available
                         #[cfg(feature = "tls")]
