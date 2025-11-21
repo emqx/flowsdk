@@ -2,8 +2,7 @@
 // Demonstrates using TokioAsyncMqttClient with QUIC transport
 
 #[cfg(feature = "quic")]
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn run_example(test_mode: bool) -> Result<(), Box<dyn std::error::Error>> {
     use flowsdk::mqtt_client::client::{
         ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
     };
@@ -12,8 +11,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         TokioMqttEventHandler,
     };
     use flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish;
-    use std::sync::atomic::{AtomicBool, Ordering};
-    use std::sync::Arc;
     use tokio::time::{sleep, Duration};
 
     /// Simple event handler for the QUIC async client
@@ -145,21 +142,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("    For production, use proper certificate validation!");
     println!();
 
-    // Get broker address from command line or use default
-    let args: Vec<String> = std::env::args().collect();
-    let broker_addr = if args.len() > 1 {
-        args[1].as_str()
-    } else {
-        "broker.emqx.io:14567"
-    };
-
+    let broker_addr = "broker.emqx.io:14567";
     let peer_url = format!("quic://{}", broker_addr);
     println!("📡 Connecting to broker: {}", peer_url);
     println!();
 
     // Configure MQTT client options with quic:// scheme
     let mqtt_options = MqttClientOptions::builder()
-        .peer(&peer_url) // Use quic:// scheme with configurable broker
+        .peer(&peer_url)
         .client_id("tokio_quic_example_client")
         .keep_alive(60)
         .clean_start(true)
@@ -171,14 +161,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .reconnect_delay_ms(1000)
         .max_reconnect_delay_ms(30000)
         .max_reconnect_attempts(5)
-        // QUIC-specific configuration
-        .quic_insecure_skip_verify(true) // ⚠️ For testing only! Use proper certs in production
-        .quic_enable_0rtt(false) // Disable 0-RTT for security
+        .quic_insecure_skip_verify(true) // ⚠️ For testing only!
+        .quic_enable_0rtt(false)
         .quic_datagram_receive_buffer_size(0) // disable datagram
         // For production with custom CA:
         // let ca_pem = std::fs::read_to_string("ca.pem").unwrap();
         // .quic_custom_root_ca_pem(ca_pem)
-        // .quic_insecure_skip_verify(false)  // Enable verification
         .build();
 
     // Create event handler
@@ -190,7 +178,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("📡 Initiating QUIC connection...");
     client.connect().await?;
 
-    // Give some time for connection
     sleep(Duration::from_secs(2)).await;
 
     println!("📋 Subscribing to test topic...");
@@ -198,34 +185,52 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     sleep(Duration::from_secs(1)).await;
 
-    println!("📤 Publishing messages continuously (Press Ctrl-C to stop)...");
-
-    // Set up Ctrl-C handler
-    let running = Arc::new(AtomicBool::new(true));
-    let r = running.clone();
-    ctrlc::set_handler(move || {
-        println!("\n🛑 Ctrl-C received, stopping...");
-        r.store(false, Ordering::SeqCst);
-    })
-    .expect("Error setting Ctrl-C handler");
-
-    let mut counter = 0u64;
-    while running.load(Ordering::SeqCst) {
-        counter += 1;
-        let message = format!("Hello from QUIC! Message #{}", counter);
-
-        match client
-            .publish("test/quic/topic", message.as_bytes(), 1, false)
-            .await
-        {
-            Ok(_) => println!("📤 Published message #{}", counter),
-            Err(e) => eprintln!("❌ Failed to publish message #{}: {}", counter, e),
+    if test_mode {
+        println!("📤 Publishing test messages...");
+        for i in 1..=3 {
+            let message = format!("Hello from QUIC! Message #{}", i);
+            match client
+                .publish("test/quic/topic", message.as_bytes(), 1, false)
+                .await
+            {
+                Ok(_) => println!("📤 Published message #{}", i),
+                Err(e) => eprintln!("❌ Failed to publish message #{}: {}", i, e),
+            }
+            sleep(Duration::from_millis(500)).await;
         }
+    } else {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        use std::sync::Arc;
 
-        sleep(Duration::from_secs(1)).await;
+        println!("📤 Publishing messages continuously (Press Ctrl-C to stop)...");
+
+        // Set up Ctrl-C handler
+        let running = Arc::new(AtomicBool::new(true));
+        let r = running.clone();
+        ctrlc::set_handler(move || {
+            println!("\n🛑 Ctrl-C received, stopping...");
+            r.store(false, Ordering::SeqCst);
+        })
+        .expect("Error setting Ctrl-C handler");
+
+        let mut counter = 0u64;
+        while running.load(Ordering::SeqCst) {
+            counter += 1;
+            let message = format!("Hello from QUIC! Message #{}", counter);
+
+            match client
+                .publish("test/quic/topic", message.as_bytes(), 1, false)
+                .await
+            {
+                Ok(_) => println!("📤 Published message #{}", counter),
+                Err(e) => eprintln!("❌ Failed to publish message #{}: {}", counter, e),
+            }
+
+            sleep(Duration::from_secs(1)).await;
+        }
     }
 
-    println!("🏓 Sending final ping...");
+    println!("🏓 Sending ping...");
     client.ping().await?;
 
     sleep(Duration::from_secs(1)).await;
@@ -242,8 +247,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
+#[cfg(feature = "quic")]
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    run_example(false).await
+}
+
 #[cfg(not(feature = "quic"))]
 fn main() {
     eprintln!("This example requires the `quic` feature. Run with:");
     eprintln!("cargo run --example tokio_async_mqtt_quic_example --features quic");
+}
+
+#[cfg(all(test, feature = "quic"))]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_example() {
+        // Call run_example in test mode (3 messages only)
+        // For CI coverage
+        run_example(true).await.unwrap();
+    }
 }
