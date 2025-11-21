@@ -1,4 +1,7 @@
 # FlowSDK
+[![CI](https://github.com/emqx/flowsdk/actions/workflows/ci.yml/badge.svg)](https://github.com/emqx/flowsdk/actions/workflows/ci.yml)
+[![codecov](https://codecov.io/gh/emqx/flowsdk/branch/main/graph/badge.svg?token=7VJHFC3JSE)](https://codecov.io/gh/emqx/flowsdk)
+[![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
 
 FlowSDK is a safety-first, realistic, behavior-predictable messaging SDK.
 
