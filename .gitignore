@@ -2,3 +2,4 @@
 
 # place MQTT specs
 docs/source
+*cov.info

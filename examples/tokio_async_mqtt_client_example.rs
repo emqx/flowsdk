@@ -154,13 +154,12 @@ impl TokioMqttEventHandler for TokioExampleHandler {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
+async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
     println!("🚀 Starting Tokio Async MQTT Client Example");
 
     // Configure MQTT client options using builder pattern
     let mqtt_options = MqttClientOptions::builder()
-        .peer("localhost:1883")
+        .peer("broker.emqx.io:1883")
         .client_id("tokio_async_example_client")
         .keep_alive(10)
         .reconnect(true)
@@ -304,4 +303,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("✅ Tokio Async MQTT Client Example completed!");
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    run_example().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_example() {
+        // Call run_example to get coverage
+        run_example().await.unwrap();
+    }
 }

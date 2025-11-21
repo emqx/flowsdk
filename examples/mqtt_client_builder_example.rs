@@ -33,8 +33,7 @@ impl TokioMqttEventHandler for BuilderExampleHandler {
     }
 }
 #[allow(clippy::field_reassign_with_default)]
-#[tokio::main]
-async fn main() -> io::Result<()> {
+async fn run_example() -> io::Result<()> {
     println!("🚀 MQTT Client Options Builder Pattern Examples\n");
     println!("{}", "=".repeat(60));
 
@@ -130,7 +129,7 @@ async fn main() -> io::Result<()> {
     println!("{}", "-".repeat(60));
 
     let options = MqttClientOptions::builder()
-        .peer("localhost:1883")
+        .peer("broker.emqx.io:1883")
         .client_id("builder_example_working_client")
         .clean_start(true)
         .keep_alive(60)
@@ -175,4 +174,20 @@ async fn main() -> io::Result<()> {
     println!("✅ Builder pattern examples completed!");
 
     Ok(())
+}
+
+#[tokio::main]
+async fn main() -> io::Result<()> {
+    run_example().await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_example() {
+        // Call run_example to get coverage
+        run_example().await.unwrap();
+    }
 }
