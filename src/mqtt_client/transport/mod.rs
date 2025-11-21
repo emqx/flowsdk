@@ -15,6 +15,9 @@ pub mod tls;
 #[cfg(feature = "quic")]
 pub mod quic;
 
+#[cfg(feature = "rustls-tls")]
+pub mod rustls_tls;
+
 /// Error type for transport operations
 #[derive(Debug, thiserror::Error)]
 pub enum TransportError {
@@ -24,7 +27,7 @@ pub enum TransportError {
     #[error("IO error: {0}")]
     Io(#[from] io::Error),
 
-    #[cfg(feature = "tls")]
+    #[cfg(any(feature = "tls", feature = "rustls-tls"))]
     #[error("TLS error: {0}")]
     Tls(String),
 
@@ -37,6 +40,26 @@ pub enum TransportError {
 
     #[error("Invalid address: {0}")]
     InvalidAddress(String),
+}
+
+/// Parse MQTT address to extract hostname and socket address
+///
+/// Supports formats:
+/// - "mqtts://host:port" → ("host", "host:port")
+/// - "host:port" → ("host", "host:port")
+pub fn parse_mqtt_address(addr: &str) -> Result<(String, String), TransportError> {
+    // Remove mqtts:// prefix if present
+    let addr = addr.trim_start_matches("mqtts://");
+
+    // Split host and port
+    if let Some((host, port)) = addr.rsplit_once(':') {
+        Ok((host.to_string(), format!("{}:{}", host, port)))
+    } else {
+        Err(TransportError::InvalidAddress(format!(
+            "Invalid address format: '{}'. Expected 'host:port' or 'mqtts://host:port'",
+            addr
+        )))
+    }
 }
 
 /// Transport trait for different connection types
@@ -80,3 +103,6 @@ pub use tcp::TcpTransport;
 
 #[cfg(feature = "tls")]
 pub use tls::TlsTransport;
+
+#[cfg(feature = "rustls-tls")]
+pub use rustls_tls::RustlsTlsTransport;

@@ -4,6 +4,7 @@
 //! It wraps TCP connections with TLS encryption and certificate validation.
 
 use super::{Transport, TransportError};
+use crate::mqtt_client::transport::parse_mqtt_address;
 use async_trait::async_trait;
 use native_tls::{Certificate, Identity, TlsConnector as NativeTlsConnector};
 use std::pin::Pin;
@@ -258,26 +259,6 @@ impl TlsConfigBuilder {
             accept_invalid_certs: self.accept_invalid_certs,
             accept_invalid_hostnames: self.accept_invalid_hostnames,
         }
-    }
-}
-
-/// Parse MQTT address to extract hostname and socket address
-///
-/// Supports formats:
-/// - "mqtts://host:port" → ("host", "host:port")
-/// - "host:port" → ("host", "host:port")
-fn parse_mqtt_address(addr: &str) -> Result<(String, String), TransportError> {
-    // Remove mqtts:// prefix if present
-    let addr = addr.trim_start_matches("mqtts://");
-
-    // Split host and port
-    if let Some((host, port)) = addr.rsplit_once(':') {
-        Ok((host.to_string(), format!("{}:{}", host, port)))
-    } else {
-        Err(TransportError::InvalidAddress(format!(
-            "Invalid address format: '{}'. Expected 'host:port' or 'mqtts://host:port'",
-            addr
-        )))
     }
 }
 
