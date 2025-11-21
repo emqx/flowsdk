@@ -24,7 +24,7 @@ use tokio::time::{timeout, Duration};
 /// let mut client = RawTestClient::connect("localhost:1883").await?;
 ///
 /// // Send malformed CONNECT with reserved bit set
-/// let connect = MqttConnect::default();
+/// let connect = MqttConnect::new("test_client".to_string(), None, None, None, 60, true, vec![]);
 /// let mut builder = RawPacketBuilder::from_packet(
 ///     MqttPacket::Connect5(connect)
 /// )?;

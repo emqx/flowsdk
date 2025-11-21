@@ -94,7 +94,7 @@ impl MalformedPacketGenerator {
     /// # use flowsdk::mqtt_client::raw_packet::malformed::MalformedPacketGenerator;
     /// # fn example() -> std::io::Result<()> {
     /// // Static methods - no instance needed
-    /// let packet = gen.qos0_with_packet_id()?;
+    /// let packet = MalformedPacketGenerator::qos0_with_packet_id()?;
     /// // QoS 0 PUBLISH incorrectly includes packet ID
     /// # Ok(())
     /// # }
