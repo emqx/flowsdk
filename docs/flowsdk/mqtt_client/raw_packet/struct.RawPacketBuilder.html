@@ -10,7 +10,7 @@ Only use for protocol compliance testing.</p>
 <li>Full control over packet structure</li>
 </ul>
 <h2 id="example"><a class="doc-anchor" href="#example">§</a>Example</h2>
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>connect = MqttConnect::default();
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>connect = MqttConnect::new(<span class="string">"test_client"</span>.to_string(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="number">60</span>, <span class="bool-val">true</span>, <span class="macro">vec!</span>[]);
 <span class="kw">let </span><span class="kw-2">mut </span>builder = RawPacketBuilder::from_packet(
     MqttPacket::Connect5(connect)
 )<span class="question-mark">?</span>;
@@ -52,7 +52,7 @@ builder.set_byte(<span class="number">0</span>, <span class="number">0xC1</span>
 <li><code>flags</code> - New flags value (only lower 4 bits are used)</li>
 </ul>
 <h5 id="example-4"><a class="doc-anchor" href="#example-4">§</a>Example</h5>
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>connect = MqttConnect::default();
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>connect = MqttConnect::new(<span class="string">"test_client"</span>.to_string(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="number">60</span>, <span class="bool-val">true</span>, <span class="macro">vec!</span>[]);
 <span class="kw">let </span><span class="kw-2">mut </span>builder = RawPacketBuilder::from_packet(
     MqttPacket::Connect5(connect)
 )<span class="question-mark">?</span>;
@@ -82,7 +82,7 @@ builder.append_bytes(<span class="kw-2">&amp;</span>[<span class="number">0xC0</
 <li><code>bytes</code> - Bytes to insert</li>
 </ul>
 <h5 id="example-7"><a class="doc-anchor" href="#example-7">§</a>Example</h5>
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>publish = MqttPublish::default();
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>publish = MqttPublish::new(<span class="number">0</span>, <span class="string">"test"</span>.to_string(), <span class="prelude-val">None</span>, <span class="macro">vec!</span>[], <span class="bool-val">false</span>, <span class="bool-val">false</span>);
 <span class="kw">let </span><span class="kw-2">mut </span>builder = RawPacketBuilder::from_packet(
     MqttPacket::Publish5(publish)
 )<span class="question-mark">?</span>;
@@ -104,7 +104,7 @@ builder.remove_bytes(<span class="number">2</span>, <span class="number">2</span
 <li><code>len</code> - New length of the packet</li>
 </ul>
 <h5 id="example-9"><a class="doc-anchor" href="#example-9">§</a>Example</h5>
-<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>connect = MqttConnect::default();
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">let </span>connect = MqttConnect::new(<span class="string">"test_client"</span>.to_string(), <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="prelude-val">None</span>, <span class="number">60</span>, <span class="bool-val">true</span>, <span class="macro">vec!</span>[]);
 <span class="kw">let </span><span class="kw-2">mut </span>builder = RawPacketBuilder::from_packet(
     MqttPacket::Connect5(connect)
 )<span class="question-mark">?</span>;

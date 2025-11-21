@@ -26,7 +26,7 @@ Each method documents which statement it violates.</p>
 </blockquote>
 <h5 id="example-3"><a class="doc-anchor" href="#example-3">§</a>Example</h5>
 <div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="comment">// Static methods - no instance needed
-</span><span class="kw">let </span>packet = gen.qos0_with_packet_id()<span class="question-mark">?</span>;
+</span><span class="kw">let </span>packet = MalformedPacketGenerator::qos0_with_packet_id()<span class="question-mark">?</span>;
 <span class="comment">// QoS 0 PUBLISH incorrectly includes packet ID</span></code></pre></div></div></details><details class="toggle method-toggle" open><summary><section id="method.invalid_qos_both_bits" class="method"><a class="src rightside" href="../../../../src/flowsdk/mqtt_client/raw_packet/malformed.rs.html#133-147">Source</a><h4 class="code-header">pub fn <a href="#method.invalid_qos_both_bits" class="fn">invalid_qos_both_bits</a>() -&gt; <a class="type" href="https://doc.rust-lang.org/1.91.1/std/io/error/type.Result.html" title="type std::io::error::Result">Result</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.91.1/alloc/vec/struct.Vec.html" title="struct alloc::vec::Vec">Vec</a>&lt;<a class="primitive" href="https://doc.rust-lang.org/1.91.1/std/primitive.u8.html">u8</a>&gt;&gt;</h4></section></summary><div class="docblock"><p>Create packet with invalid QoS (both bits set to 1)</p>
 <p><strong>Violates</strong>: MQTT-3.3.1-4</p>
 <blockquote>
