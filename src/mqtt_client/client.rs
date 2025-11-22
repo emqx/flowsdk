@@ -10,6 +10,15 @@ use crate::mqtt_serde::mqttv5::publishv5;
 use crate::mqtt_serde::mqttv5::pubrelv5;
 use crate::mqtt_serde::mqttv5::subscribev5;
 use crate::mqtt_serde::mqttv5::unsubscribev5;
+use crate::mqtt_serde::mqttv5::will as willv5;
+
+use crate::mqtt_serde::mqttv3::connectv3;
+use crate::mqtt_serde::mqttv3::disconnectv3;
+use crate::mqtt_serde::mqttv3::pingreqv3;
+use crate::mqtt_serde::mqttv3::publishv3;
+use crate::mqtt_serde::mqttv3::pubrelv3;
+use crate::mqtt_serde::mqttv3::subscribev3;
+use crate::mqtt_serde::mqttv3::unsubscribev3;
 
 use crate::mqtt_serde::MqttStream;
 
@@ -264,6 +273,25 @@ impl MqttClient {
         }
     }
 
+    // Helper methods for protocol version
+    fn is_v3(&self) -> bool {
+        self.options.mqtt_version == 3 || self.options.mqtt_version == 4
+    }
+
+    fn is_v5(&self) -> bool {
+        self.options.mqtt_version == 5
+    }
+
+    // Convert v5 Will to v3 Will (strip properties)
+    fn convert_will_v5_to_v3(will_v5: &willv5::Will) -> connectv3::Will {
+        connectv3::Will {
+            retain: will_v5.will_retain,
+            qos: will_v5.will_qos,
+            topic: will_v5.will_topic.clone(),
+            message: will_v5.will_message.clone(),
+        }
+    }
+
     // methods for unhandled packets
     pub fn unhandled_packets_mut(&mut self) -> &mut Vec<MqttPacket> {
         &mut self.context.unhandled_packets
@@ -299,48 +327,101 @@ impl MqttClient {
                 self.context.session = Some(ClientSession::new());
             }
 
-            // Send CONNECT packet with
-            let connect_packet = connectv5::MqttConnect::new(
-                self.options.client_id.clone(),
-                self.options.username.clone(),
-                self.options.password.clone(),
-                self.options.will.clone(),
-                self.options.keep_alive,
-                self.options.clean_start,
-                vec![], // Add properties as needed
-            );
+            // Create CONNECT packet based on protocol version
+            if self.is_v3() {
+                // MQTT v3.1.1
+                let mut connect_packet = connectv3::MqttConnect::new(
+                    self.options.client_id.clone(),
+                    self.options.keep_alive,
+                    self.options.clean_start, // v3 uses clean_session
+                );
+                connect_packet.username = self.options.username.clone();
+                connect_packet.password = self.options.password.clone();
 
-            // stream used, now save it
-            let mqtt_stream = MqttStream::new(stream, 16384, 5);
-            self.context.mqtt_stream = Some(mqtt_stream);
+                // Convert v5 Will to v3 Will if present
+                if let Some(will_v5) = &self.options.will {
+                    connect_packet.will = Some(Self::convert_will_v5_to_v3(will_v5));
+                }
 
-            // Send CONNECT packet
-            self.send_packet(connect_packet)?;
+                // stream used, now save it
+                let mqtt_stream = MqttStream::new(stream, 16384, self.options.mqtt_version);
+                self.context.mqtt_stream = Some(mqtt_stream);
 
-            if let Some(packet) = self.recv_packet()? {
-                match packet {
-                    MqttPacket::ConnAck5(connack) => {
-                        // Always update session_present in context
-                        self.context.session_present = connack.session_present;
+                // Send CONNECT packet
+                self.send_packet(connect_packet)?;
 
-                        // If connection successful and session not present, clear session state
-                        if connack.reason_code == 0 && !connack.session_present {
-                            if let Some(sess) = &mut self.context.session {
-                                sess.clear();
+                if let Some(packet) = self.recv_packet()? {
+                    match packet {
+                        MqttPacket::ConnAck3(connack) => {
+                            // Always update session_present in context
+                            self.context.session_present = connack.session_present;
+
+                            // If connection successful and session not present, clear session state
+                            // v3 return code 0 = Connection Accepted
+                            if connack.return_code == 0 && !connack.session_present {
+                                if let Some(sess) = &mut self.context.session {
+                                    sess.clear();
+                                }
+                                // Also clear pending operations since session is reset
+                                self.clear_pending_operations();
                             }
-                            // Also clear pending operations since session is reset
-                            self.clear_pending_operations();
-                        }
 
-                        // Return the connection result regardless of reason code
-                        return Ok(ConnectionResult {
-                            reason_code: connack.reason_code,
-                            session_present: connack.session_present,
-                            properties: connack.properties,
-                        });
+                            // Return the connection result
+                            return Ok(ConnectionResult {
+                                reason_code: connack.return_code,
+                                session_present: connack.session_present,
+                                properties: None, // v3 doesn't have properties
+                            });
+                        }
+                        _ => {
+                            return Err(io::Error::other("Expected CONNACK packet"));
+                        }
                     }
-                    _ => {
-                        return Err(io::Error::other("Expected CONNACK packet"));
+                }
+            } else {
+                // MQTT v5
+                let connect_packet = connectv5::MqttConnect::new(
+                    self.options.client_id.clone(),
+                    self.options.username.clone(),
+                    self.options.password.clone(),
+                    self.options.will.clone(),
+                    self.options.keep_alive,
+                    self.options.clean_start,
+                    vec![], // Add properties as needed
+                );
+
+                // stream used, now save it
+                let mqtt_stream = MqttStream::new(stream, 16384, 5);
+                self.context.mqtt_stream = Some(mqtt_stream);
+
+                // Send CONNECT packet
+                self.send_packet(connect_packet)?;
+
+                if let Some(packet) = self.recv_packet()? {
+                    match packet {
+                        MqttPacket::ConnAck5(connack) => {
+                            // Always update session_present in context
+                            self.context.session_present = connack.session_present;
+
+                            // If connection successful and session not present, clear session state
+                            if connack.reason_code == 0 && !connack.session_present {
+                                if let Some(sess) = &mut self.context.session {
+                                    sess.clear();
+                                }
+                                // Also clear pending operations since session is reset
+                                self.clear_pending_operations();
+                            }
+
+                            // Return the connection result regardless of reason code
+                            return Ok(ConnectionResult {
+                                reason_code: connack.reason_code,
+                                session_present: connack.session_present,
+                                properties: connack.properties,
+                            });
+                        }
+                        _ => {
+                            return Err(io::Error::other("Expected CONNACK packet"));
+                        }
                     }
                 }
             }
@@ -356,37 +437,62 @@ impl MqttClient {
     // Subscribe to a topic and wait for SUBACK
     pub fn subscribed(&mut self, topic: &str, qos: u8) -> io::Result<SubscribeResult> {
         if let Some(session) = &mut self.context.session {
-            let subscription = subscribev5::TopicSubscription {
-                topic_filter: topic.to_string(),
-                qos,
-                no_local: false,
-                retain_as_published: false,
-                retain_handling: 0, //@TODO maybe 2 (NO handling) is more appropriate
-            };
-
             let packet_id = session.next_packet_id();
-            let subscribe_packet = subscribev5::MqttSubscribe::new(
-                packet_id,
-                vec![subscription],
-                vec![], // Add properties as needed
-            );
-            // Send SUBSCRIBE packet
-            self.send_packet(subscribe_packet)?;
-            // Wait for SUBACK with matching packet ID
-            if let Some(packet) = self.recv_for_packet(
-                |p| matches!(p, MqttPacket::SubAck5(suback) if suback.packet_id == packet_id),
-            )? {
-                match packet {
-                    MqttPacket::SubAck5(suback) => {
-                        return Ok(SubscribeResult {
-                            packet_id: suback.packet_id,
-                            reason_codes: suback.reason_codes,
-                            properties: suback.properties,
-                        });
+
+            if self.is_v3() {
+                // MQTT v3.1.1
+                let subscribe_packet = subscribev3::MqttSubscribe::new(
+                    packet_id,
+                    vec![subscribev3::SubscriptionTopic {
+                        topic_filter: topic.to_string(),
+                        qos,
+                    }],
+                );
+                self.send_packet(subscribe_packet)?;
+
+                if let Some(packet) = self.recv_for_packet(
+                    |p| matches!(p, MqttPacket::SubAck3(suback) if suback.message_id == packet_id),
+                )? {
+                    match packet {
+                        MqttPacket::SubAck3(suback) => {
+                            return Ok(SubscribeResult {
+                                packet_id: suback.message_id,
+                                reason_codes: suback.return_codes,
+                                properties: vec![], // v3 doesn't have properties
+                            });
+                        }
+                        _ => {
+                            self.context.unhandled_packets.push(packet);
+                        }
                     }
-                    _ => {
-                        // Store unhandled packet for later processing
-                        self.context.unhandled_packets.push(packet);
+                }
+            } else {
+                // MQTT v5
+                let subscription = subscribev5::TopicSubscription {
+                    topic_filter: topic.to_string(),
+                    qos,
+                    no_local: false,
+                    retain_as_published: false,
+                    retain_handling: 0,
+                };
+                let subscribe_packet =
+                    subscribev5::MqttSubscribe::new(packet_id, vec![subscription], vec![]);
+                self.send_packet(subscribe_packet)?;
+
+                if let Some(packet) = self.recv_for_packet(
+                    |p| matches!(p, MqttPacket::SubAck5(suback) if suback.packet_id == packet_id),
+                )? {
+                    match packet {
+                        MqttPacket::SubAck5(suback) => {
+                            return Ok(SubscribeResult {
+                                packet_id: suback.packet_id,
+                                reason_codes: suback.reason_codes,
+                                properties: suback.properties,
+                            });
+                        }
+                        _ => {
+                            self.context.unhandled_packets.push(packet);
+                        }
                     }
                 }
             }
@@ -799,6 +905,7 @@ impl MqttClient {
             }
         };
 
+        // MqttStream version is set at creation time, so next() will parse with correct version
         match stream.next() {
             Some(Ok(packet)) => Ok(Some(packet)),
             Some(Err(parse_error)) => Err(io::Error::new(
