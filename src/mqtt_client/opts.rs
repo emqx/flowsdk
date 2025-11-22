@@ -22,6 +22,11 @@ pub struct MqttClientOptions {
     pub password: Option<Vec<u8>>,
     pub will: Option<Will>,
     pub reconnect: bool,
+    /// MQTT protocol version to use
+    /// - 3 or 4: MQTT v3.1.1 (both values use the same protocol)
+    /// - 5: MQTT v5.0
+    /// Default: 5 (for backward compatibility)
+    pub mqtt_version: u8,
     // --------------------------
     // Extended options
     // --------------------------
@@ -81,6 +86,7 @@ impl Default for MqttClientOptions {
             password: None,
             will: None,
             reconnect: false,
+            mqtt_version: 5,
             sessionless: false,
             subscription_topics: Vec::new(),
             auto_ack: true,
@@ -176,7 +182,31 @@ impl MqttClientOptions {
         self
     }
 
-    /// Set the session expiry interval in seconds (MQTT v5)
+    /// Set the MQTT protocol version
+    ///
+    /// # Arguments
+    /// * `version` - MQTT protocol version (3, 4, or 5)
+    ///   - 3 or 4: MQTT v3.1.1 (both use the same protocol)
+    ///   - 5: MQTT v5.0
+    ///
+    /// # Panics
+    /// Panics if version is not 3, 4, or 5
+    ///
+    /// # Example
+    /// ```
+    /// # use flowsdk::mqtt_client::MqttClientOptions;
+    /// let options = MqttClientOptions::builder()
+    ///     .mqtt_version(3)  // Use MQTT v3.1.1
+    ///     .build();
+    /// ```
+    pub fn mqtt_version(mut self, version: u8) -> Self {
+        if version != 3 && version != 4 && version != 5 {
+            panic!("mqtt_version must be 3, 4, or 5 (got {})", version);
+        }
+        self.mqtt_version = version;
+        self
+    }
+
     /// - None or 0: Session expires immediately on disconnect
     /// - Some(n): Session persists for n seconds after disconnect
     /// - Some(0xFFFFFFFF): Session never expires
@@ -390,6 +420,7 @@ mod mqtt_client_options_tests {
         assert_eq!(options.password, None);
         assert_eq!(options.will, None);
         assert!(!options.reconnect);
+        assert_eq!(options.mqtt_version, 5);
         assert!(!options.sessionless);
         assert!(options.auto_ack);
         assert_eq!(options.session_expiry_interval, None);
@@ -645,5 +676,43 @@ mod mqtt_client_options_tests {
         assert!(options.tls_config.is_some());
         let config = options.tls_config.unwrap();
         assert!(config.accept_invalid_hostnames);
+    }
+
+    // ==================== MQTT Version Tests ====================
+
+    #[test]
+    fn test_mqtt_version_default() {
+        let options = MqttClientOptions::default();
+        assert_eq!(options.mqtt_version, 5);
+    }
+
+    #[test]
+    fn test_mqtt_version_v3() {
+        let options = MqttClientOptions::builder().mqtt_version(3).build();
+        assert_eq!(options.mqtt_version, 3);
+    }
+
+    #[test]
+    fn test_mqtt_version_v4() {
+        let options = MqttClientOptions::builder().mqtt_version(4).build();
+        assert_eq!(options.mqtt_version, 4);
+    }
+
+    #[test]
+    fn test_mqtt_version_v5() {
+        let options = MqttClientOptions::builder().mqtt_version(5).build();
+        assert_eq!(options.mqtt_version, 5);
+    }
+
+    #[test]
+    #[should_panic(expected = "mqtt_version must be 3, 4, or 5")]
+    fn test_mqtt_version_invalid() {
+        MqttClientOptions::builder().mqtt_version(2).build();
+    }
+
+    #[test]
+    #[should_panic(expected = "mqtt_version must be 3, 4, or 5")]
+    fn test_mqtt_version_invalid_high() {
+        MqttClientOptions::builder().mqtt_version(6).build();
     }
 }
