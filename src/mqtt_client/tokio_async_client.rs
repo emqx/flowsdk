@@ -27,8 +27,13 @@ use crate::mqtt_serde::mqttv5::{
     pubrecv5::MqttPubRec,
     pubrelv5::MqttPubRel,
     subscribev5::{self, TopicSubscription},
-    unsubscribev5,
+    unsubscribev5, will as willv5,
 };
+
+use crate::mqtt_serde::mqttv3::{
+    connectv3, disconnectv3, pingreqv3, publishv3, pubrelv3, subscribev3, unsubscribev3,
+};
+
 use crate::mqtt_serde::parser::{ParseError, ParseOk};
 use crate::mqtt_session::ClientSession;
 
@@ -2627,6 +2632,7 @@ impl TokioClientWorker {
     ) -> Self {
         let send_capacity = config.send_buffer_size;
         let recv_capacity = config.recv_buffer_size;
+        let mqtt_version = options.mqtt_version; // Capture before move
         TokioClientWorker {
             options,
             event_handler,
@@ -2646,8 +2652,23 @@ impl TokioClientWorker {
             pending_ping: None,
             session: None,
             keep_alive_timer: None,
-            mqtt_version: 5, // Default to MQTT v5.0, will be auto-detected from first packet
+            mqtt_version,
             last_packet_sent: Instant::now(),
+        }
+    }
+
+    // Helper methods for protocol version
+    fn is_v3(&self) -> bool {
+        self.mqtt_version == 3 || self.mqtt_version == 4
+    }
+
+    // Convert v5 Will to v3 Will (strip properties)
+    fn convert_will_v5_to_v3(will_v5: &willv5::Will) -> connectv3::Will {
+        connectv3::Will {
+            retain: will_v5.will_retain,
+            qos: will_v5.will_qos,
+            topic: will_v5.will_topic.clone(),
+            message: will_v5.will_message.clone(),
         }
     }
 
@@ -3161,32 +3182,60 @@ impl TokioClientWorker {
                     self.session = Some(ClientSession::new());
                 }
 
-                // Prepare CONNECT packet (MQTT v5 by default for now)
-                let mut properties = vec![];
+                // Prepare CONNECT packet based on protocol version
+                let connect_bytes = if self.is_v3() {
+                    // MQTT v3.1.1
+                    let mut connect_packet = connectv3::MqttConnect::new(
+                        self.options.client_id.clone(),
+                        self.options.keep_alive,
+                        self.options.clean_start,
+                    );
+                    connect_packet.username = self.options.username.clone();
+                    connect_packet.password = self.options.password.clone();
 
-                // Add session expiry interval if specified
-                if let Some(expiry_interval) = self.options.session_expiry_interval {
-                    properties.push(Property::SessionExpiryInterval(expiry_interval));
-                }
+                    // Convert v5 Will to v3 Will if present
+                    if let Some(will_v5) = &self.options.will {
+                        connect_packet.will = Some(Self::convert_will_v5_to_v3(will_v5));
+                    }
 
-                let connect_packet = connectv5::MqttConnect::new(
-                    self.options.client_id.clone(),
-                    self.options.username.clone(),
-                    self.options.password.clone(),
-                    self.options.will.clone(),
-                    self.options.keep_alive,
-                    self.options.clean_start,
-                    properties,
-                );
+                    match connect_packet.to_bytes() {
+                        Ok(bytes) => bytes,
+                        Err(err) => {
+                            let mqtt_err = MqttClientError::ProtocolViolation {
+                                message: format!("Failed to serialize CONNECT packet: {:?}", err),
+                            };
+                            self.event_handler.on_error(&mqtt_err).await;
+                            return;
+                        }
+                    }
+                } else {
+                    // MQTT v5
+                    let mut properties = vec![];
 
-                let connect_bytes = match connect_packet.to_bytes() {
-                    Ok(bytes) => bytes,
-                    Err(err) => {
-                        let mqtt_err = MqttClientError::ProtocolViolation {
-                            message: format!("Failed to serialize CONNECT packet: {:?}", err),
-                        };
-                        self.event_handler.on_error(&mqtt_err).await;
-                        return;
+                    // Add session expiry interval if specified
+                    if let Some(expiry_interval) = self.options.session_expiry_interval {
+                        properties.push(Property::SessionExpiryInterval(expiry_interval));
+                    }
+
+                    let connect_packet = connectv5::MqttConnect::new(
+                        self.options.client_id.clone(),
+                        self.options.username.clone(),
+                        self.options.password.clone(),
+                        self.options.will.clone(),
+                        self.options.keep_alive,
+                        self.options.clean_start,
+                        properties,
+                    );
+
+                    match connect_packet.to_bytes() {
+                        Ok(bytes) => bytes,
+                        Err(err) => {
+                            let mqtt_err = MqttClientError::ProtocolViolation {
+                                message: format!("Failed to serialize CONNECT packet: {:?}", err),
+                            };
+                            self.event_handler.on_error(&mqtt_err).await;
+                            return;
+                        }
                     }
                 };
 
@@ -3199,7 +3248,7 @@ impl TokioClientWorker {
                 }
 
                 self.is_connected = true;
-                self.mqtt_version = 5; // currently only MQTT v5 is supported in async client
+                // mqtt_version is already set from options, no need to override
 
                 // Reset send tracking for keep-alive
                 self.last_packet_sent = Instant::now();
@@ -3240,34 +3289,59 @@ impl TokioClientWorker {
 
         command.packet_id = Some(packet_id);
 
-        let subscribe_packet = subscribev5::MqttSubscribe::new(
-            packet_id,
-            command.subscriptions.clone(),
-            command.properties.clone(),
-        );
+        let subscribe_bytes = if self.is_v3() {
+            // MQTT v3.1.1
+            let topics: Vec<subscribev3::SubscriptionTopic> = command
+                .subscriptions
+                .iter()
+                .map(|sub| subscribev3::SubscriptionTopic {
+                    topic_filter: sub.topic_filter.clone(),
+                    qos: sub.qos,
+                })
+                .collect();
 
-        match subscribe_packet.to_bytes() {
-            Ok(bytes) => {
-                if let Err(e) = self.streams.send_egress(bytes).await {
-                    let mqtt_err = MqttClientError::from_io_error(e, "send SUBSCRIBE packet");
+            let subscribe_packet = subscribev3::MqttSubscribe::new(packet_id, topics);
+            match subscribe_packet.to_bytes() {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    let mqtt_err = MqttClientError::ProtocolViolation {
+                        message: format!("Failed to serialize SUBSCRIBE packet: {:?}", e),
+                    };
                     self.event_handler.on_error(&mqtt_err).await;
                     return;
                 }
+            }
+        } else {
+            // MQTT v5
+            let subscribe_packet = subscribev5::MqttSubscribe::new(
+                packet_id,
+                command.subscriptions.clone(),
+                command.properties.clone(),
+            );
+            match subscribe_packet.to_bytes() {
+                Ok(bytes) => bytes,
+                Err(e) => {
+                    let mqtt_err = MqttClientError::ProtocolViolation {
+                        message: format!("Failed to serialize SUBSCRIBE packet: {:?}", e),
+                    };
+                    self.event_handler.on_error(&mqtt_err).await;
+                    return;
+                }
+            }
+        };
 
-                let topics: Vec<String> = command
-                    .subscriptions
-                    .iter()
-                    .map(|sub| sub.topic_filter.clone())
-                    .collect();
-                self.pending_subscribes.insert(packet_id, topics);
-            }
-            Err(err) => {
-                let mqtt_err = MqttClientError::ProtocolViolation {
-                    message: format!("Failed to serialize SUBSCRIBE packet: {:?}", err),
-                };
-                self.event_handler.on_error(&mqtt_err).await;
-            }
+        if let Err(e) = self.streams.send_egress(subscribe_bytes).await {
+            let mqtt_err = MqttClientError::from_io_error(e, "send SUBSCRIBE packet");
+            self.event_handler.on_error(&mqtt_err).await;
+            return;
         }
+
+        let topics: Vec<String> = command
+            .subscriptions
+            .iter()
+            .map(|sub| sub.topic_filter.clone())
+            .collect();
+        self.pending_subscribes.insert(packet_id, topics);
     }
 
     /// Handle publish command
@@ -3844,6 +3918,64 @@ impl TokioClientWorker {
                     self.handle_connection_lost().await;
                 }
             }
+            MqttPacket::ConnAck3(connack) => {
+                // MQTT v3.1.1 CONNACK
+                let success = connack.return_code == 0;
+                self.is_connected = success;
+
+                if success {
+                    self.reconnect_attempts = 0;
+
+                    if !connack.session_present {
+                        if let Some(session) = self.session.as_mut() {
+                            session.clear();
+                        }
+
+                        let had_pending = !self.pending_subscribes.is_empty()
+                            || !self.pending_unsubscribes.is_empty();
+                        self.pending_subscribes.clear();
+                        self.pending_unsubscribes.clear();
+
+                        if had_pending {
+                            self.event_handler.on_pending_operations_cleared().await;
+                        }
+                    } else if let Some(session) = self.session.as_ref() {
+                        for resend_packet in session.resend_pending_messages() {
+                            if let Err(e) = self.send_packet_to_broker(&resend_packet).await {
+                                let mqtt_err =
+                                    MqttClientError::from_io_error(e, "resend pending message");
+                                self.event_handler.on_error(&mqtt_err).await;
+                                self.handle_connection_lost().await;
+                                return;
+                            }
+                        }
+                    }
+
+                    if self.config.buffer_messages {
+                        self.flush_message_buffer().await;
+                    }
+                }
+
+                let result = ConnectionResult {
+                    reason_code: connack.return_code,
+                    session_present: connack.session_present,
+                    properties: None, // v3 doesn't have properties
+                };
+
+                // Complete synchronous connect if waiting
+                if let Some(tx) = self.pending_connect.take() {
+                    let _ = tx.send(result.clone());
+                }
+
+                self.event_handler.on_connected(&result).await;
+
+                if !success {
+                    self.event_handler
+                        .on_disconnected(Some(connack.return_code))
+                        .await;
+                    self.handle_connection_lost().await;
+                }
+            }
             MqttPacket::SubAck5(suback) => {
                 let result = SubscribeResult {
                     packet_id: suback.packet_id,
@@ -3855,6 +3987,20 @@ impl TokioClientWorker {
 
                 // Complete synchronous subscribe if waiting
                 if let Some(tx) = self.pending_subscribes_sync.remove(&suback.packet_id) {
+                    let _ = tx.send(result.clone());
+                }
+
+                self.event_handler.on_subscribed(&result).await;
+            }
+            MqttPacket::SubAck3(suback) => {
+                // MQTT v3.1.1 SUBACK
+                let result = SubscribeResult {
+                    packet_id: suback.message_id,
+                    reason_codes: suback.return_codes.clone(),
+                    properties: vec![], // v3 doesn't have properties
+                };
+
+                if let Some(tx) = self.pending_subscribes_sync.remove(&suback.message_id) {
                     let _ = tx.send(result.clone());
                 }
 
@@ -3884,6 +4030,30 @@ impl TokioClientWorker {
 
                 self.event_handler.on_unsubscribed(&result).await;
             }
+            MqttPacket::UnsubAck3(unsuback) => {
+                // MQTT v3.1.1 UNSUBACK
+                let result = UnsubscribeResult {
+                    packet_id: unsuback.message_id,
+                    reason_codes: vec![0], // v3 doesn't have reason codes, assume success
+                    properties: vec![],
+                };
+
+                if let Some(topics) = self.pending_unsubscribes.remove(&unsuback.message_id) {
+                    if !topics.is_empty() {
+                        let topic_set: HashSet<String> = topics.into_iter().collect();
+                        self.pending_subscribes.retain(|_, pending_topics| {
+                            pending_topics.retain(|topic| !topic_set.contains(topic));
+                            !pending_topics.is_empty()
+                        });
+                    }
+                }
+
+                if let Some(tx) = self.pending_unsubscribes_sync.remove(&unsuback.message_id) {
+                    let _ = tx.send(result.clone());
+                }
+
+                self.event_handler.on_unsubscribed(&result).await;
+            }
             MqttPacket::PubAck5(puback) => {
                 if let Some(session) = self.session.as_mut() {
                     session.handle_incoming_puback(puback.clone());
@@ -3898,6 +4068,23 @@ impl TokioClientWorker {
 
                 // Complete synchronous publish if waiting
                 if let Some(tx) = self.pending_publishes.remove(&puback.packet_id) {
+                    let _ = tx.send(result.clone());
+                }
+
+                self.event_handler.on_published(&result).await;
+            }
+            MqttPacket::PubAck3(puback) => {
+                // MQTT v3.1.1 PUBACK
+                // Note: v3 session handling is simpler, no need for special method
+
+                let result = PublishResult {
+                    packet_id: Some(puback.message_id),
+                    reason_code: Some(0), // v3 doesn't have reason codes
+                    properties: None,
+                    qos: 1,
+                };
+
+                if let Some(tx) = self.pending_publishes.remove(&puback.message_id) {
                     let _ = tx.send(result.clone());
                 }
 
@@ -3947,6 +4134,20 @@ impl TokioClientWorker {
                     self.event_handler.on_published(&result).await;
                 }
             }
+            MqttPacket::PubRec3(pubrec) => {
+                // MQTT v3.1.1 PUBREC
+                let packet_id = pubrec.message_id;
+
+                // Send PUBREL in response
+                let pubrel = pubrelv3::MqttPubRel::new(packet_id);
+                let packet = MqttPacket::PubRel3(pubrel);
+                if let Err(e) = self.send_packet_to_broker(&packet).await {
+                    let mqtt_err = MqttClientError::from_io_error(e, "send PUBREL packet");
+                    self.event_handler.on_error(&mqtt_err).await;
+                    self.handle_connection_lost().await;
+                    return;
+                }
+            }
             MqttPacket::PubRel5(pubrel) => {
                 if self.options.auto_ack {
                     let pubcomp = if let Some(session) = self.session.as_mut() {
@@ -3956,6 +4157,19 @@ impl TokioClientWorker {
                     };
 
                     let packet = MqttPacket::PubComp5(pubcomp.clone());
+                    if let Err(e) = self.send_packet_to_broker(&packet).await {
+                        let mqtt_err = MqttClientError::from_io_error(e, "send PUBCOMP packet");
+                        self.event_handler.on_error(&mqtt_err).await;
+                        self.handle_connection_lost().await;
+                    }
+                }
+            }
+            MqttPacket::PubRel3(pubrel) => {
+                // MQTT v3.1.1 PUBREL
+                if self.options.auto_ack {
+                    let pubcomp =
+                        crate::mqtt_serde::mqttv3::pubcompv3::MqttPubComp::new(pubrel.message_id);
+                    let packet = MqttPacket::PubComp3(pubcomp);
                     if let Err(e) = self.send_packet_to_broker(&packet).await {
                         let mqtt_err = MqttClientError::from_io_error(e, "send PUBCOMP packet");
                         self.event_handler.on_error(&mqtt_err).await;
@@ -3977,6 +4191,21 @@ impl TokioClientWorker {
 
                 // Complete synchronous publish if waiting
                 if let Some(tx) = self.pending_publishes.remove(&pubcomp.packet_id) {
+                    let _ = tx.send(result.clone());
+                }
+
+                self.event_handler.on_published(&result).await;
+            }
+            MqttPacket::PubComp3(pubcomp) => {
+                // MQTT v3.1.1 PUBCOMP
+                let result = PublishResult {
+                    packet_id: Some(pubcomp.message_id),
+                    reason_code: Some(0), // v3 doesn't have reason codes
+                    properties: Some(vec![]),
+                    qos: 2,
+                };
+
+                if let Some(tx) = self.pending_publishes.remove(&pubcomp.message_id) {
                     let _ = tx.send(result.clone());
                 }
 
@@ -4014,10 +4243,67 @@ impl TokioClientWorker {
                     }
                 }
             }
+            MqttPacket::Publish3(publish) => {
+                // MQTT v3.1.1 PUBLISH
+                let qos = publish.qos;
+                let packet_id = publish.message_id;
+
+                // Generate ACK packet if auto_ack is enabled and QoS > 0
+                let ack_packet = if self.options.auto_ack {
+                    if let Some(session) = self.session.as_mut() {
+                        match qos {
+                            1 => packet_id.map(|pid| {
+                                MqttPacket::PubAck3(
+                                    crate::mqtt_serde::mqttv3::pubackv3::MqttPubAck::new(pid),
+                                )
+                            }),
+                            2 => packet_id.map(|pid| {
+                                MqttPacket::PubRec3(
+                                    crate::mqtt_serde::mqttv3::pubrecv3::MqttPubRec::new(pid),
+                                )
+                            }),
+                            _ => None,
+                        }
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                };
+
+                // Convert v3 publish to v5 format for event handler
+                let publish_v5 = MqttPublish::new(
+                    qos,
+                    publish.topic_name.clone(),
+                    packet_id,
+                    publish.payload.clone(),
+                    publish.retain,
+                    publish.dup,
+                );
+                self.event_handler.on_message_received(&publish_v5).await;
+
+                if let Some(ack) = ack_packet {
+                    if let Err(e) = self.send_packet_to_broker(&ack).await {
+                        let mqtt_err = MqttClientError::from_io_error(e, "send publish ACK");
+                        self.event_handler.on_error(&mqtt_err).await;
+                        self.handle_connection_lost().await;
+                    }
+                }
+            }
             MqttPacket::PingResp5(_) => {
                 let result = PingResult { success: true };
 
                 // Complete synchronous ping if waiting
+                if let Some(tx) = self.pending_ping.take() {
+                    let _ = tx.send(result.clone());
+                }
+
+                self.event_handler.on_ping_response(&result).await;
+            }
+            MqttPacket::PingResp3(_) => {
+                // MQTT v3.1.1 PINGRESP
+                let result = PingResult { success: true };
+
                 if let Some(tx) = self.pending_ping.take() {
                     let _ = tx.send(result.clone());
                 }
