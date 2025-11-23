@@ -278,10 +278,6 @@ impl MqttClient {
         self.options.mqtt_version == 3 || self.options.mqtt_version == 4
     }
 
-    fn is_v5(&self) -> bool {
-        self.options.mqtt_version == 5
-    }
-
     // Convert v5 Will to v3 Will (strip properties)
     fn convert_will_v5_to_v3(will_v5: &willv5::Will) -> connectv3::Will {
         connectv3::Will {
@@ -512,30 +508,50 @@ impl MqttClient {
             let topic_filters: Vec<String> = topics.iter().map(|&s| s.to_string()).collect();
             let packet_id = session.next_packet_id();
 
-            let unsubscribe_packet = unsubscribev5::MqttUnsubscribe::new(
-                packet_id,
-                topic_filters,
-                vec![], // Add properties as needed
-            );
+            if self.is_v3() {
+                // MQTT v3.1.1
+                let unsubscribe_packet =
+                    unsubscribev3::MqttUnsubscribe::new(packet_id, topic_filters.clone());
+                self.send_packet(unsubscribe_packet)?;
 
-            // Send UNSUBSCRIBE packet
-            self.send_packet(unsubscribe_packet)?;
-
-            // Wait for UNSUBACK with matching packet ID
-            if let Some(packet) = self.recv_for_packet(
-                |p| matches!(p, MqttPacket::UnsubAck5(unsuback) if unsuback.packet_id == packet_id),
-            )? {
-                match packet {
-                    MqttPacket::UnsubAck5(unsuback) => {
-                        return Ok(UnsubscribeResult {
-                            packet_id: unsuback.packet_id,
-                            reason_codes: unsuback.reason_codes,
-                            properties: unsuback.properties,
-                        });
+                if let Some(packet) = self.recv_for_packet(|p| {
+                    matches!(p, MqttPacket::UnsubAck3(unsuback) if unsuback.message_id == packet_id)
+                })? {
+                    match packet {
+                        MqttPacket::UnsubAck3(unsuback) => {
+                            // v3 UNSUBACK doesn't have return codes, just message_id
+                            // Return success (0) for all topics
+                            return Ok(UnsubscribeResult {
+                                packet_id: unsuback.message_id,
+                                reason_codes: vec![0; topic_filters.len()],
+                                properties: vec![],
+                            });
+                        }
+                        _ => {
+                            self.context.unhandled_packets.push(packet);
+                        }
                     }
-                    _ => {
-                        // Store unhandled packet for later processing
-                        self.context.unhandled_packets.push(packet);
+                }
+            } else {
+                // MQTT v5
+                let unsubscribe_packet =
+                    unsubscribev5::MqttUnsubscribe::new(packet_id, topic_filters, vec![]);
+                self.send_packet(unsubscribe_packet)?;
+
+                if let Some(packet) = self.recv_for_packet(|p| {
+                    matches!(p, MqttPacket::UnsubAck5(unsuback) if unsuback.packet_id == packet_id)
+                })? {
+                    match packet {
+                        MqttPacket::UnsubAck5(unsuback) => {
+                            return Ok(UnsubscribeResult {
+                                packet_id: unsuback.packet_id,
+                                reason_codes: unsuback.reason_codes,
+                                properties: unsuback.properties,
+                            });
+                        }
+                        _ => {
+                            self.context.unhandled_packets.push(packet);
+                        }
                     }
                 }
             }
@@ -567,16 +583,30 @@ impl MqttClient {
             } else {
                 None
             };
-            let publish_packet = publishv5::MqttPublish::new(
-                qos,
-                topic.to_string(),
-                packet_id,
-                payload.to_vec(),
-                retain,
-                false,
-            );
-            // Send PUBLISH packet
-            self.send_packet(publish_packet)?;
+
+            if self.is_v3() {
+                // MQTT v3.1.1
+                let publish_packet = publishv3::MqttPublish::new(
+                    topic.to_string(),
+                    qos,
+                    payload.to_vec(),
+                    packet_id,
+                    retain,
+                    false, // dup
+                );
+                self.send_packet(publish_packet)?;
+            } else {
+                // MQTT v5
+                let publish_packet = publishv5::MqttPublish::new(
+                    qos,
+                    topic.to_string(),
+                    packet_id,
+                    payload.to_vec(),
+                    retain,
+                    false, // dup
+                );
+                self.send_packet(publish_packet)?;
+            }
 
             // Handle PUBACK/PUBREC response for QoS 1/2 if needed
             match qos {
@@ -599,71 +629,140 @@ impl MqttClient {
 
     fn handle_qos2(&mut self, packet_id: Option<u16>) -> Result<PublishResult, io::Error> {
         let expected_packet_id = packet_id.unwrap();
-        self.recv_for_packet(
-            |p| matches!(p, MqttPacket::PubRec5(pubrec) if pubrec.packet_id == expected_packet_id),
-        )?;
 
-        self.send_packet(pubrelv5::MqttPubRel::new(expected_packet_id, 0, vec![]))?;
-        match self.recv_for_packet(|p| {
-            matches!(p, MqttPacket::PubComp5(pubcomp) if pubcomp.packet_id == expected_packet_id)
-        })? {
-            Some(MqttPacket::PubComp5(pubcomp)) => {
-                // PUBCOMP received
-                Ok(PublishResult {
-                    packet_id: Some(pubcomp.packet_id),
-                    reason_code: Some(pubcomp.reason_code),
-                    properties: Some(pubcomp.properties),
-                    qos: 2,
-                })
-            }
-            _ => {
-                Err(io::Error::new(
+        if self.is_v3() {
+            // MQTT v3.1.1
+            self.recv_for_packet(|p| {
+                matches!(p, MqttPacket::PubRec3(pubrec) if pubrec.message_id == expected_packet_id)
+            })?;
+
+            self.send_packet(pubrelv3::MqttPubRel::new(expected_packet_id))?;
+            match self.recv_for_packet(|p| {
+                matches!(p, MqttPacket::PubComp3(pubcomp) if pubcomp.message_id == expected_packet_id)
+            })? {
+                Some(MqttPacket::PubComp3(pubcomp)) => {
+                    Ok(PublishResult {
+                        packet_id: Some(pubcomp.message_id),
+                        reason_code: Some(0), // v3 doesn't have reason codes, assume success
+                        properties: None,
+                        qos: 2,
+                    })
+                }
+                _ => Err(io::Error::new(
                     io::ErrorKind::UnexpectedEof,
                     "No PUBCOMP received from broker",
-                ))
+                )),
+            }
+        } else {
+            // MQTT v5
+            self.recv_for_packet(|p| {
+                matches!(p, MqttPacket::PubRec5(pubrec) if pubrec.packet_id == expected_packet_id)
+            })?;
+
+            self.send_packet(pubrelv5::MqttPubRel::new(expected_packet_id, 0, vec![]))?;
+            match self.recv_for_packet(|p| {
+                matches!(p, MqttPacket::PubComp5(pubcomp) if pubcomp.packet_id == expected_packet_id)
+            })? {
+                Some(MqttPacket::PubComp5(pubcomp)) => {
+                    Ok(PublishResult {
+                        packet_id: Some(pubcomp.packet_id),
+                        reason_code: Some(pubcomp.reason_code),
+                        properties: Some(pubcomp.properties),
+                        qos: 2,
+                    })
+                }
+                _ => Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "No PUBCOMP received from broker",
+                )),
             }
         }
     }
 
     fn receive_for_puback(&mut self, packet_id: Option<u16>) -> Result<PublishResult, io::Error> {
         let expected_packet_id = packet_id.unwrap();
-        match self.recv_for_packet(
-            |p| matches!(p, MqttPacket::PubAck5(puback) if puback.packet_id == expected_packet_id),
-        )? {
-            Some(MqttPacket::PubAck5(puback)) => {
-                // PUBACK received
-                Ok(PublishResult {
-                    packet_id: Some(puback.packet_id),
-                    reason_code: Some(puback.reason_code), // PUBACK reason code 0 = Success
-                    properties: Some(puback.properties),   // No properties in PUBACK
-                    qos: 1,
-                })
+
+        if self.is_v3() {
+            // MQTT v3.1.1
+            match self.recv_for_packet(|p| {
+                matches!(p, MqttPacket::PubAck3(puback) if puback.message_id == expected_packet_id)
+            })? {
+                Some(MqttPacket::PubAck3(puback)) => {
+                    Ok(PublishResult {
+                        packet_id: Some(puback.message_id),
+                        reason_code: Some(0), // v3 doesn't have reason codes, assume success
+                        properties: None,
+                        qos: 1,
+                    })
+                }
+                _ => Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "No PUBACK received from broker",
+                )),
             }
-            None => Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "No PUBACK received from broker",
-            )),
-            _ => unreachable!(),
+        } else {
+            // MQTT v5
+            match self.recv_for_packet(|p| {
+                matches!(p, MqttPacket::PubAck5(puback) if puback.packet_id == expected_packet_id)
+            })? {
+                Some(MqttPacket::PubAck5(puback)) => {
+                    Ok(PublishResult {
+                        packet_id: Some(puback.packet_id),
+                        reason_code: Some(puback.reason_code),
+                        properties: Some(puback.properties),
+                        qos: 1,
+                    })
+                }
+                _ => Err(io::Error::new(
+                    io::ErrorKind::UnexpectedEof,
+                    "No PUBACK received from broker",
+                )),
+            }
         }
     }
 
-    pub fn disconnected(&mut self) -> io::Result<()> {
-        let disconnect_packet = disconnectv5::MqttDisconnect::new(0, vec![]); // reason code 0, no properties
-        self.send_packet(disconnect_packet)
+    pub fn disconnected(&mut self, reason_code: u8) -> io::Result<()> {
+        if self.is_v3() {
+            // MQTT v3.1.1 - DISCONNECT has no variable header or payload
+            let disconnect_packet = disconnectv3::MqttDisconnect::new();
+            self.send_packet(disconnect_packet)?;
+        } else {
+            // MQTT v5
+            let disconnect_packet = disconnectv5::MqttDisconnect::new(reason_code, vec![]);
+            self.send_packet(disconnect_packet)?;
+        }
+        Ok(())
     }
 
     pub fn pingd(&mut self) -> io::Result<PingResult> {
-        let pingreq_packet = pingreqv5::MqttPingReq::new();
-        self.send_packet(pingreq_packet)?;
-        // Wait for PINGRESP
-        if let Some(packet) = self.recv_for_packet(|p| matches!(p, MqttPacket::PingResp5(_)))? {
-            match packet {
-                MqttPacket::PingResp5(_) => {
-                    return Ok(PingResult { success: true });
+        if self.is_v3() {
+            // MQTT v3.1.1
+            let pingreq_packet = pingreqv3::MqttPingReq::new();
+            self.send_packet(pingreq_packet)?;
+
+            if let Some(packet) = self.recv_for_packet(|p| matches!(p, MqttPacket::PingResp3(_)))? {
+                match packet {
+                    MqttPacket::PingResp3(_) => {
+                        return Ok(PingResult { success: true });
+                    }
+                    _ => {
+                        self.context.unhandled_packets.push(packet);
+                    }
                 }
-                _ => {
-                    // Store unhandled packet for later processing
-                    self.context.unhandled_packets.push(packet);
+            }
+        } else {
+            // MQTT v5
+            let pingreq_packet = pingreqv5::MqttPingReq::new();
+            self.send_packet(pingreq_packet)?;
+
+            if let Some(packet) = self.recv_for_packet(|p| matches!(p, MqttPacket::PingResp5(_)))? {
+                match packet {
+                    MqttPacket::PingResp5(_) => {
+                        return Ok(PingResult { success: true });
+                    }
+                    _ => {
+                        self.context.unhandled_packets.push(packet);
+                    }
                 }
             }
         }
