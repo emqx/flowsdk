@@ -66,11 +66,6 @@ fn main() -> io::Result<()> {
         }
     }
 
-    // Note: publish, disconnect, and other methods need to be updated for v3 support
-    // This example demonstrates the basic connection and subscription with MQTT v3.1.1
-
     println!("\n✓ MQTT v3.1.1 example completed successfully!");
-    println!("Note: Full v3 support for publish/disconnect/ping is in progress");
-
     Ok(())
 }
