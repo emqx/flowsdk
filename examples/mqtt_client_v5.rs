@@ -167,7 +167,7 @@ fn main() {
         Err(e) => eprintln!("Error publishing message: {}", e),
     }
 
-    match client.disconnected() {
+    match client.disconnected(0) {
         Ok(_) => println!("Disconnected successfully"),
         Err(e) => eprintln!("Error disconnecting: {}", e),
     }

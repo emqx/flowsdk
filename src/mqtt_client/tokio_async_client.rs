@@ -4075,7 +4075,12 @@ impl TokioClientWorker {
             }
             MqttPacket::PubAck3(puback) => {
                 // MQTT v3.1.1 PUBACK
-                // Note: v3 session handling is simpler, no need for special method
+                // Update session state to track QoS 1 completion
+                if let Some(session) = self.session.as_mut() {
+                    // Convert v3 puback to v5 format for session handling
+                    let puback_v5 = MqttPubAck::new(puback.message_id as u16, 0, Vec::new());
+                    session.handle_incoming_puback(puback_v5);
+                }
 
                 let result = PublishResult {
                     packet_id: Some(puback.message_id),
@@ -4198,6 +4203,13 @@ impl TokioClientWorker {
             }
             MqttPacket::PubComp3(pubcomp) => {
                 // MQTT v3.1.1 PUBCOMP
+                // Update session state to track QoS 2 completion
+                if let Some(session) = self.session.as_mut() {
+                    // Convert v3 pubcomp to v5 format for session handling
+                    let pubcomp_v5 = MqttPubComp::new(pubcomp.message_id as u16, 0, Vec::new());
+                    session.handle_incoming_pubcomp(pubcomp_v5);
+                }
+
                 let result = PublishResult {
                     packet_id: Some(pubcomp.message_id),
                     reason_code: Some(0), // v3 doesn't have reason codes
@@ -4251,6 +4263,34 @@ impl TokioClientWorker {
                 // Generate ACK packet if auto_ack is enabled and QoS > 0
                 let ack_packet = if self.options.auto_ack {
                     if let Some(session) = self.session.as_mut() {
+                        // Convert v3 publish to v5 format for session handling
+                        let publish_v5 = MqttPublish::new(
+                            qos,
+                            publish.topic_name.clone(),
+                            packet_id,
+                            publish.payload.clone(),
+                            publish.retain,
+                            publish.dup,
+                        );
+                        // Use session to generate ACK (returns v5 packets)
+                        session.handle_incoming_publish(publish_v5).map(|ack| {
+                            // Convert v5 ACK back to v3 format
+                            match ack {
+                                MqttPacket::PubAck5(puback) => MqttPacket::PubAck3(
+                                    crate::mqtt_serde::mqttv3::pubackv3::MqttPubAck::new(
+                                        puback.packet_id,
+                                    ),
+                                ),
+                                MqttPacket::PubRec5(pubrec) => MqttPacket::PubRec3(
+                                    crate::mqtt_serde::mqttv3::pubrecv3::MqttPubRec::new(
+                                        pubrec.packet_id,
+                                    ),
+                                ),
+                                _ => ack, // Shouldn't happen, but pass through
+                            }
+                        })
+                    } else {
+                        // No session - manually create ACK
                         match qos {
                             1 => packet_id.map(|pid| {
                                 MqttPacket::PubAck3(
@@ -4264,8 +4304,6 @@ impl TokioClientWorker {
                             }),
                             _ => None,
                         }
-                    } else {
-                        None
                     }
                 } else {
                     None

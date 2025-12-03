@@ -207,9 +207,11 @@ impl MqttClientOptions {
         self
     }
 
-    /// - None or 0: Session expires immediately on disconnect
-    /// - Some(n): Session persists for n seconds after disconnect
-    /// - Some(0xFFFFFFFF): Session never expires
+    /// Set the session expiry interval in seconds (MQTT v5 only)
+    ///
+    /// - 0: Session expires immediately on disconnect
+    /// - n: Session persists for n seconds after disconnect
+    /// - 0xFFFFFFFF: Session never expires
     pub fn session_expiry_interval(mut self, interval: u32) -> Self {
         self.session_expiry_interval = Some(interval);
         self
