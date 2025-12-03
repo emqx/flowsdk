@@ -30,9 +30,7 @@ use crate::mqtt_serde::mqttv5::{
     unsubscribev5, will as willv5,
 };
 
-use crate::mqtt_serde::mqttv3::{
-    connectv3, disconnectv3, pingreqv3, publishv3, pubrelv3, subscribev3, unsubscribev3,
-};
+use crate::mqtt_serde::mqttv3::{connectv3, pubrelv3, subscribev3};
 
 use crate::mqtt_serde::parser::{ParseError, ParseOk};
 use crate::mqtt_session::ClientSession;
@@ -4078,7 +4076,7 @@ impl TokioClientWorker {
                 // Update session state to track QoS 1 completion
                 if let Some(session) = self.session.as_mut() {
                     // Convert v3 puback to v5 format for session handling
-                    let puback_v5 = MqttPubAck::new(puback.message_id as u16, 0, Vec::new());
+                    let puback_v5 = MqttPubAck::new(puback.message_id, 0, Vec::new());
                     session.handle_incoming_puback(puback_v5);
                 }
 
@@ -4150,7 +4148,6 @@ impl TokioClientWorker {
                     let mqtt_err = MqttClientError::from_io_error(e, "send PUBREL packet");
                     self.event_handler.on_error(&mqtt_err).await;
                     self.handle_connection_lost().await;
-                    return;
                 }
             }
             MqttPacket::PubRel5(pubrel) => {
@@ -4206,7 +4203,7 @@ impl TokioClientWorker {
                 // Update session state to track QoS 2 completion
                 if let Some(session) = self.session.as_mut() {
                     // Convert v3 pubcomp to v5 format for session handling
-                    let pubcomp_v5 = MqttPubComp::new(pubcomp.message_id as u16, 0, Vec::new());
+                    let pubcomp_v5 = MqttPubComp::new(pubcomp.message_id, 0, Vec::new());
                     session.handle_incoming_pubcomp(pubcomp_v5);
                 }
 
