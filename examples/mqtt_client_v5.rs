@@ -1,9 +1,9 @@
 use flowsdk::mqtt_client::{MqttClient, MqttClientOptions};
 
-fn main() {
+fn run_example() -> Result<(), Box<dyn std::error::Error>> {
     // Using builder pattern for cleaner configuration
     let opts = MqttClientOptions::builder()
-        .peer("localhost:1883")
+        .peer("broker.emqx.io:1883")
         .client_id("example_client")
         .keep_alive(10)
         .reconnect(true)
@@ -197,5 +197,25 @@ fn main() {
             println!("Connection Closed without receiving any packets due to unsubscribed topics")
         }
         Err(e) => eprintln!("Error receiving packet: {}", e),
+    }
+
+    Ok(())
+}
+
+fn main() {
+    if let Err(e) = run_example() {
+        eprintln!("Example failed: {}", e);
+        std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_mqtt_v5_example() {
+        // Run the example as a test
+        run_example().unwrap();
     }
 }
