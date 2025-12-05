@@ -25,7 +25,7 @@ pub struct MqttClientOptions {
     /// MQTT protocol version to use
     /// - 3 or 4: MQTT v3.1.1 (both values use the same protocol)
     /// - 5: MQTT v5.0
-    /// Default: 5 (for backward compatibility)
+    ///   Default: 5 (for backward compatibility)
     pub mqtt_version: u8,
     // --------------------------
     // Extended options

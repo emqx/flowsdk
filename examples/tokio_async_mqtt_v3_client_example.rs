@@ -187,7 +187,7 @@ async fn run_v3_example() -> Result<(), Box<dyn std::error::Error>> {
         .build();
 
     let context = Arc::new(Mutex::new(None::<u16>));
-    
+
     // Create event handler
     let event_handler = Box::new(TokioV3ExampleHandler::new(
         "TokioAsyncV3Client",
@@ -205,21 +205,21 @@ async fn run_v3_example() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n📋 Testing MQTT v3.1.1 Subscriptions...");
     println!("{}", "─".repeat(60));
-    
+
     // Test single subscription
     client.subscribe("test/v3/qos0", 0).await?;
     sleep(Duration::from_millis(500)).await;
-    
+
     client.subscribe("test/v3/qos1", 1).await?;
     sleep(Duration::from_millis(500)).await;
-    
+
     client.subscribe("test/v3/qos2", 2).await?;
     sleep(Duration::from_millis(500)).await;
 
     // Test wildcard subscriptions (v3 supports + and #)
     client.subscribe("test/v3/+/sensor", 1).await?;
     sleep(Duration::from_millis(500)).await;
-    
+
     client.subscribe("test/v3/#", 1).await?;
     sleep(Duration::from_millis(1000)).await;
 
@@ -300,8 +300,10 @@ async fn run_v3_example() -> Result<(), Box<dyn std::error::Error>> {
     println!("{}", "─".repeat(60));
     client.unsubscribe(vec!["test/v3/qos0"]).await?;
     sleep(Duration::from_millis(500)).await;
-    
-    client.unsubscribe(vec!["test/v3/+/sensor", "test/v3/#"]).await?;
+
+    client
+        .unsubscribe(vec!["test/v3/+/sensor", "test/v3/#"])
+        .await?;
     sleep(Duration::from_millis(1000)).await;
 
     // Wait for the last acknowledgment
@@ -339,7 +341,7 @@ async fn run_v3_example() -> Result<(), Box<dyn std::error::Error>> {
     println!("  ✓ Tested packet ID tracking and reuse");
     println!("  ✓ Tested keep-alive mechanism");
     println!("  ✓ Verified all v3 session state fixes");
-    
+
     Ok(())
 }
 

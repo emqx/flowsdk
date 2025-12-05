@@ -30,7 +30,9 @@ use crate::mqtt_serde::mqttv5::{
     unsubscribev5, will as willv5,
 };
 
-use crate::mqtt_serde::mqttv3::{connectv3, disconnectv3, pingreqv3, pubrelv3, subscribev3, unsubscribev3};
+use crate::mqtt_serde::mqttv3::{
+    connectv3, disconnectv3, pingreqv3, pubrelv3, subscribev3, unsubscribev3,
+};
 
 use crate::mqtt_serde::parser::{ParseError, ParseOk};
 use crate::mqtt_session::ClientSession;
@@ -2936,7 +2938,7 @@ impl TokioClientWorker {
             } else {
                 pingreqv5::MqttPingReq::new().to_bytes()
             };
-            
+
             match pingreq_bytes {
                 Ok(bytes) => {
                     if let Err(e) = self.streams.send_egress(bytes).await {
@@ -3482,10 +3484,8 @@ impl TokioClientWorker {
         // Create appropriate UNSUBSCRIBE packet based on MQTT version
         let unsubscribe_bytes = if self.mqtt_version == 3 {
             // MQTT v3.1.1
-            let unsubscribe_packet = unsubscribev3::MqttUnsubscribe::new(
-                packet_id,
-                command.topics.clone(),
-            );
+            let unsubscribe_packet =
+                unsubscribev3::MqttUnsubscribe::new(packet_id, command.topics.clone());
             unsubscribe_packet.to_bytes()
         } else {
             // MQTT v5
@@ -3724,10 +3724,8 @@ impl TokioClientWorker {
         // Create appropriate UNSUBSCRIBE packet based on MQTT version
         let unsubscribe_bytes = if self.mqtt_version == 3 {
             // MQTT v3.1.1
-            let unsubscribe_packet = unsubscribev3::MqttUnsubscribe::new(
-                packet_id,
-                command.topics.clone(),
-            );
+            let unsubscribe_packet =
+                unsubscribev3::MqttUnsubscribe::new(packet_id, command.topics.clone());
             unsubscribe_packet.to_bytes()
         } else {
             // MQTT v5
