@@ -30,7 +30,7 @@ use crate::mqtt_serde::mqttv5::{
     unsubscribev5, will as willv5,
 };
 
-use crate::mqtt_serde::mqttv3::{connectv3, pubrelv3, subscribev3};
+use crate::mqtt_serde::mqttv3::{connectv3, disconnectv3, pingreqv3, pubrelv3, subscribev3, unsubscribev3};
 
 use crate::mqtt_serde::parser::{ParseError, ParseOk};
 use crate::mqtt_session::ClientSession;
@@ -2930,8 +2930,14 @@ impl TokioClientWorker {
         // Only send PINGREQ if we haven't sent ANY packet within the keep-alive period
         if time_since_last_send >= keep_alive_duration {
             // Send PINGREQ to satisfy keep-alive requirement
-            let pingreq = pingreqv5::MqttPingReq::new();
-            match pingreq.to_bytes() {
+            // Create appropriate PINGREQ packet based on MQTT version
+            let pingreq_bytes = if self.mqtt_version == 3 {
+                pingreqv3::MqttPingReq::new().to_bytes()
+            } else {
+                pingreqv5::MqttPingReq::new().to_bytes()
+            };
+            
+            match pingreq_bytes {
                 Ok(bytes) => {
                     if let Err(e) = self.streams.send_egress(bytes).await {
                         let mqtt_err = MqttClientError::from_io_error(e, "send keep-alive PINGREQ");
@@ -3473,13 +3479,25 @@ impl TokioClientWorker {
 
         command.packet_id = Some(packet_id);
 
-        let unsubscribe_packet = unsubscribev5::MqttUnsubscribe::new(
-            packet_id,
-            command.topics.clone(),
-            command.properties.clone(),
-        );
+        // Create appropriate UNSUBSCRIBE packet based on MQTT version
+        let unsubscribe_bytes = if self.mqtt_version == 3 {
+            // MQTT v3.1.1
+            let unsubscribe_packet = unsubscribev3::MqttUnsubscribe::new(
+                packet_id,
+                command.topics.clone(),
+            );
+            unsubscribe_packet.to_bytes()
+        } else {
+            // MQTT v5
+            let unsubscribe_packet = unsubscribev5::MqttUnsubscribe::new(
+                packet_id,
+                command.topics.clone(),
+                command.properties.clone(),
+            );
+            unsubscribe_packet.to_bytes()
+        };
 
-        match unsubscribe_packet.to_bytes() {
+        match unsubscribe_bytes {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
                     let mqtt_err = MqttClientError::from_io_error(e, "send UNSUBSCRIBE packet");
@@ -3507,9 +3525,14 @@ impl TokioClientWorker {
             return;
         }
 
-        let pingreq_packet = pingreqv5::MqttPingReq::new();
+        // Create appropriate PINGREQ packet based on MQTT version
+        let pingreq_bytes = if self.mqtt_version == 3 {
+            pingreqv3::MqttPingReq::new().to_bytes()
+        } else {
+            pingreqv5::MqttPingReq::new().to_bytes()
+        };
 
-        match pingreq_packet.to_bytes() {
+        match pingreq_bytes {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
                     let mqtt_err = MqttClientError::from_io_error(e, "send PINGREQ packet");
@@ -3698,13 +3721,25 @@ impl TokioClientWorker {
 
         command.packet_id = Some(packet_id);
 
-        let unsubscribe_packet = unsubscribev5::MqttUnsubscribe::new(
-            packet_id,
-            command.topics.clone(),
-            command.properties.clone(),
-        );
+        // Create appropriate UNSUBSCRIBE packet based on MQTT version
+        let unsubscribe_bytes = if self.mqtt_version == 3 {
+            // MQTT v3.1.1
+            let unsubscribe_packet = unsubscribev3::MqttUnsubscribe::new(
+                packet_id,
+                command.topics.clone(),
+            );
+            unsubscribe_packet.to_bytes()
+        } else {
+            // MQTT v5
+            let unsubscribe_packet = unsubscribev5::MqttUnsubscribe::new(
+                packet_id,
+                command.topics.clone(),
+                command.properties.clone(),
+            );
+            unsubscribe_packet.to_bytes()
+        };
 
-        match unsubscribe_packet.to_bytes() {
+        match unsubscribe_bytes {
             Ok(bytes) => {
                 if let Err(_e) = self.streams.send_egress(bytes).await {
                     let result = UnsubscribeResult {
@@ -3757,9 +3792,16 @@ impl TokioClientWorker {
             return;
         }
 
-        let disconnect_packet = disconnectv5::MqttDisconnect::new_normal();
+        // Create appropriate DISCONNECT packet based on MQTT version
+        let disconnect_bytes = if self.mqtt_version == 3 {
+            // MQTT v3.1.1 - DISCONNECT has no payload
+            disconnectv3::MqttDisconnect::new().to_bytes()
+        } else {
+            // MQTT v5 - normal disconnect
+            disconnectv5::MqttDisconnect::new_normal().to_bytes()
+        };
 
-        match disconnect_packet.to_bytes() {
+        match disconnect_bytes {
             Ok(bytes) => {
                 if let Err(e) = self.streams.send_egress(bytes).await {
                     let mqtt_err = MqttClientError::from_io_error(e, "send DISCONNECT packet");
