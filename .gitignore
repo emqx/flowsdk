@@ -3,3 +3,4 @@
 # place MQTT specs
 docs/source
 *cov.info
+Cargo.lock
