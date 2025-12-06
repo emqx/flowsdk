@@ -2933,7 +2933,7 @@ impl TokioClientWorker {
         if time_since_last_send >= keep_alive_duration {
             // Send PINGREQ to satisfy keep-alive requirement
             // Create appropriate PINGREQ packet based on MQTT version
-            let pingreq_bytes = if self.mqtt_version == 3 {
+            let pingreq_bytes = if self.is_v3() {
                 pingreqv3::MqttPingReq::new().to_bytes()
             } else {
                 pingreqv5::MqttPingReq::new().to_bytes()
@@ -3482,7 +3482,7 @@ impl TokioClientWorker {
         command.packet_id = Some(packet_id);
 
         // Create appropriate UNSUBSCRIBE packet based on MQTT version
-        let unsubscribe_bytes = if self.mqtt_version == 3 {
+        let unsubscribe_bytes = if self.is_v3() {
             // MQTT v3.1.1
             let unsubscribe_packet =
                 unsubscribev3::MqttUnsubscribe::new(packet_id, command.topics.clone());
@@ -3526,7 +3526,7 @@ impl TokioClientWorker {
         }
 
         // Create appropriate PINGREQ packet based on MQTT version
-        let pingreq_bytes = if self.mqtt_version == 3 {
+        let pingreq_bytes = if self.is_v3() {
             pingreqv3::MqttPingReq::new().to_bytes()
         } else {
             pingreqv5::MqttPingReq::new().to_bytes()
@@ -3722,7 +3722,7 @@ impl TokioClientWorker {
         command.packet_id = Some(packet_id);
 
         // Create appropriate UNSUBSCRIBE packet based on MQTT version
-        let unsubscribe_bytes = if self.mqtt_version == 3 {
+        let unsubscribe_bytes = if self.is_v3() {
             // MQTT v3.1.1
             let unsubscribe_packet =
                 unsubscribev3::MqttUnsubscribe::new(packet_id, command.topics.clone());
@@ -3791,7 +3791,7 @@ impl TokioClientWorker {
         }
 
         // Create appropriate DISCONNECT packet based on MQTT version
-        let disconnect_bytes = if self.mqtt_version == 3 {
+        let disconnect_bytes = if self.is_v3() {
             // MQTT v3.1.1 - DISCONNECT has no payload
             disconnectv3::MqttDisconnect::new().to_bytes()
         } else {
