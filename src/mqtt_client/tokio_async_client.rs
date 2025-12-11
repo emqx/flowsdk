@@ -3,6 +3,9 @@ use std::io;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
+use crate::priority_queue::PriorityQueue;
+use serde::{Deserialize, Serialize};
+
 use async_trait::async_trait;
 use bytes::{Buf, BytesMut};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -155,7 +158,7 @@ pub trait TokioMqttEventHandler: Send + Sync {
 }
 
 /// Fully customizable publish command for MQTT v5
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishCommand {
     pub topic_name: String,
     pub payload: Vec<u8>,
@@ -164,6 +167,8 @@ pub struct PublishCommand {
     pub dup: bool,
     pub packet_id: Option<u16>,
     pub properties: Vec<Property>,
+    /// Message priority (0=lowest, 255=highest, default=128)
+    pub priority: u8,
 }
 
 impl PublishCommand {
@@ -175,6 +180,7 @@ impl PublishCommand {
         dup: bool,
         packet_id: Option<u16>,
         properties: Vec<Property>,
+        priority: u8,
     ) -> Self {
         Self {
             topic_name,
@@ -184,11 +190,40 @@ impl PublishCommand {
             dup,
             packet_id,
             properties,
+            priority,
         }
     }
 
     pub fn simple(topic: impl Into<String>, payload: Vec<u8>, qos: u8, retain: bool) -> Self {
-        Self::new(topic.into(), payload, qos, retain, false, None, Vec::new())
+        Self::new(
+            topic.into(),
+            payload,
+            qos,
+            retain,
+            false,
+            None,
+            Vec::new(),
+            128,
+        )
+    }
+
+    pub fn with_priority(
+        topic: impl Into<String>,
+        payload: Vec<u8>,
+        qos: u8,
+        retain: bool,
+        priority: u8,
+    ) -> Self {
+        Self::new(
+            topic.into(),
+            payload,
+            qos,
+            retain,
+            false,
+            None,
+            Vec::new(),
+            priority,
+        )
     }
 
     /// Create a new builder for constructing a PublishCommand
@@ -274,6 +309,7 @@ pub struct PublishCommandBuilder {
     dup: bool,
     packet_id: Option<u16>,
     properties: Vec<Property>,
+    priority: u8,
 }
 
 /// Error type for publish builder validation
@@ -304,6 +340,7 @@ impl PublishCommandBuilder {
             dup: false,
             packet_id: None,
             properties: Vec::new(),
+            priority: 128,
         }
     }
 
@@ -536,6 +573,26 @@ impl PublishCommandBuilder {
         self
     }
 
+    /// Set the message priority (0=lowest, 255=highest, default=128)
+    ///
+    /// Higher priority messages will be sent before lower priority messages
+    /// when multiple messages are queued.
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+    /// let cmd = PublishCommand::builder()
+    ///     .topic("alerts/critical")
+    ///     .payload(b"System critical")
+    ///     .priority(255)  // Highest priority
+    ///     .build()
+    ///     .unwrap();
+    /// ```
+    pub fn priority(mut self, priority: u8) -> Self {
+        self.priority = priority;
+        self
+    }
+
     /// Build the final PublishCommand
     ///
     /// # Errors
@@ -562,6 +619,7 @@ impl PublishCommandBuilder {
             dup: self.dup,
             packet_id: self.packet_id,
             properties: self.properties,
+            priority: self.priority,
         })
     }
 }
@@ -1070,6 +1128,10 @@ pub struct TokioAsyncClientConfig {
     /// Only used when connecting via quic:// URLs (requires `quic` feature)
     #[cfg(feature = "quic")]
     pub quic_datagram_receive_buffer_size: usize,
+    /// Enable priority queue for QoS-based message prioritization
+    pub priority_queue_enabled: bool,
+    /// Maximum size of the priority queue
+    pub priority_queue_limit: usize,
 }
 
 impl Default for TokioAsyncClientConfig {
@@ -1106,6 +1168,8 @@ impl Default for TokioAsyncClientConfig {
             quic_client_key_pem: None, // No client key by default
             #[cfg(feature = "quic")]
             quic_datagram_receive_buffer_size: 0, // Disable datagram
+            priority_queue_enabled: true,
+            priority_queue_limit: 1000,
         }
     }
 }
@@ -1187,6 +1251,18 @@ impl ConfigBuilder {
     /// Set maximum number of reconnect attempts (0 = infinite)
     pub fn max_reconnect_attempts(mut self, max_attempts: u32) -> Self {
         self.config.max_reconnect_attempts = max_attempts;
+        self
+    }
+
+    /// Enable or disable priority queue
+    pub fn priority_queue_enabled(mut self, enabled: bool) -> Self {
+        self.config.priority_queue_enabled = enabled;
+        self
+    }
+
+    /// Set priority queue limit
+    pub fn priority_queue_limit(mut self, limit: usize) -> Self {
+        self.config.priority_queue_limit = limit;
         self
     }
 
@@ -1900,6 +1976,49 @@ impl TokioAsyncMqttClient {
         self.publish_with_command(command).await
     }
 
+    /// Publish a message with priority (non-blocking)
+    ///
+    /// # Arguments
+    /// * `topic` - Topic to publish to
+    /// * `payload` - Message payload
+    /// * `qos` - Quality of Service (0, 1, or 2)
+    /// * `retain` - Whether broker should retain this message
+    /// * `priority` - Message priority (0=lowest, 255=highest, default=128)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
+    /// // High priority alert message
+    /// client.publish_with_priority("alerts/critical", b"System down", 1, false, 255).await?;
+    ///
+    /// // Normal priority data
+    /// client.publish_with_priority("sensors/temp", b"23.5", 0, false, 128).await?;
+    ///
+    /// // Low priority log
+    /// client.publish_with_priority("logs/debug", b"Debug info", 0, false, 50).await?;
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn publish_with_priority(
+        &self,
+        topic: &str,
+        payload: &[u8],
+        qos: u8,
+        retain: bool,
+        priority: u8,
+    ) -> io::Result<()> {
+        let command = PublishCommand::with_priority(topic, payload.to_vec(), qos, retain, priority);
+        self.publish_with_command(command).await
+    }
+
     /// Publish with fully customized command
     pub async fn publish_with_command(&self, command: PublishCommand) -> io::Result<()> {
         self.send_command(TokioClientCommand::Publish(command))
@@ -1952,6 +2071,53 @@ impl TokioAsyncMqttClient {
         retain: bool,
     ) -> Result<PublishResult, MqttClientError> {
         let command = PublishCommand::simple(topic, payload.to_vec(), qos, retain);
+        self.publish_with_command_sync(command).await
+    }
+
+    /// Publish with priority and wait for acknowledgment
+    ///
+    /// This method blocks until the broker acknowledges the message with priority support:
+    /// - QoS 0: Returns immediately after sending
+    /// - QoS 1: Waits for PUBACK from broker
+    /// - QoS 2: Waits for PUBCOMP from broker
+    ///
+    /// Higher priority messages are sent before lower priority messages when queued.
+    ///
+    /// # Arguments
+    /// * `topic` - Topic to publish to
+    /// * `payload` - Message payload
+    /// * `qos` - Quality of Service (0, 1, or 2)
+    /// * `retain` - Whether broker should retain this message
+    /// * `priority` - Message priority (0=lowest, 255=highest, default=128)
+    ///
+    /// # Example
+    /// ```no_run
+    /// # use flowsdk::mqtt_client::{MqttClientOptions, TokioAsyncMqttClient, TokioAsyncClientConfig};
+    /// # use flowsdk::mqtt_client::tokio_async_client::TokioMqttEventHandler;
+    /// # #[derive(Clone)]
+    /// # struct Handler;
+    /// # #[async_trait::async_trait]
+    /// # impl TokioMqttEventHandler for Handler {}
+    /// # async fn example() -> Result<(), Box<dyn std::error::Error>> {
+    /// # let options = MqttClientOptions::builder().peer("localhost:1883").client_id("example").build();
+    /// # let client = TokioAsyncMqttClient::new(options, Box::new(Handler), TokioAsyncClientConfig::default()).await?;
+    /// // Send critical alert with highest priority and wait for ack
+    /// let result = client.publish_sync_with_priority(
+    ///     "alerts/critical", b"Emergency", 2, false, 255
+    /// ).await?;
+    /// println!("Critical message sent with packet ID: {:?}", result.packet_id);
+    /// # Ok(())
+    /// # }
+    /// ```
+    pub async fn publish_sync_with_priority(
+        &self,
+        topic: &str,
+        payload: &[u8],
+        qos: u8,
+        retain: bool,
+        priority: u8,
+    ) -> Result<PublishResult, MqttClientError> {
+        let command = PublishCommand::with_priority(topic, payload.to_vec(), qos, retain, priority);
         self.publish_with_command_sync(command).await
     }
 
@@ -2621,6 +2787,8 @@ struct TokioClientWorker {
     mqtt_version: u8,
     /// Last time any control packet was SENT (for keep-alive compliance)
     last_packet_sent: Instant,
+    /// Priority queue for outgoing messages
+    priority_queue: PriorityQueue<u8, PublishCommand>,
 }
 
 impl TokioClientWorker {
@@ -2633,6 +2801,7 @@ impl TokioClientWorker {
         let send_capacity = config.send_buffer_size;
         let recv_capacity = config.recv_buffer_size;
         let mqtt_version = options.mqtt_version; // Capture before move
+        let priority_queue_limit = config.priority_queue_limit;
         TokioClientWorker {
             options,
             event_handler,
@@ -2654,6 +2823,7 @@ impl TokioClientWorker {
             keep_alive_timer: None,
             mqtt_version,
             last_packet_sent: Instant::now(),
+            priority_queue: PriorityQueue::new(priority_queue_limit),
         }
     }
 
@@ -3265,6 +3435,8 @@ impl TokioClientWorker {
                 if self.config.buffer_messages {
                     self.flush_message_buffer().await;
                 }
+                // Flush priority queue after connection
+                self.flush_priority_queue().await;
             }
             Err(mqtt_err) => {
                 self.event_handler.on_error(&mqtt_err).await;
@@ -3352,30 +3524,15 @@ impl TokioClientWorker {
 
     /// Handle publish command
     async fn handle_publish(&mut self, command: PublishCommand) {
-        if self.stream.is_none() && self.config.buffer_messages {
-            if self.message_buffer.len() >= self.config.max_buffer_size {
-                let mqtt_err = MqttClientError::BufferFull {
-                    buffer_type: "publish buffer".to_string(),
-                    capacity: self.config.max_buffer_size,
-                };
-                self.event_handler.on_error(&mqtt_err).await;
-                return;
-            }
+        // Always enqueue to priority queue for prioritized sending
+        let priority = command.priority;
+        self.priority_queue.enqueue(priority, command);
 
-            self.message_buffer.push_back(command);
-            return;
+        // If connected, trigger flush to send queued messages
+        if self.stream.is_some() {
+            self.flush_priority_queue().await;
         }
-
-        if self.stream.is_none() {
-            let mqtt_err = MqttClientError::NotConnected;
-            self.event_handler.on_error(&mqtt_err).await;
-            return;
-        }
-
-        if let Err(e) = self.send_publish_command(command).await {
-            let mqtt_err = MqttClientError::from_io_error(e, "send publish");
-            self.event_handler.on_error(&mqtt_err).await;
-        }
+        // If disconnected, messages stay in priority queue until connection is established
     }
 
     /// Handle synchronous publish command
@@ -3896,6 +4053,39 @@ impl TokioClientWorker {
         }
     }
 
+    /// Flush priority queue - send messages in priority order
+    async fn flush_priority_queue(&mut self) {
+        if self.priority_queue.is_empty() {
+            return;
+        }
+
+        while self.is_connected && self.stream.is_some() {
+            match self.priority_queue.dequeue() {
+                Some((priority, command)) => {
+                    match self.send_publish_command(command.clone()).await {
+                        Ok(()) => {
+                            // Successfully sent, continue to next message
+                            // @TODO: flow control could be added here.
+                            continue;
+                        }
+                        Err(e) => {
+                            // Failed to send - re-enqueue with same priority and stop
+                            let mqtt_err =
+                                MqttClientError::from_io_error(e, "flush priority queue");
+                            self.event_handler.on_error(&mqtt_err).await;
+                            self.priority_queue.enqueue(priority, command);
+                            break;
+                        }
+                    }
+                }
+                None => {
+                    // Queue is empty
+                    break;
+                }
+            }
+        }
+    }
+
     /// Handle received MQTT packets
     async fn handle_mqtt_packet(&mut self, packet: MqttPacket) {
         match packet {
@@ -3934,6 +4124,8 @@ impl TokioClientWorker {
                     if self.config.buffer_messages {
                         self.flush_message_buffer().await;
                     }
+                    // Flush priority queue after CONNACK v5
+                    self.flush_priority_queue().await;
                 }
 
                 let result = ConnectionResult {
@@ -3992,6 +4184,8 @@ impl TokioClientWorker {
                     if self.config.buffer_messages {
                         self.flush_message_buffer().await;
                     }
+                    // Flush priority queue after CONNACK v3
+                    self.flush_priority_queue().await;
                 }
 
                 let result = ConnectionResult {
