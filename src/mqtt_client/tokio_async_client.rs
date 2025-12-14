@@ -172,6 +172,7 @@ pub struct PublishCommand {
 }
 
 impl PublishCommand {
+    #[allow(clippy::too_many_arguments)]
     pub fn new(
         topic_name: String,
         payload: Vec<u8>,
