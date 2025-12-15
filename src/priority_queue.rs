@@ -84,6 +84,7 @@ where
     }
 
     /// Returns true if the queue is empty.
+    #[must_use]
     pub fn is_empty(&self) -> bool {
         self.size == 0
     }
