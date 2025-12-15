@@ -2764,8 +2764,6 @@ struct TokioClientWorker {
     is_connected: bool,
     /// Reconnection state
     reconnect_attempts: u32,
-    /// Message buffer for when disconnected
-    message_buffer: VecDeque<PublishCommand>,
     /// Pending subscribe operations keyed by packet identifier
     pending_subscribes: HashMap<u16, Vec<String>>,
     /// Pending unsubscribe operations keyed by packet identifier
@@ -2812,7 +2810,6 @@ impl TokioClientWorker {
             streams: AsyncMQTTStreams::new(send_capacity, recv_capacity),
             is_connected: false,
             reconnect_attempts: 0,
-            message_buffer: VecDeque::new(),
             pending_subscribes: HashMap::new(),
             pending_unsubscribes: HashMap::new(),
             pending_publishes: HashMap::new(),
@@ -3433,9 +3430,6 @@ impl TokioClientWorker {
                 // Set up dynamic keep-alive timer
                 self.reset_keep_alive_timer();
 
-                if self.config.buffer_messages {
-                    self.flush_message_buffer().await;
-                }
                 // Flush priority queue after connection
                 self.flush_priority_queue().await;
             }
@@ -3944,7 +3938,6 @@ impl TokioClientWorker {
         if self.stream.is_none() {
             self.is_connected = false;
             self.keep_alive_timer = None;
-            self.message_buffer.clear();
             return;
         }
 
@@ -3976,7 +3969,6 @@ impl TokioClientWorker {
 
         self.is_connected = false;
         self.keep_alive_timer = None;
-        self.message_buffer.clear();
     }
 
     async fn send_publish_command(&mut self, mut command: PublishCommand) -> io::Result<()> {
@@ -4030,28 +4022,6 @@ impl TokioClientWorker {
         })?;
 
         self.streams.send_egress(bytes).await
-    }
-
-    async fn flush_message_buffer(&mut self) {
-        if self.message_buffer.is_empty() {
-            return;
-        }
-
-        while self.is_connected && self.stream.is_some() {
-            if let Some(command) = self.message_buffer.pop_front() {
-                match self.send_publish_command(command.clone()).await {
-                    Ok(()) => continue,
-                    Err(e) => {
-                        let mqtt_err = MqttClientError::from_io_error(e, "flush publish buffer");
-                        self.event_handler.on_error(&mqtt_err).await;
-                        self.message_buffer.push_front(command);
-                        break;
-                    }
-                }
-            } else {
-                break;
-            }
-        }
     }
 
     /// Flush priority queue - send messages in priority order
@@ -4122,9 +4092,6 @@ impl TokioClientWorker {
                         }
                     }
 
-                    if self.config.buffer_messages {
-                        self.flush_message_buffer().await;
-                    }
                     // Flush priority queue after CONNACK v5
                     self.flush_priority_queue().await;
                 }
@@ -4182,9 +4149,6 @@ impl TokioClientWorker {
                         }
                     }
 
-                    if self.config.buffer_messages {
-                        self.flush_message_buffer().await;
-                    }
                     // Flush priority queue after CONNACK v3
                     self.flush_priority_queue().await;
                 }
