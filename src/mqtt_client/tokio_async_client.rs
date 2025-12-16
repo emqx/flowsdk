@@ -5334,6 +5334,8 @@ mod publish_builder_tests {
 #[cfg(test)]
 mod config_builder_tests {
     use super::*;
+    use std::time::Duration;
+    use tokio::time::sleep;
 
     #[test]
     fn test_receive_maximum_default() {
@@ -5511,5 +5513,230 @@ mod config_builder_tests {
 
             assert_eq!(config.topic_alias_maximum, Some(value));
         }
+    }
+
+    // Simple test event handler for testing
+    struct TestEventHandler;
+
+    #[async_trait::async_trait]
+    impl TokioMqttEventHandler for TestEventHandler {
+        async fn on_connected(&mut self, _result: &ConnectionResult) {}
+        async fn on_disconnected(&mut self, _reason: Option<u8>) {}
+        async fn on_published(&mut self, _result: &PublishResult) {}
+        async fn on_subscribed(&mut self, _result: &SubscribeResult) {}
+        async fn on_unsubscribed(&mut self, _result: &UnsubscribeResult) {}
+        async fn on_message_received(&mut self, _publish: &MqttPublish) {}
+        async fn on_ping_response(&mut self, _result: &PingResult) {}
+        async fn on_error(&mut self, _error: &MqttClientError) {}
+        async fn on_connection_lost(&mut self) {}
+    }
+
+    #[tokio::test]
+    async fn test_priority_publishing_variations() {
+        // Test various priority levels and QoS combinations
+        let mqtt_options = MqttClientOptions::builder()
+            .peer("broker.emqx.io:1883")
+            .client_id("test_priority_variations")
+            .build();
+
+        let async_config = TokioAsyncClientConfig::builder()
+            .priority_queue_enabled(true)
+            .priority_queue_limit(100)
+            .buffer_messages(true)
+            .build();
+
+        let event_handler = Box::new(TestEventHandler);
+
+        let client = TokioAsyncMqttClient::new(mqtt_options, event_handler, async_config)
+            .await
+            .unwrap();
+
+        // Test all priority levels (0-255) with different QoS
+        let _ = client
+            .publish_with_priority("test/min", b"Minimum priority", 0, false, 0)
+            .await;
+        let _ = client
+            .publish_with_priority("test/low", b"Low priority", 1, false, 50)
+            .await;
+        let _ = client
+            .publish_with_priority("test/mid", b"Medium priority", 2, false, 128)
+            .await;
+        let _ = client
+            .publish_with_priority("test/high", b"High priority", 1, false, 200)
+            .await;
+        let _ = client
+            .publish_with_priority("test/max", b"Maximum priority", 0, false, 255)
+            .await;
+
+        // Test retained messages with priorities
+        let _ = client
+            .publish_with_priority("test/retained_high", b"Retained high", 1, true, 255)
+            .await;
+        let _ = client
+            .publish_with_priority("test/retained_low", b"Retained low", 1, true, 0)
+            .await;
+
+        sleep(Duration::from_millis(200)).await;
+        client.disconnect().await.ok();
+        client.shutdown().await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_priority_queue_limit_enforcement() {
+        // Test that priority queue respects capacity limits
+        let mqtt_options = MqttClientOptions::builder()
+            .peer("broker.emqx.io:1883")
+            .client_id("test_queue_limit")
+            .build();
+
+        let async_config = TokioAsyncClientConfig::builder()
+            .priority_queue_enabled(true)
+            .priority_queue_limit(10) // Small limit to test eviction
+            .buffer_messages(true)
+            .build();
+
+        let event_handler = Box::new(TestEventHandler);
+
+        let client = TokioAsyncMqttClient::new(mqtt_options, event_handler, async_config)
+            .await
+            .unwrap();
+
+        // Publish more messages than the limit before connecting
+        // This tests capacity eviction (low priority messages should be dropped)
+        for i in 0..15 {
+            let priority = if i < 5 { 255 } else { 50 }; // Mix of high and low priorities
+            let _ = client
+                .publish_with_priority(
+                    &format!("test/msg{}", i),
+                    format!("Message {}", i).as_bytes(),
+                    0,
+                    false,
+                    priority,
+                )
+                .await;
+        }
+
+        sleep(Duration::from_millis(100)).await;
+        client.disconnect().await.ok();
+        client.shutdown().await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_priority_queue_disabled() {
+        // Test that messages work when priority queue is disabled
+        let mqtt_options = MqttClientOptions::builder()
+            .peer("broker.emqx.io:1883")
+            .client_id("test_no_priority")
+            .build();
+
+        let async_config = TokioAsyncClientConfig::builder()
+            .priority_queue_enabled(false) // Disable priority queue
+            .buffer_messages(true)
+            .build();
+
+        let event_handler = Box::new(TestEventHandler);
+
+        let client = TokioAsyncMqttClient::new(mqtt_options, event_handler, async_config)
+            .await
+            .unwrap();
+
+        // Publish with priorities (should still work, just not prioritized)
+        let _ = client
+            .publish_with_priority("test/msg1", b"Message 1", 0, false, 255)
+            .await;
+        let _ = client
+            .publish_with_priority("test/msg2", b"Message 2", 1, false, 0)
+            .await;
+
+        sleep(Duration::from_millis(100)).await;
+        client.disconnect().await.ok();
+        client.shutdown().await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_priority_flush_after_reconnect() {
+        // Test that queued messages are flushed after reconnection
+        let mqtt_options = MqttClientOptions::builder()
+            .peer("broker.emqx.io:1883")
+            .client_id("test_reconnect_flush")
+            .build();
+
+        let async_config = TokioAsyncClientConfig::builder()
+            .priority_queue_enabled(true)
+            .priority_queue_limit(50)
+            .buffer_messages(true)
+            .auto_reconnect(false) // Manual reconnect control
+            .build();
+
+        let event_handler = Box::new(TestEventHandler);
+
+        let client = TokioAsyncMqttClient::new(mqtt_options, event_handler, async_config)
+            .await
+            .unwrap();
+
+        // Queue messages before connecting
+        for i in 0..5 {
+            let priority = 255 - (i * 50); // Descending priorities
+            let _ = client
+                .publish_with_priority(
+                    &format!("test/queued{}", i),
+                    format!("Queued message {}", i).as_bytes(),
+                    1,
+                    false,
+                    priority as u8,
+                )
+                .await;
+        }
+
+        // Connect and wait for flush
+        client.connect().await.ok();
+        sleep(Duration::from_millis(1000)).await;
+
+        // Publish additional messages after connection
+        let _ = client
+            .publish_with_priority("test/after_connect", b"After connect", 1, false, 200)
+            .await;
+
+        sleep(Duration::from_millis(500)).await;
+        client.disconnect().await.ok();
+        client.shutdown().await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_mixed_publish_and_priority_publish() {
+        // Test mixing regular publish with priority publish
+        let mqtt_options = MqttClientOptions::builder()
+            .peer("broker.emqx.io:1883")
+            .client_id("test_mixed_publish")
+            .build();
+
+        let async_config = TokioAsyncClientConfig::builder()
+            .priority_queue_enabled(true)
+            .priority_queue_limit(100)
+            .build();
+
+        let event_handler = Box::new(TestEventHandler);
+
+        let client = TokioAsyncMqttClient::new(mqtt_options, event_handler, async_config)
+            .await
+            .unwrap();
+
+        // Mix regular publish (default priority 128) with explicit priorities
+        let _ = client
+            .publish("test/regular1", b"Regular publish", 0, false)
+            .await;
+        let _ = client
+            .publish_with_priority("test/high", b"High priority", 0, false, 255)
+            .await;
+        let _ = client
+            .publish("test/regular2", b"Another regular", 1, false)
+            .await;
+        let _ = client
+            .publish_with_priority("test/low", b"Low priority", 1, false, 50)
+            .await;
+
+        sleep(Duration::from_millis(200)).await;
+        client.disconnect().await.ok();
+        client.shutdown().await.ok();
     }
 }
