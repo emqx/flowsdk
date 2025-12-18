@@ -3519,15 +3519,23 @@ impl TokioClientWorker {
 
     /// Handle publish command
     async fn handle_publish(&mut self, command: PublishCommand) {
-        // Always enqueue to priority queue for prioritized sending
-        let priority = command.priority;
-        self.priority_queue.enqueue(priority, command);
+        if self.config.priority_queue_enabled {
+            // Enqueue to priority queue for prioritized sending
+            let priority = command.priority;
+            self.priority_queue.enqueue(priority, command);
 
-        // If connected, trigger flush to send queued messages
-        if self.stream.is_some() {
-            self.flush_priority_queue().await;
+            // If connected, trigger flush to send queued messages
+            if self.stream.is_some() {
+                self.flush_priority_queue().await;
+            }
+            // If disconnected, messages stay in priority queue until connection is established
+        } else {
+            // Priority queue disabled - send directly if connected
+            if self.stream.is_some() {
+                let _ = self.send_publish_command(command).await;
+            }
+            // If disconnected and priority queue is disabled, drop the message
         }
-        // If disconnected, messages stay in priority queue until connection is established
     }
 
     /// Handle synchronous publish command
@@ -4026,6 +4034,11 @@ impl TokioClientWorker {
 
     /// Flush priority queue - send messages in priority order
     async fn flush_priority_queue(&mut self) {
+        // Only flush if priority queue is enabled
+        if !self.config.priority_queue_enabled {
+            return;
+        }
+
         if self.priority_queue.is_empty() {
             return;
         }
