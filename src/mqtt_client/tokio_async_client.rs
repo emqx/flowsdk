@@ -3544,6 +3544,12 @@ impl TokioClientWorker {
         command: PublishCommand,
         response_tx: oneshot::Sender<PublishResult>,
     ) {
+        // Flush priority queue first to maintain priority ordering
+        // This ensures all queued messages are sent before the sync publish
+        if self.config.priority_queue_enabled && self.is_connected && self.stream.is_some() {
+            self.flush_priority_queue().await;
+        }
+
         // Check connection status
         if self.stream.is_none() {
             // For disconnected state, send an error result
@@ -5749,6 +5755,51 @@ mod config_builder_tests {
             .await;
 
         sleep(Duration::from_millis(200)).await;
+        client.disconnect().await.ok();
+        client.shutdown().await.ok();
+    }
+
+    #[tokio::test]
+    async fn test_sync_publish_flushes_priority_queue() {
+        // Test that synchronous publish flushes priority queue first
+        let mqtt_options = MqttClientOptions::builder()
+            .peer("broker.emqx.io:1883")
+            .client_id("test_sync_flush")
+            .build();
+
+        let async_config = TokioAsyncClientConfig::builder()
+            .priority_queue_enabled(true)
+            .priority_queue_limit(100)
+            .publish_ack_timeout_ms(5000)
+            .build();
+
+        let event_handler = Box::new(TestEventHandler);
+
+        let client = TokioAsyncMqttClient::new(mqtt_options, event_handler, async_config)
+            .await
+            .unwrap();
+
+        // Queue some async messages with different priorities (before connecting)
+        let _ = client
+            .publish_with_priority("test/async1", b"Low priority async", 0, false, 50)
+            .await;
+        let _ = client
+            .publish_with_priority("test/async2", b"High priority async", 0, false, 255)
+            .await;
+        let _ = client
+            .publish_with_priority("test/async3", b"Medium priority async", 0, false, 128)
+            .await;
+
+        // Connect to trigger flush
+        client.connect().await.ok();
+        sleep(Duration::from_millis(1000)).await;
+
+        // Now send a synchronous publish - it should flush queue first
+        let _ = client
+            .publish_sync_with_priority("test/sync", b"Sync publish", 1, false, 200)
+            .await;
+
+        sleep(Duration::from_millis(500)).await;
         client.disconnect().await.ok();
         client.shutdown().await.ok();
     }
