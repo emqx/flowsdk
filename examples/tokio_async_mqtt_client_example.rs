@@ -221,6 +221,7 @@ async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
         .with_message_expiry_interval(3600) // Expire after 1 hour
         .with_user_property("sensor_id", "42")
         .with_user_property("location", "room1")
+        .priority(128)
         .build()?;
     client.publish_with_command(rich_cmd).await?;
 

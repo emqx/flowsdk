@@ -72,6 +72,7 @@ where
     }
 
     /// Returns a reference to the element with the highest priority.
+    #[must_use]
     pub fn peek(&self) -> Option<(&P, &T)> {
         let (prio, deque) = self.map.last_key_value()?;
         let item = deque.front()?;
