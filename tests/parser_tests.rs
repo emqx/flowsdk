@@ -572,10 +572,10 @@ fn test_stream_v5() {
     }
 
     // next is None
-    if let Err(ParseError::BufferEmpty) = parser.next_packet() {
+    if let Ok(None) = parser.next_packet() {
         // Expected
     } else {
-        panic!("Expected ParseError::BufferEmpty");
+        panic!("Expected Ok(None) (Buffer empty)");
     }
 }
 
@@ -620,9 +620,9 @@ fn test_stream_v3() {
     }
 
     // next is None
-    if let Err(ParseError::BufferEmpty) = parser.next_packet() {
-        // Expected ParseError::BufferEmpty
+    if let Ok(None) = parser.next_packet() {
+        // Expected Ok(None)
     } else {
-        panic!("Expected ParseError::BufferEmpty");
+        panic!("Expected Ok(None) (Buffer empty)");
     }
 }
