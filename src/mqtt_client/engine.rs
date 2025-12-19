@@ -39,7 +39,38 @@ pub enum MqttEvent {
     },
 }
 
-/// A Sans-I/O MQTT protocol engine.
+/// A "Sans-I/O" MQTTv3.1.1/v5.0 protocol engine.
+///
+/// This engine strictly handles the *protocol state* of an MQTT connection without directly performing any I/O operations.
+/// It is designed to be embedded within an I/O runtime (like Tokio) or used in other environments (embedded firmware, FFI).
+///
+/// # Architecture
+///
+/// The engine functions as a state machine:
+/// - **Input**:
+///     - Bytes received from the network (`handle_incoming`).
+///     - Time ticks for keep-alive/timeouts (`handle_tick`).
+///     - High-level commands like `publish`, `subscribe` calls.
+/// - **Output**:
+///     - Bytes to be sent to the network (accessible via `take_outgoing`).
+///     - Events (state changes, incoming messages) for the application (`take_events`).
+///
+/// # Usage
+///
+/// 1. Initialize with `MqttClientOptions`.
+/// 2. Connect the underlying transport (TCP/TLS/QUIC/etc.).
+/// 3. Call `connect()` to initiate the MQTT handshake.
+/// 4. In a loop:
+///     - Feed incoming bytes: `engine.handle_incoming(&buf)`.
+///     - Check for outgoing bytes: `engine.take_outgoing()`.
+///     - Handle events: `engine.take_events()`.
+///     - Manage time: Call `engine.handle_tick(now)` and sleep until `engine.next_tick_at()`.
+///
+/// # Buffer Limits
+///
+/// The engine enforces strict buffer limits to prevent memory exhaustion:
+/// - `outgoing_buffer`: Limits queued packets waiting to be sent. Returns `MqttClientError::BufferFull` if exceeded.
+/// - `events`: Limits pending events. Pauses parsing (back-pressure) if limit reached.
 pub struct MqttEngine {
     options: MqttClientOptions,
     session: Option<ClientSession>,
@@ -73,6 +104,10 @@ pub struct MqttEngine {
 }
 
 impl MqttEngine {
+    /// Create a new `MqttEngine` with the given configuration options.
+    ///
+    /// The engine requires strict configuration for buffer limits and timeouts.
+    /// Default buffer size for the internal parser is 16KB.
     pub fn new(options: MqttClientOptions) -> Self {
         let mqtt_version = options.mqtt_version;
         // Default buffer size 16KB
@@ -109,7 +144,10 @@ impl MqttEngine {
         }
     }
 
-    /// Take all pending events from the engine.
+    /// Drain all pending events from the engine.
+    ///
+    /// This should be called frequently (e.g., after `handle_incoming` or `handle_tick`)
+    /// to process state changes and incoming messages.
     pub fn take_events(&mut self) -> Vec<MqttEvent> {
         std::mem::take(&mut self.events)
     }
@@ -126,20 +164,14 @@ impl MqttEngine {
         self.is_connected = false;
     }
 
-    /// Schedule next reconnection attempt with exponential backoff.
+    /// Schedule the next reconnection attempt using exponential backoff.
     ///
-    /// This method calculates the next reconnection time using exponential backoff:
-    /// `delay = min(base_delay * 2^attempts, max_delay)`
+    /// Logic: `delay = min(base * 2^attempts, max)`.
     ///
-    /// # Arguments
+    /// If `max_reconnect_attempts` is set and reached, no reconnection is scheduled,
+    /// and the engine remains in a disconnected state essentially "giving up".
     ///
-    /// * `now` - Current time
-    ///
-    /// # Behavior
-    ///
-    /// - If `max_reconnect_attempts` is reached, no reconnection is scheduled
-    /// - Emits `ReconnectScheduled` event with attempt number and delay
-    /// - Increments `reconnect_attempts` counter
+    /// Emits `MqttEvent::ReconnectScheduled` to notify the application of the next attempt.
     pub fn schedule_reconnect(&mut self, now: Instant) {
         // Check if max attempts reached
         if self.max_reconnect_attempts > 0 && self.reconnect_attempts >= self.max_reconnect_attempts
@@ -181,7 +213,15 @@ impl MqttEngine {
         self.next_reconnect_at = None;
     }
 
-    /// Process raw incoming data from the network.
+    /// Feed raw bytes received from the network into the protocol parser.
+    ///
+    /// This method parses the input stream into MQTT packets and updates the internal state.
+    ///
+    /// # Back-pressure
+    ///
+    /// If the internal `events` buffer reaches `max_event_count`, this method will **stop processing**
+    /// and return early, leaving remaining bytes in the internal buffer. The caller should
+    /// consume events via `take_events()` and call `handle_incoming(&[])` again to resume processing.
     pub fn handle_incoming(&mut self, data: &[u8]) -> Vec<MqttEvent> {
         self.parser.feed(data);
         self.last_packet_received = Instant::now();
@@ -213,7 +253,15 @@ impl MqttEngine {
         self.mqtt_version
     }
 
-    /// Handle time-sensitive operations like keep-alive and reconnection.
+    /// Process time-dependent logic (keep-alive, timeouts, retransmissions).
+    ///
+    /// This should be called at every tick of the run loop or when the `next_tick_at` deadline expires.
+    ///
+    /// # Operations
+    /// 1. **Reconnection**: If disconnected and it's time to reconnect, emits `ReconnectNeeded`.
+    /// 2. **Keep-Alive**: Sends `PINGREQ` if no control packets have been sent within the Keep-Alive interval.
+    /// 3. **Timeout Detection**: Detects dead connections (no data received for Keep-Alive * multiplier) -> Disconnects and schedules reconnect.
+    /// 4. **Retransmissions** (MQTT v3.1.1): Resends unacknowledged QoS 1/2 packets.
     pub fn handle_tick(&mut self, now: Instant) -> Vec<MqttEvent> {
         // Handle reconnection timer when disconnected
         if !self.is_connected {
@@ -282,6 +330,17 @@ impl MqttEngine {
         events
     }
 
+    /// Returns the exact timestamp of the next required wake-up.
+    ///
+    /// The runtime loop should sleep until this timestamp to avoid busy-waiting.
+    ///
+    /// Returns `None` if there are no scheduled timer events (sleep indefinitely or until IO).
+    ///
+    /// Prioritizes:
+    /// 1. Reconnection attempts (if disconnected).
+    /// 2. Keep-alive PINGs.
+    /// 3. Connection timeout checks.
+    /// 4. Packet retransmissions.
     pub fn next_tick_at(&self) -> Option<Instant> {
         // 1. Reconnection timer (highest priority when disconnected)
         if !self.is_connected {
@@ -320,6 +379,10 @@ impl MqttEngine {
         next
     }
 
+    /// Take bytes ready to be sent to the network.
+    ///
+    /// This should be written to the underlying transport immediately.
+    /// Clears the internal outgoing buffer.
     pub fn take_outgoing(&mut self) -> Vec<u8> {
         let mut all_bytes = Vec::new();
         while let Some(packet) = self.outgoing_buffer.pop_front() {
@@ -330,6 +393,9 @@ impl MqttEngine {
 
     // --- Command Methods ---
 
+    /// Initiate the MQTT connection handshake (send CONNECT packet).
+    ///
+    /// Should be called after the physical connection is established.
     pub fn connect(&mut self) {
         if self.is_connected {
             return;
@@ -363,6 +429,13 @@ impl MqttEngine {
         let _ = self.enqueue_packet(packet);
     }
 
+    /// Queue a PUBLISH packet.
+    ///
+    /// - **QoS 0**: ID is usually None (unless needed for tracing).
+    /// - **QoS 1/2**: Returns the assigned Packet ID (or uses the one provided).
+    ///
+    /// The command is pushed to the `PriorityQueue` and only moved to the `outgoing_buffer`
+    /// via `process_queue()` if the buffer limits allow.
     pub fn publish(&mut self, mut command: PublishCommand) -> Result<Option<u16>, MqttClientError> {
         let pid = if command.qos > 0 {
             if let Some(pid) = command.packet_id {
@@ -385,6 +458,10 @@ impl MqttEngine {
         Ok(pid)
     }
 
+    /// Queue a SUBSCRIBE packet.
+    ///
+    /// Be aware that this might fail immediately with `MqttClientError::BufferFull`
+    /// if the outgoing buffer is at capacity.
     pub fn subscribe(&mut self, mut command: SubscribeCommand) -> Result<u16, MqttClientError> {
         let pid = if let Some(pid) = command.packet_id {
             pid
@@ -437,6 +514,7 @@ impl MqttEngine {
         Ok(pid)
     }
 
+    /// Queue a DISCONNECT packet and update state to disconnected.
     pub fn disconnect(&mut self) {
         if !self.is_connected {
             return;
