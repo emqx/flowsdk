@@ -196,7 +196,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .max_buffer_size(1000)
         .send_buffer_size(1000)
         .recv_buffer_size(1000)
-        .keep_alive_interval(60)
         .tcp_nodelay(true)
         .build();
 

@@ -101,7 +101,6 @@ async fn run_priority_example() -> Result<(), Box<dyn std::error::Error>> {
 
     let async_config = TokioAsyncClientConfig::builder()
         .auto_reconnect(true)
-        .reconnect_delay_ms(1000)
         .max_reconnect_delay_ms(30000)
         .buffer_messages(true)
         .max_buffer_size(100)
