@@ -805,8 +805,6 @@ impl Default for ConfigBuilder {
     }
 }
 
-/// Async stream for outbound MQTT frame bytes.
-
 /// Tokio-based async MQTT client
 pub struct TokioAsyncMqttClient {
     /// Command sender to worker task
@@ -1959,11 +1957,8 @@ impl TokioClientWorker {
         }
         true
     }
-
-    /// Drain the egress channel and push MQTT frames onto the transport.
-
+    
     /// Create transport based on peer address scheme
-    ///
     /// Supports:
     /// - `mqtt://host:port` or `host:port` → TCP transport
     /// - `mqtts://host:port` → TLS transport (requires `tls` feature)
