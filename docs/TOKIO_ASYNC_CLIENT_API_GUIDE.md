@@ -999,8 +999,6 @@ pub struct TokioAsyncClientConfig {
     pub command_queue_size: usize,               // Default: 1000
     pub buffer_messages: bool,                   // Default: true
     pub max_buffer_size: usize,                  // Default: 1000
-    pub send_buffer_size: usize,                 // Default: 1000
-    pub recv_buffer_size: usize,                 // Default: 1000
     
     // Other
     pub keep_alive_interval: u64,                // Default: 60 (seconds)

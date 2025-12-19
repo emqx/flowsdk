@@ -158,8 +158,7 @@ async fn run_example(test_mode: bool) -> Result<(), Box<dyn std::error::Error>> 
     // Configure tokio async client settings with QUIC options
     let async_config = TokioAsyncClientConfig::builder()
         .auto_reconnect(true)
-        .reconnect_delay_ms(1000)
-        .max_reconnect_delay_ms(30000)
+        .max_reconnect_delay_ms(1000)
         .max_reconnect_attempts(5)
         .quic_insecure_skip_verify(true) // ⚠️ For testing only!
         .quic_enable_0rtt(false)

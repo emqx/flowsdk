@@ -174,8 +174,6 @@ async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
         .command_queue_size(1000)
         .buffer_messages(true)
         .max_buffer_size(1000)
-        .send_buffer_size(1000)
-        .recv_buffer_size(1000)
         .tcp_nodelay(false)
         .build();
 

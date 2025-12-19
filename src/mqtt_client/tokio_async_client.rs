@@ -208,10 +208,6 @@ pub struct TokioAsyncClientConfig {
     pub buffer_messages: bool,
     /// Maximum size of message buffer
     pub max_buffer_size: usize,
-    /// Send buffer size limit
-    pub send_buffer_size: usize,
-    /// Recv buffer size limit
-    pub recv_buffer_size: usize,
 
     /// Enable TCP_NODELAY (disable Nagle) on the underlying socket
     pub tcp_nodelay: bool,
@@ -274,8 +270,6 @@ impl Default for TokioAsyncClientConfig {
             command_queue_size: 1000,
             buffer_messages: true,
             max_buffer_size: 1000,
-            send_buffer_size: 1000,
-            recv_buffer_size: 1000,
             tcp_nodelay: true,
             connect_timeout_ms: Some(30000),     // 30 seconds
             subscribe_timeout_ms: Some(10000),   // 10 seconds
@@ -335,7 +329,6 @@ impl TokioAsyncClientConfig {
 ///     .max_reconnect_attempts(10)
 ///     .connect_timeout_ms(60000)
 ///     .subscribe_timeout_ms(5000)
-///     .send_buffer_size(2000)
 ///     .tcp_nodelay(false)
 ///     .build();
 /// ```
@@ -474,18 +467,6 @@ impl ConfigBuilder {
     /// Set maximum size of message buffer
     pub fn max_buffer_size(mut self, size: usize) -> Self {
         self.config.max_buffer_size = size;
-        self
-    }
-
-    /// Set send buffer size limit
-    pub fn send_buffer_size(mut self, size: usize) -> Self {
-        self.config.send_buffer_size = size;
-        self
-    }
-
-    /// Set receive buffer size limit
-    pub fn recv_buffer_size(mut self, size: usize) -> Self {
-        self.config.recv_buffer_size = size;
         self
     }
 
@@ -1948,7 +1929,7 @@ impl TokioClientWorker {
                 self.handle_auth(reason_code, properties).await;
             }
             TokioClientCommand::SendPacket(packet) => {
-                self.engine.enqueue_packet(packet);
+                let _ = self.engine.enqueue_packet(packet);
             }
         }
         true
