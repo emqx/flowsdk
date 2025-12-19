@@ -104,10 +104,17 @@ impl Default for MqttClientOptions {
     }
 }
 
+pub type MqttClientOptionsBuilder = MqttClientOptions;
+
 impl MqttClientOptions {
     /// Create a new builder with default values
     pub fn builder() -> Self {
         Self::default()
+    }
+
+    /// Build the options
+    pub fn build(self) -> Self {
+        self
     }
 
     /// Set the broker peer address (host:port)
@@ -397,11 +404,6 @@ impl MqttClientOptions {
     #[cfg(any(feature = "tls", feature = "rustls-tls"))]
     pub fn tls_backend(mut self, backend: TlsBackend) -> Self {
         self.tls_backend = Some(backend);
-        self
-    }
-
-    /// Build the options (consumes self, no additional validation needed)
-    pub fn build(self) -> Self {
         self
     }
 }

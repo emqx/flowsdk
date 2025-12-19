@@ -1,7 +1,7 @@
 use flowsdk::mqtt_client::client::{
     ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
 };
-use flowsdk::mqtt_client::tokio_async_client::PublishCommand;
+use flowsdk::mqtt_client::PublishCommand;
 use flowsdk::mqtt_client::{
     MqttClientError, MqttClientOptions, TokioAsyncClientConfig, TokioAsyncMqttClient,
     TokioMqttEventHandler,
