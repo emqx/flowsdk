@@ -234,7 +234,18 @@ async fn start_streaming_loop(
     'outer: loop {
         tokio::select! {
             // Handle MQTT messages, client facing.
-            _ = conn.read_h.read_buf(parser.buffer_mut()) => {
+            n = conn.read_h.read_buf(parser.buffer_mut()) => {
+                match n {
+                    Ok(0) => {
+                        info!("Client {} disconnected (EOF)", conn.client_id);
+                        break 'outer;
+                    }
+                    Ok(_) => {}
+                    Err(e) => {
+                        error!("Error reading from client {}: {}", conn.client_id, e);
+                        break 'outer;
+                    }
+                }
                 // Parse all available packets from the buffer
                 loop {
                     match parser.next_packet() {
@@ -269,11 +280,6 @@ async fn start_streaming_loop(
                         Ok(None) => {
                             // No more complete packets available, exit parsing loop
                             break;
-                        }
-                        Err(ParseError::BufferEmpty) => {
-                            // No data to read, exit parsing loop
-                            debug!("No data to read for client {}, ending...", conn.client_id);
-                            break 'outer;
                         }
                         Err(e) => {
                             error!("Error parsing MQTT packet from client {}: {}", conn.client_id, e);

@@ -70,13 +70,19 @@ impl MqttParser {
     ///
     /// - If a full packet is available, it returns `Ok(Some(MqttPacket))`,
     ///   and the corresponding bytes are removed from the buffer.
-    /// - If the buffer does not contain a full packet, it returns `Ok(None)`.
+    /// - If the buffer is empty or does not contain a full packet, it returns `Ok(None)`,
+    ///   indicating that more data is needed.
     /// - If the data in the buffer is malformed, it returns `Err(ParseError)`.
     pub fn next_packet(&mut self) -> Result<Option<MqttPacket>, ParseError> {
         assert!(
             self.mqtt_version != 0,
             "MQTT version must be set before parsing packets"
         );
+
+        if self.buffer.is_empty() {
+            return Ok(None);
+        }
+
         match MqttPacket::from_bytes_with_version(&self.buffer, self.mqtt_version) {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 // A full packet was parsed, advance the buffer
@@ -140,7 +146,7 @@ where
     fn next(&mut self) -> Option<Self::Item> {
         match self.parser.next_packet() {
             Ok(Some(packet)) => Some(Ok(packet)),
-            Err(ParseError::BufferEmpty) | Ok(None) => {
+            Ok(None) => {
                 // Reserve space in the parser's buffer for reading
                 let buffer = self.parser.buffer_mut();
                 let initial_len = buffer.len();
