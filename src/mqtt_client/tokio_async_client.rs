@@ -198,8 +198,6 @@ enum TokioClientCommand {
 pub struct TokioAsyncClientConfig {
     /// Enable automatic reconnection on connection loss
     pub auto_reconnect: bool,
-    /// Initial reconnect delay in milliseconds
-    pub reconnect_delay_ms: u64,
     /// Maximum reconnect delay in milliseconds
     pub max_reconnect_delay_ms: u64,
     /// Maximum number of reconnect attempts (0 = infinite)
@@ -214,8 +212,7 @@ pub struct TokioAsyncClientConfig {
     pub send_buffer_size: usize,
     /// Recv buffer size limit
     pub recv_buffer_size: usize,
-    /// Keep alive interval in seconds
-    pub keep_alive_interval: u64,
+
     /// Enable TCP_NODELAY (disable Nagle) on the underlying socket
     pub tcp_nodelay: bool,
     /// Timeout for connect operation in milliseconds (None = no timeout)
@@ -272,7 +269,6 @@ impl Default for TokioAsyncClientConfig {
     fn default() -> Self {
         TokioAsyncClientConfig {
             auto_reconnect: true,
-            reconnect_delay_ms: 1000,
             max_reconnect_delay_ms: 30000,
             max_reconnect_attempts: 0, // infinite
             command_queue_size: 1000,
@@ -280,7 +276,6 @@ impl Default for TokioAsyncClientConfig {
             max_buffer_size: 1000,
             send_buffer_size: 1000,
             recv_buffer_size: 1000,
-            keep_alive_interval: 60,
             tcp_nodelay: true,
             connect_timeout_ms: Some(30000),     // 30 seconds
             subscribe_timeout_ms: Some(10000),   // 10 seconds
@@ -317,8 +312,8 @@ impl TokioAsyncClientConfig {
     ///
     /// let config = TokioAsyncClientConfig::builder()
     ///     .auto_reconnect(true)
-    ///     .reconnect_delay_ms(2000)
-    ///     .connect_timeout_ms(60000)
+    ///     .max_reconnect_delay_ms(2000)
+    ///     .max_reconnect_attempts(10)
     ///     .build();
     /// ```
     pub fn builder() -> ConfigBuilder {
@@ -336,7 +331,7 @@ impl TokioAsyncClientConfig {
 ///
 /// let config = TokioAsyncClientConfig::builder()
 ///     .auto_reconnect(true)
-///     .reconnect_delay_ms(2000)
+///     .max_reconnect_delay_ms(2000)
 ///     .max_reconnect_attempts(10)
 ///     .connect_timeout_ms(60000)
 ///     .subscribe_timeout_ms(5000)
@@ -367,12 +362,6 @@ impl ConfigBuilder {
     /// Enable or disable automatic reconnection on connection loss
     pub fn auto_reconnect(mut self, enabled: bool) -> Self {
         self.config.auto_reconnect = enabled;
-        self
-    }
-
-    /// Set initial reconnect delay in milliseconds
-    pub fn reconnect_delay_ms(mut self, delay_ms: u64) -> Self {
-        self.config.reconnect_delay_ms = delay_ms;
         self
     }
 
@@ -501,12 +490,6 @@ impl ConfigBuilder {
     }
 
     // ==================== Other Settings ====================
-
-    /// Set keep alive interval in seconds
-    pub fn keep_alive_interval(mut self, seconds: u64) -> Self {
-        self.config.keep_alive_interval = seconds;
-        self
-    }
 
     /// Enable or disable TCP_NODELAY (disable Nagle algorithm)
     pub fn tcp_nodelay(mut self, enabled: bool) -> Self {
@@ -1686,8 +1669,7 @@ struct TokioClientWorker {
     config: TokioAsyncClientConfig,
     /// Transport connection to MQTT broker (TCP or TLS)
     stream: Option<BoxedTransport>,
-    /// Reconnection state
-    reconnect_attempts: u32,
+
     /// Pending synchronous publish operations keyed by packet identifier
     pending_publishes: HashMap<u16, tokio::sync::oneshot::Sender<PublishResult>>,
     /// Pending synchronous connect operations (only one at a time)
@@ -1716,7 +1698,6 @@ impl TokioClientWorker {
             command_rx,
             config,
             stream: None,
-            reconnect_attempts: 0,
             pending_publishes: HashMap::new(),
             pending_connect: None,
             pending_subscribes_sync: HashMap::new(),
@@ -1775,11 +1756,22 @@ impl TokioClientWorker {
                     self.event_handler.on_error(&err).await;
                 }
                 MqttEvent::ReconnectNeeded => {
-                    self.handle_connection_lost().await;
+                    // Engine requesting action.
+                    // If we have a stream, it means we timed out -> handle_connection_lost (to clean up)
+                    // (engine already scheduled next attempt in that case)
+                    // If we have NO stream, it means backoff timer expired -> handle_connect (to try again)
+                    if self.stream.is_some() {
+                        self.handle_connection_lost().await;
+                    } else {
+                        // Backoff timer expired, try connecting!
+                        self.handle_connect().await;
+                    }
                 }
                 MqttEvent::ReconnectScheduled { attempt, delay } => {
-                    // Log reconnection schedule (could add event handler callback if needed)
-                    let _ = (attempt, delay); // Suppress unused warning for now
+                    // Notify user about the scheduled reconnection
+                    self.event_handler.on_reconnect_attempt(attempt).await;
+                    // Optional: log or handle delay if specific logic needed
+                    let _ = delay;
                 }
             }
         }
@@ -2152,9 +2144,6 @@ impl TokioClientWorker {
                 // Install the transport before enqueuing bytes so the writer branch can flush
                 self.stream = Some(transport);
 
-                // Reset reconnect attempts on successful connection
-                self.reconnect_attempts = 0;
-
                 // Initiate MQTT CONNECT packet through engine
                 self.engine.connect();
             }
@@ -2328,36 +2317,10 @@ impl TokioClientWorker {
         self.event_handler.on_connection_lost().await;
 
         if self.config.auto_reconnect {
-            self.schedule_reconnect().await;
+            // Non-blocking: Simply schedule the next attempt in the engine.
+            // The tick timer (update_tick_timer) will wake us up when it's time.
+            self.engine.schedule_reconnect(Instant::now());
         }
-    }
-
-    /// Schedule reconnection attempt
-    async fn schedule_reconnect(&mut self) {
-        if !self.config.auto_reconnect {
-            return;
-        }
-
-        if self.config.max_reconnect_attempts > 0
-            && self.reconnect_attempts >= self.config.max_reconnect_attempts
-        {
-            return; // Max attempts reached
-        }
-
-        self.reconnect_attempts += 1;
-        self.event_handler
-            .on_reconnect_attempt(self.reconnect_attempts)
-            .await;
-
-        // Calculate delay with exponential backoff
-        let delay = std::cmp::min(
-            self.config.reconnect_delay_ms * (1 << (self.reconnect_attempts - 1)),
-            self.config.max_reconnect_delay_ms,
-        );
-
-        // Sleep and then attempt reconnect
-        tokio::time::sleep(Duration::from_millis(delay)).await;
-        self.handle_connect().await;
     }
 }
 
@@ -2466,7 +2429,6 @@ mod config_builder_tests {
 
         assert_eq!(config.receive_maximum, None); // Should use MQTT v5 default (65535)
         assert!(config.auto_reconnect);
-        assert_eq!(config.reconnect_delay_ms, 1000);
         assert!(config.tcp_nodelay);
     }
 
