@@ -1957,7 +1957,7 @@ impl TokioClientWorker {
         }
         true
     }
-    
+
     /// Create transport based on peer address scheme
     /// Supports:
     /// - `mqtt://host:port` or `host:port` → TCP transport
