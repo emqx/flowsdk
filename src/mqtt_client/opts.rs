@@ -105,6 +105,12 @@ pub struct MqttClientOptions {
     /// - Connection is considered dead if no packet received for keep_alive * multiplier
     /// - Default: 2 (wait 2x keep_alive before timing out)
     pub ping_timeout_multiplier: u32,
+
+    /// Maximum number of outgoing packets to buffer (Default: 1000)
+    pub max_outgoing_packet_count: usize,
+
+    /// Maximum number of events to buffer (Default: 1000)
+    pub max_event_count: usize,
 }
 
 impl Default for MqttClientOptions {
@@ -137,6 +143,8 @@ impl Default for MqttClientOptions {
             max_reconnect_attempts: 0,
             retransmission_timeout_ms: 5000,
             ping_timeout_multiplier: 2,
+            max_outgoing_packet_count: 1000,
+            max_event_count: 1000,
         }
     }
 }
@@ -536,6 +544,18 @@ impl MqttClientOptions {
     /// ```
     pub fn ping_timeout_multiplier(mut self, multiplier: u32) -> Self {
         self.ping_timeout_multiplier = multiplier;
+        self
+    }
+
+    /// Set the maximum number of outgoing packets to buffer
+    pub fn max_outgoing_packet_count(mut self, count: usize) -> Self {
+        self.max_outgoing_packet_count = count;
+        self
+    }
+
+    /// Set the maximum number of events to buffer
+    pub fn max_event_count(mut self, count: usize) -> Self {
+        self.max_event_count = count;
         self
     }
 }

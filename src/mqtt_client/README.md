@@ -108,8 +108,6 @@ let config = TokioAsyncClientConfig::builder()
     .no_connect_timeout()           // Wait indefinitely
     
     // Buffer settings
-    .send_buffer_size(2000)
-    .recv_buffer_size(2000)
     .buffer_messages(true)
     
     // Other settings
@@ -320,8 +318,6 @@ let config = TokioAsyncClientConfig {
     command_queue_size: 1000,
     buffer_messages: true,
     max_buffer_size: 1000,
-    send_buffer_size: 1000,
-    recv_buffer_size: 1000,
     keep_alive_interval: 60,
     tcp_nodelay: true,
 };

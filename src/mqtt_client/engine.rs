@@ -187,6 +187,12 @@ impl MqttEngine {
         self.last_packet_received = Instant::now();
 
         loop {
+            if self.events.len() >= self.options.max_event_count {
+                // Buffer full, stop processing for now.
+                // Remaining data stays in parser/buffer.
+                break;
+            }
+
             match self.parser.next_packet() {
                 Ok(Some(packet)) => {
                     let packet_events = self.handle_packet(packet);
@@ -354,7 +360,7 @@ impl MqttEngine {
             MqttPacket::Connect3(connect)
         };
 
-        self.enqueue_packet(packet);
+        let _ = self.enqueue_packet(packet);
     }
 
     pub fn publish(&mut self, mut command: PublishCommand) -> Result<Option<u16>, MqttClientError> {
@@ -401,7 +407,7 @@ impl MqttEngine {
             command.properties,
         ));
 
-        self.enqueue_packet(packet);
+        self.enqueue_packet(packet)?;
         Ok(pid)
     }
 
@@ -427,7 +433,7 @@ impl MqttEngine {
             MqttPacket::Unsubscribe3(unsubscribev3::MqttUnsubscribe::new(pid, command.topics))
         };
 
-        self.enqueue_packet(packet);
+        self.enqueue_packet(packet)?;
         Ok(pid)
     }
 
@@ -442,14 +448,14 @@ impl MqttEngine {
             MqttPacket::Disconnect3(disconnectv3::MqttDisconnect::new())
         };
 
-        self.enqueue_packet(packet);
+        let _ = self.enqueue_packet(packet);
         self.is_connected = false;
     }
 
     pub fn auth(&mut self, reason_code: u8, properties: Vec<Property>) {
         if self.mqtt_version == 5 {
             let auth = authv5::MqttAuth::new(reason_code, properties);
-            self.enqueue_packet(MqttPacket::Auth(auth));
+            let _ = self.enqueue_packet(MqttPacket::Auth(auth));
         }
     }
 
@@ -508,12 +514,12 @@ impl MqttEngine {
                 if qos == 1 {
                     if let Some(pid) = pid {
                         let ack = MqttPacket::PubAck5(MqttPubAck::new(pid, 0, Vec::new()));
-                        self.enqueue_packet(ack);
+                        let _ = self.enqueue_packet(ack);
                     }
                 } else if qos == 2 {
                     if let Some(pid) = pid {
                         let rec = MqttPacket::PubRec5(MqttPubRec::new(pid, 0, Vec::new()));
-                        self.enqueue_packet(rec);
+                        let _ = self.enqueue_packet(rec);
                     }
                 }
             }
@@ -537,14 +543,14 @@ impl MqttEngine {
                         let ack = MqttPacket::PubAck3(
                             crate::mqtt_serde::mqttv3::puback::MqttPubAck::new(pid),
                         );
-                        self.enqueue_packet(ack);
+                        let _ = self.enqueue_packet(ack);
                     }
                 } else if qos == 2 {
                     if let Some(pid) = pid {
                         let rec = MqttPacket::PubRec3(
                             crate::mqtt_serde::mqttv3::pubrec::MqttPubRec::new(pid),
                         );
-                        self.enqueue_packet(rec);
+                        let _ = self.enqueue_packet(rec);
                     }
                 }
             }
@@ -585,21 +591,21 @@ impl MqttEngine {
             }
             MqttPacket::PubRec5(rec) => {
                 let rel = MqttPacket::PubRel5(MqttPubRel::new(rec.packet_id, 0, Vec::new()));
-                self.enqueue_packet(rel);
+                let _ = self.enqueue_packet(rel);
             }
             MqttPacket::PubRec3(rec) => {
                 let rel = MqttPacket::PubRel3(pubrelv3::MqttPubRel::new(rec.message_id));
-                self.enqueue_packet(rel);
+                let _ = self.enqueue_packet(rel);
             }
             MqttPacket::PubRel5(rel) => {
                 let comp = MqttPacket::PubComp5(MqttPubComp::new(rel.packet_id, 0, Vec::new()));
-                self.enqueue_packet(comp);
+                let _ = self.enqueue_packet(comp);
             }
             MqttPacket::PubRel3(rel) => {
                 let comp = MqttPacket::PubComp3(
                     crate::mqtt_serde::mqttv3::pubcomp::MqttPubComp::new(rel.message_id),
                 );
-                self.enqueue_packet(comp);
+                let _ = self.enqueue_packet(comp);
             }
             MqttPacket::PubComp5(comp) => {
                 if self.pending_publishes.remove(&comp.packet_id).is_some() {
@@ -636,14 +642,22 @@ impl MqttEngine {
         } else {
             MqttPacket::PingReq3(pingreqv3::MqttPingReq::new())
         };
-        self.enqueue_packet(packet);
+        let _ = self.enqueue_packet(packet);
     }
 
-    pub fn enqueue_packet(&mut self, packet: MqttPacket) {
+    pub fn enqueue_packet(&mut self, packet: MqttPacket) -> Result<(), MqttClientError> {
+        if self.outgoing_buffer.len() >= self.options.max_outgoing_packet_count {
+            return Err(MqttClientError::BufferFull {
+                buffer_type: "outgoing".to_string(),
+                capacity: self.options.max_outgoing_packet_count,
+            });
+        }
+
         if let Ok(bytes) = packet.to_bytes() {
             self.outgoing_buffer.push_back(bytes);
             self.last_packet_sent = Instant::now();
         }
+        Ok(())
     }
 
     fn process_queue(&mut self) {
@@ -651,33 +665,40 @@ impl MqttEngine {
             return;
         }
 
-        while let Some((_priority, mut command)) = self.priority_queue.dequeue() {
-            let _pid = if command.qos > 0 {
-                if let Some(pid) = command.packet_id {
-                    Some(pid)
-                } else {
-                    match self.next_packet_id() {
-                        Ok(id) => {
-                            self.pending_publishes.insert(id, Instant::now());
-                            command.packet_id = Some(id);
-                            Some(id)
-                        }
-                        Err(e) => {
-                            self.events.push(MqttEvent::Error(e));
-                            continue;
+        while self.outgoing_buffer.len() < self.options.max_outgoing_packet_count {
+            if let Some((_priority, mut command)) = self.priority_queue.dequeue() {
+                let _pid = if command.qos > 0 {
+                    if let Some(pid) = command.packet_id {
+                        Some(pid)
+                    } else {
+                        match self.next_packet_id() {
+                            Ok(id) => {
+                                self.pending_publishes.insert(id, Instant::now());
+                                command.packet_id = Some(id);
+                                Some(id)
+                            }
+                            Err(e) => {
+                                self.events.push(MqttEvent::Error(e));
+                                continue;
+                            }
                         }
                     }
+                } else {
+                    None
+                };
+
+                let packet = if self.mqtt_version == 5 {
+                    MqttPacket::Publish5(command.to_mqtt_publish())
+                } else {
+                    MqttPacket::Publish3(command.to_mqttv3_publish())
+                };
+
+                if let Err(e) = self.enqueue_packet(packet) {
+                    self.events.push(MqttEvent::Error(e));
                 }
             } else {
-                None
-            };
-
-            let packet = if self.mqtt_version == 5 {
-                MqttPacket::Publish5(command.to_mqtt_publish())
-            } else {
-                MqttPacket::Publish3(command.to_mqttv3_publish())
-            };
-            self.enqueue_packet(packet);
+                break;
+            }
         }
     }
 
@@ -689,5 +710,79 @@ impl MqttEngine {
                 message: "No session available for packet ID allocation".into(),
             })?;
         Ok(session.next_packet_id())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mqtt_client::opts::MqttClientOptions;
+    use crate::mqtt_serde::mqttv5::pingreqv5;
+
+    #[test]
+    fn test_outgoing_buffer_limit() {
+        let options = MqttClientOptions::builder()
+            .max_outgoing_packet_count(2)
+            .build();
+        let mut engine = MqttEngine::new(options);
+
+        // Manually enqueue packets (simulate CONNECT, etc.)
+        let packet = MqttPacket::PingReq5(pingreqv5::MqttPingReq::new());
+
+        // 1. Fill buffer
+        assert!(engine.enqueue_packet(packet.clone()).is_ok());
+        assert_eq!(engine.outgoing_buffer.len(), 1);
+
+        assert!(engine.enqueue_packet(packet.clone()).is_ok());
+        assert_eq!(engine.outgoing_buffer.len(), 2);
+
+        // 2. Overfill - should fail
+        let result = engine.enqueue_packet(packet.clone());
+        assert!(result.is_err());
+        match result {
+            Err(MqttClientError::BufferFull {
+                buffer_type,
+                capacity,
+            }) => {
+                assert_eq!(buffer_type, "outgoing");
+                assert_eq!(capacity, 2);
+            }
+            _ => panic!("Expected BufferFull error"),
+        }
+
+        // 3. Drain and retry
+        let _ = engine.take_outgoing();
+        assert_eq!(engine.outgoing_buffer.len(), 0);
+
+        assert!(engine.enqueue_packet(packet).is_ok());
+    }
+
+    #[test]
+    fn test_event_buffer_limit() {
+        let options = MqttClientOptions::builder().max_event_count(1).build();
+        let mut engine = MqttEngine::new(options);
+
+        // Mock incoming data: 2 PINGRESP packets
+        // PINGRESP (v5) is fixed header 0xD0, length 0x00.
+        let data = vec![0xD0, 0x00, 0xD0, 0x00];
+
+        // Feed data
+        let events = engine.handle_incoming(&data);
+
+        // Should only process 1 packet because limit is 1
+        assert_eq!(events.len(), 1);
+        match events[0] {
+            MqttEvent::PingResponse(_) => {}
+            _ => panic!("Expected PingResponse"),
+        }
+
+        // The second packet should remain in parser
+        // Resume processing with empty data to flush/continue parsing
+        let events2 = engine.handle_incoming(&[]);
+        assert_eq!(events2.len(), 1);
+        match events2[0] {
+            MqttEvent::PingResponse(_) => {}
+            _ => panic!("Expected second PingResponse"),
+        }
     }
 }
