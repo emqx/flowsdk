@@ -130,7 +130,7 @@ fn main() -> std::io::Result<()> {
     // 7. Main event loop
     println!("\n🔄 Entering event loop (press Ctrl+C to exit)...\n");
     let start_time = Instant::now();
-    let mut last_tick = Instant::now();
+    let mut _last_tick = Instant::now();
 
     loop {
         let now = Instant::now();
@@ -151,7 +151,7 @@ fn main() -> std::io::Result<()> {
                         _ => {}
                     }
                 }
-                last_tick = now;
+                _last_tick = now;
             }
         }
 

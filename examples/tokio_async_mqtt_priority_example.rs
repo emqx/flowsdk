@@ -251,7 +251,7 @@ async fn run_priority_example() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("📤 Sending 10 rapid messages with random priorities...\n");
 
-    let priorities = vec![100, 255, 50, 200, 150, 75, 225, 25, 175, 125];
+    let priorities = [100, 255, 50, 200, 150, 75, 225, 25, 175, 125];
     for (i, &prio) in priorities.iter().enumerate() {
         let payload = format!("Burst message #{} (priority {})", i + 1, prio);
         client
