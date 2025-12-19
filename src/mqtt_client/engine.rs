@@ -32,6 +32,11 @@ pub enum MqttEvent {
     Error(MqttClientError),
     /// Signal that a reconnection is needed (e.g. after keep-alive timeout)
     ReconnectNeeded,
+    /// Reconnection scheduled with exponential backoff
+    ReconnectScheduled {
+        attempt: u32,
+        delay: Duration,
+    },
 }
 
 /// A Sans-I/O MQTT protocol engine.
@@ -54,6 +59,17 @@ pub struct MqttEngine {
 
     mqtt_version: u8,
     events: Vec<MqttEvent>,
+
+    // Reconnection state
+    reconnect_attempts: u32,
+    next_reconnect_at: Option<Instant>,
+
+    // Configurable timeouts (cached from options for efficiency)
+    retransmission_timeout: Duration,
+    ping_timeout_multiplier: u32,
+    reconnect_base_delay: Duration,
+    reconnect_max_delay: Duration,
+    max_reconnect_attempts: u32,
 }
 
 impl MqttEngine {
@@ -61,6 +77,13 @@ impl MqttEngine {
         let mqtt_version = options.mqtt_version;
         // Default buffer size 16KB
         let parser = MqttParser::new(16384, mqtt_version);
+
+        // Cache timeout values for efficiency
+        let retransmission_timeout = Duration::from_millis(options.retransmission_timeout_ms);
+        let ping_timeout_multiplier = options.ping_timeout_multiplier;
+        let reconnect_base_delay = Duration::from_millis(options.reconnect_base_delay_ms);
+        let reconnect_max_delay = Duration::from_millis(options.reconnect_max_delay_ms);
+        let max_reconnect_attempts = options.max_reconnect_attempts;
 
         Self {
             options,
@@ -76,6 +99,13 @@ impl MqttEngine {
             pending_publishes: HashMap::new(),
             mqtt_version,
             events: Vec::new(),
+            reconnect_attempts: 0,
+            next_reconnect_at: None,
+            retransmission_timeout,
+            ping_timeout_multiplier,
+            reconnect_base_delay,
+            reconnect_max_delay,
+            max_reconnect_attempts,
         }
     }
 
@@ -94,6 +124,61 @@ impl MqttEngine {
 
     pub fn handle_connection_lost(&mut self) {
         self.is_connected = false;
+    }
+
+    /// Schedule next reconnection attempt with exponential backoff.
+    ///
+    /// This method calculates the next reconnection time using exponential backoff:
+    /// `delay = min(base_delay * 2^attempts, max_delay)`
+    ///
+    /// # Arguments
+    ///
+    /// * `now` - Current time
+    ///
+    /// # Behavior
+    ///
+    /// - If `max_reconnect_attempts` is reached, no reconnection is scheduled
+    /// - Emits `ReconnectScheduled` event with attempt number and delay
+    /// - Increments `reconnect_attempts` counter
+    pub fn schedule_reconnect(&mut self, now: Instant) {
+        // Check if max attempts reached
+        if self.max_reconnect_attempts > 0 && self.reconnect_attempts >= self.max_reconnect_attempts
+        {
+            // Max attempts reached, don't schedule
+            self.next_reconnect_at = None;
+            return;
+        }
+
+        // Calculate exponential backoff: base_delay * 2^attempts
+        // Cap exponent at 10 to prevent overflow (2^10 = 1024)
+        let exponent = self.reconnect_attempts.min(10);
+        let multiplier = 1u64 << exponent; // 2^exponent
+
+        let delay_ms = self
+            .reconnect_base_delay
+            .as_millis()
+            .saturating_mul(multiplier as u128);
+
+        // Cap at max delay
+        let delay_ms = delay_ms.min(self.reconnect_max_delay.as_millis());
+        let delay = Duration::from_millis(delay_ms as u64);
+
+        self.next_reconnect_at = Some(now + delay);
+        self.reconnect_attempts += 1;
+
+        self.events.push(MqttEvent::ReconnectScheduled {
+            attempt: self.reconnect_attempts,
+            delay,
+        });
+    }
+
+    /// Reset reconnection state after successful connection.
+    ///
+    /// Call this after receiving a successful CONNACK to reset the
+    /// reconnection attempt counter and clear any scheduled reconnection.
+    pub fn reset_reconnect_state(&mut self) {
+        self.reconnect_attempts = 0;
+        self.next_reconnect_at = None;
     }
 
     /// Process raw incoming data from the network.
@@ -122,29 +207,40 @@ impl MqttEngine {
         self.mqtt_version
     }
 
-    /// Handle time-sensitive operations like keep-alive.
+    /// Handle time-sensitive operations like keep-alive and reconnection.
     pub fn handle_tick(&mut self, now: Instant) -> Vec<MqttEvent> {
+        // Handle reconnection timer when disconnected
         if !self.is_connected {
+            if let Some(reconnect_at) = self.next_reconnect_at {
+                if now >= reconnect_at {
+                    self.events.push(MqttEvent::ReconnectNeeded);
+                    self.next_reconnect_at = None;
+                }
+            }
             return self.take_events();
         }
 
         let keep_alive = Duration::from_secs(self.options.keep_alive as u64);
-        if keep_alive > Duration::ZERO {
-            // Keep alive check (send Ping)
-            if now.duration_since(self.last_packet_sent) >= keep_alive {
-                self.send_ping();
-                self.last_packet_sent = now;
-            }
 
-            // Timeout check (no response)
-            if now.duration_since(self.last_packet_received) >= keep_alive * 2 {
-                self.events.push(MqttEvent::ReconnectNeeded);
-                self.is_connected = false;
-                return self.take_events();
-            }
+        // 1. Keep-alive: Send PING if needed
+        if keep_alive > Duration::ZERO && now.duration_since(self.last_packet_sent) >= keep_alive {
+            self.send_ping();
+            self.last_packet_sent = now;
         }
 
-        // Retransmissions
+        // 2. Connection timeout: Detect dead connection
+        if keep_alive > Duration::ZERO
+            && now.duration_since(self.last_packet_received)
+                >= keep_alive * self.ping_timeout_multiplier
+        {
+            self.events.push(MqttEvent::ReconnectNeeded);
+            self.handle_connection_lost();
+            // Schedule reconnection with backoff
+            self.schedule_reconnect(now);
+            return self.take_events();
+        }
+
+        // 3. Retransmissions
         let retrans_events = self.handle_retransmissions(now);
         self.events.extend(retrans_events);
 
@@ -153,11 +249,17 @@ impl MqttEngine {
 
     fn handle_retransmissions(&mut self, now: Instant) -> Vec<MqttEvent> {
         let events = Vec::new();
-        let timeout = Duration::from_secs(5); // Default retransmission timeout
 
+        // MQTT v5.0: Client MUST NOT retransmit PUBLISH packets
+        // Only MQTT v3.1.1 allows client-side retransmission with DUP=1
+        if self.mqtt_version == 5 {
+            return events;
+        }
+
+        // MQTT v3.1.1: Retransmit unacknowledged QoS 1/2 messages
         let mut to_resend = Vec::new();
         for (&pid, &sent_at) in &self.pending_publishes {
-            if now.duration_since(sent_at) >= timeout {
+            if now.duration_since(sent_at) >= self.retransmission_timeout {
                 to_resend.push(pid);
             }
         }
@@ -165,8 +267,9 @@ impl MqttEngine {
         for pid in to_resend {
             // In a real implementation, we would store the original MqttPublish
             // and resend it with dup = true.
-            // For now, this is a placeholder.
+            // For now, this is a placeholder that updates the timestamp.
             self.pending_publishes.insert(pid, now);
+            // TODO: Store original PUBLISH packets and resend with DUP=1
             // events.push(MqttEvent::Error(MqttClientError::ProtocolViolation { message: format!("Retransmitting packet {}", pid) }));
         }
 
@@ -174,21 +277,37 @@ impl MqttEngine {
     }
 
     pub fn next_tick_at(&self) -> Option<Instant> {
+        // 1. Reconnection timer (highest priority when disconnected)
         if !self.is_connected {
-            return None;
+            return self.next_reconnect_at;
         }
-        let keep_alive = Duration::from_secs(self.options.keep_alive as u64);
+
         let mut next = None;
+        let keep_alive = Duration::from_secs(self.options.keep_alive as u64);
 
+        // 2. Keep-alive timer (send PING)
         if keep_alive > Duration::ZERO {
-            next = Some(self.last_packet_sent + keep_alive);
+            let ping_deadline = self.last_packet_sent + keep_alive;
+            next = Some(ping_deadline);
         }
 
-        // Also check retransmission timeouts
-        for &sent_at in self.pending_publishes.values() {
-            let resend_at = sent_at + Duration::from_secs(5);
-            if next.is_none() || resend_at < next.unwrap() {
-                next = Some(resend_at);
+        // 3. Connection timeout (detect dead connection)
+        if keep_alive > Duration::ZERO {
+            let timeout = keep_alive * self.ping_timeout_multiplier;
+            let timeout_deadline = self.last_packet_received + timeout;
+            if next.is_none() || timeout_deadline < next.unwrap() {
+                next = Some(timeout_deadline);
+            }
+        }
+
+        // 4. Retransmission timeouts (QoS 1/2 messages)
+        // Only for MQTT v3.1.1, as v5.0 forbids client-side retransmission
+        if self.mqtt_version != 5 {
+            for &sent_at in self.pending_publishes.values() {
+                let resend_at = sent_at + self.retransmission_timeout;
+                if next.is_none() || resend_at < next.unwrap() {
+                    next = Some(resend_at);
+                }
             }
         }
 
@@ -341,6 +460,9 @@ impl MqttEngine {
         match packet {
             MqttPacket::ConnAck5(ack) => {
                 self.is_connected = ack.reason_code == 0;
+                if self.is_connected {
+                    self.reset_reconnect_state();
+                }
                 events.push(MqttEvent::Connected(ConnectionResult {
                     reason_code: ack.reason_code,
                     session_present: ack.session_present,
@@ -349,6 +471,9 @@ impl MqttEngine {
             }
             MqttPacket::ConnAck3(ack) => {
                 self.is_connected = ack.return_code == 0;
+                if self.is_connected {
+                    self.reset_reconnect_state();
+                }
                 events.push(MqttEvent::Connected(ConnectionResult {
                     reason_code: ack.return_code,
                     session_present: ack.session_present,

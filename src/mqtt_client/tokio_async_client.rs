@@ -1777,6 +1777,10 @@ impl TokioClientWorker {
                 MqttEvent::ReconnectNeeded => {
                     self.handle_connection_lost().await;
                 }
+                MqttEvent::ReconnectScheduled { attempt, delay } => {
+                    // Log reconnection schedule (could add event handler callback if needed)
+                    let _ = (attempt, delay); // Suppress unused warning for now
+                }
             }
         }
     }

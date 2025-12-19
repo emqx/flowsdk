@@ -73,6 +73,38 @@ pub struct MqttClientOptions {
     /// Selected TLS backend (None = no TLS)
     #[cfg(any(feature = "tls", feature = "rustls-tls"))]
     pub tls_backend: Option<TlsBackend>,
+
+    // --------------------------
+    // Reconnection settings
+    // --------------------------
+    /// Base delay for reconnection backoff in milliseconds
+    /// - Actual delay uses exponential backoff: base_delay * 2^attempts
+    /// - Default: 1000 (1 second)
+    pub reconnect_base_delay_ms: u64,
+
+    /// Maximum delay for reconnection backoff in milliseconds
+    /// - Caps the exponential backoff to prevent excessive delays
+    /// - Default: 60000 (60 seconds)
+    pub reconnect_max_delay_ms: u64,
+
+    /// Maximum number of reconnection attempts
+    /// - 0: Unlimited attempts (will keep trying forever)
+    /// - n: Stop after n failed attempts
+    /// - Default: 0 (unlimited)
+    pub max_reconnect_attempts: u32,
+
+    // --------------------------
+    // Timeout settings
+    // --------------------------
+    /// Retransmission timeout for QoS 1/2 messages in milliseconds
+    /// - How long to wait before resending unacknowledged messages
+    /// - Default: 5000 (5 seconds)
+    pub retransmission_timeout_ms: u64,
+
+    /// Ping timeout multiplier
+    /// - Connection is considered dead if no packet received for keep_alive * multiplier
+    /// - Default: 2 (wait 2x keep_alive before timing out)
+    pub ping_timeout_multiplier: u32,
 }
 
 impl Default for MqttClientOptions {
@@ -100,6 +132,11 @@ impl Default for MqttClientOptions {
             rustls_tls_config: None,
             #[cfg(any(feature = "tls", feature = "rustls-tls"))]
             tls_backend: None,
+            reconnect_base_delay_ms: 1000,
+            reconnect_max_delay_ms: 60000,
+            max_reconnect_attempts: 0,
+            retransmission_timeout_ms: 5000,
+            ping_timeout_multiplier: 2,
         }
     }
 }
@@ -404,6 +441,101 @@ impl MqttClientOptions {
     #[cfg(any(feature = "tls", feature = "rustls-tls"))]
     pub fn tls_backend(mut self, backend: TlsBackend) -> Self {
         self.tls_backend = Some(backend);
+        self
+    }
+
+    // --------------------------
+    // Reconnection configuration
+    // --------------------------
+
+    /// Set the base delay for reconnection backoff in milliseconds
+    ///
+    /// The actual delay uses exponential backoff: `base_delay * 2^attempts`
+    ///
+    /// # Example
+    /// ```
+    /// use flowsdk::mqtt_client::MqttClientOptions;
+    ///
+    /// let options = MqttClientOptions::builder()
+    ///     .reconnect_base_delay_ms(2000)  // Start with 2 second delay
+    ///     .build();
+    /// ```
+    pub fn reconnect_base_delay_ms(mut self, delay_ms: u64) -> Self {
+        self.reconnect_base_delay_ms = delay_ms;
+        self
+    }
+
+    /// Set the maximum delay for reconnection backoff in milliseconds
+    ///
+    /// Caps the exponential backoff to prevent excessive delays.
+    ///
+    /// # Example
+    /// ```
+    /// use flowsdk::mqtt_client::MqttClientOptions;
+    ///
+    /// let options = MqttClientOptions::builder()
+    ///     .reconnect_max_delay_ms(120000)  // Cap at 2 minutes
+    ///     .build();
+    /// ```
+    pub fn reconnect_max_delay_ms(mut self, delay_ms: u64) -> Self {
+        self.reconnect_max_delay_ms = delay_ms;
+        self
+    }
+
+    /// Set the maximum number of reconnection attempts
+    ///
+    /// - `0`: Unlimited attempts (will keep trying forever)
+    /// - `n`: Stop after n failed attempts
+    ///
+    /// # Example
+    /// ```
+    /// use flowsdk::mqtt_client::MqttClientOptions;
+    ///
+    /// let options = MqttClientOptions::builder()
+    ///     .max_reconnect_attempts(5)  // Try 5 times then give up
+    ///     .build();
+    /// ```
+    pub fn max_reconnect_attempts(mut self, attempts: u32) -> Self {
+        self.max_reconnect_attempts = attempts;
+        self
+    }
+
+    // --------------------------
+    // Timeout configuration
+    // --------------------------
+
+    /// Set the retransmission timeout for QoS 1/2 messages in milliseconds
+    ///
+    /// How long to wait before resending unacknowledged messages.
+    ///
+    /// # Example
+    /// ```
+    /// use flowsdk::mqtt_client::MqttClientOptions;
+    ///
+    /// let options = MqttClientOptions::builder()
+    ///     .retransmission_timeout_ms(10000)  // 10 seconds
+    ///     .build();
+    /// ```
+    pub fn retransmission_timeout_ms(mut self, timeout_ms: u64) -> Self {
+        self.retransmission_timeout_ms = timeout_ms;
+        self
+    }
+
+    /// Set the ping timeout multiplier
+    ///
+    /// Connection is considered dead if no packet received for `keep_alive * multiplier`.
+    ///
+    /// # Example
+    /// ```
+    /// use flowsdk::mqtt_client::MqttClientOptions;
+    ///
+    /// let options = MqttClientOptions::builder()
+    ///     .keep_alive(60)
+    ///     .ping_timeout_multiplier(3)  // Timeout after 180 seconds
+    ///     .build();
+    /// ```
+    pub fn ping_timeout_multiplier(mut self, multiplier: u32) -> Self {
+        self.ping_timeout_multiplier = multiplier;
         self
     }
 }
