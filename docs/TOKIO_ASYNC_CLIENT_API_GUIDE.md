@@ -708,7 +708,7 @@ pub trait TokioMqttEventHandler: Send + Sync {
     async fn on_unsubscribed(&mut self, result: &UnsubscribeResult) {}
     
     /// Called when message is received from broker
-    async fn on_message_received(&mut self, publish: &MqttPublish) {}
+    async fn on_message_received(&mut self, publish: &MqttMessage) {}
     
     /// Called when ping response is received
     async fn on_ping_response(&mut self, result: &PingResult) {}
@@ -742,7 +742,7 @@ impl TokioMqttEventHandler for MyHandler {
         }
     }
     
-    async fn on_message_received(&mut self, publish: &MqttPublish) {
+    async fn on_message_received(&mut self, publish: &MqttMessage) {
         let payload = String::from_utf8_lossy(&publish.payload);
         println!("📨 [{}] {}", publish.topic_name, payload);
     }
