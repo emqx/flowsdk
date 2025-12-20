@@ -20,7 +20,7 @@ pub use commands::{
     PublishBuilderError, PublishCommand, PublishCommandBuilder, SubscribeBuilderError,
     SubscribeCommand, SubscribeCommandBuilder, UnsubscribeCommand,
 };
-pub use engine::{MqttEngine, MqttEvent};
+pub use engine::{MqttEngine, MqttEvent, MqttMessage};
 pub use error::{MqttClientError, MqttClientResult};
 pub use no_io_client::NoIoMqttClient;
 pub use opts::{MqttClientOptions, MqttClientOptionsBuilder};

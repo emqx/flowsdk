@@ -3,10 +3,10 @@ use flowsdk::mqtt_client::client::{
 };
 use flowsdk::mqtt_client::PublishCommand;
 use flowsdk::mqtt_client::{
-    MqttClientError, MqttClientOptions, TokioAsyncClientConfig, TokioAsyncMqttClient,
+    MqttClientError, MqttClientOptions, MqttMessage, TokioAsyncClientConfig, TokioAsyncMqttClient,
     TokioMqttEventHandler,
 };
-use flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish;
+
 use std::sync::{Arc, Mutex};
 use tokio::time::{sleep, Duration};
 
@@ -116,7 +116,7 @@ impl TokioMqttEventHandler for TokioV3ExampleHandler {
         }
     }
 
-    async fn on_message_received(&mut self, publish: &MqttPublish) {
+    async fn on_message_received(&mut self, publish: &MqttMessage) {
         let payload_str = String::from_utf8_lossy(&publish.payload);
         println!(
             "[{}] 📨 Message received on '{}': {}",

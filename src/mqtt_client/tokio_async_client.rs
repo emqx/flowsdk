@@ -18,7 +18,6 @@ use super::transport::{BoxedTransport, TcpTransport, Transport};
 
 use crate::mqtt_serde::control_packet::MqttPacket;
 use crate::mqtt_serde::mqttv5::common::properties::Property;
-use crate::mqtt_serde::mqttv5::publishv5::MqttPublish;
 
 use crate::mqtt_serde::parser::ParseError;
 
@@ -26,7 +25,7 @@ use super::client::{
     AuthResult, ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
 };
 use super::commands::{PublishCommand, SubscribeCommand, UnsubscribeCommand};
-use super::engine::{MqttEngine, MqttEvent};
+use super::engine::{MqttEngine, MqttEvent, MqttMessage};
 use super::error::MqttClientError;
 use super::opts::MqttClientOptions;
 
@@ -44,7 +43,7 @@ pub enum TokioMqttEvent {
     /// Unsubscription completed
     Unsubscribed(UnsubscribeResult),
     /// Incoming message received from broker
-    MessageReceived(MqttPublish),
+    MessageReceived(MqttMessage),
     /// Ping response received
     PingResponse(PingResult),
     /// Error occurred during operation (enhanced with MqttClientError)
@@ -99,7 +98,7 @@ pub trait TokioMqttEventHandler: Send + Sync {
     }
 
     /// Called when an incoming publish message is received
-    async fn on_message_received(&mut self, publish: &MqttPublish) {
+    async fn on_message_received(&mut self, publish: &MqttMessage) {
         let _ = publish;
     }
 
@@ -2498,7 +2497,7 @@ mod config_builder_tests {
         async fn on_published(&mut self, _result: &PublishResult) {}
         async fn on_subscribed(&mut self, _result: &SubscribeResult) {}
         async fn on_unsubscribed(&mut self, _result: &UnsubscribeResult) {}
-        async fn on_message_received(&mut self, _publish: &MqttPublish) {}
+        async fn on_message_received(&mut self, _publish: &MqttMessage) {}
         async fn on_ping_response(&mut self, _result: &PingResult) {}
         async fn on_error(&mut self, _error: &MqttClientError) {}
         async fn on_connection_lost(&mut self) {}

@@ -7,10 +7,9 @@ async fn run_example(test_mode: bool) -> Result<(), Box<dyn std::error::Error>> 
         ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
     };
     use flowsdk::mqtt_client::{
-        MqttClientError, MqttClientOptions, TokioAsyncClientConfig, TokioAsyncMqttClient,
-        TokioMqttEventHandler,
+        MqttClientError, MqttClientOptions, MqttMessage, TokioAsyncClientConfig,
+        TokioAsyncMqttClient, TokioMqttEventHandler,
     };
-    use flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish;
     use tokio::time::{sleep, Duration};
 
     /// Simple event handler for the QUIC async client
@@ -96,7 +95,7 @@ async fn run_example(test_mode: bool) -> Result<(), Box<dyn std::error::Error>> 
             }
         }
 
-        async fn on_message_received(&mut self, publish: &MqttPublish) {
+        async fn on_message_received(&mut self, publish: &MqttMessage) {
             let payload_str = String::from_utf8_lossy(&publish.payload);
             println!(
                 "[{}] 📨 Message received on '{}': {}",

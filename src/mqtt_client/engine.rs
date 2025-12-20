@@ -2,7 +2,9 @@ use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::mqtt_serde::control_packet::MqttPacket;
-use crate::mqtt_serde::mqttv3::{connectv3, disconnectv3, pingreqv3, pubrelv3, unsubscribev3};
+use crate::mqtt_serde::mqttv3::{
+    connectv3, disconnectv3, pingreqv3, pubrelv3, subscribev3, unsubscribev3,
+};
 use crate::mqtt_serde::mqttv5::{
     authv5, common::properties::Property, connectv5, disconnectv5, pingreqv5, pubackv5::MqttPubAck,
     pubcompv5::MqttPubComp, publishv5::MqttPublish, pubrecv5::MqttPubRec, pubrelv5::MqttPubRel,
@@ -19,6 +21,13 @@ use super::commands::{PublishCommand, SubscribeCommand, UnsubscribeCommand};
 use super::error::MqttClientError;
 use super::opts::MqttClientOptions;
 
+/// Alias for `MqttPublish` (v5) to provide a single, unified type for received messages.
+///
+/// The engine normalizes all incoming PUBLISH packets (whether MQTT v3.1.1 or v5.0) into this structure.
+/// This simplifies downstream consumption by providing a consistent API regardless of the protocol version used.
+/// For MQTT v3.1.1 messages, the v5-specific fields (Properties) will be empty.
+pub type MqttMessage = MqttPublish;
+
 /// Events emitted by the MqttEngine to be handled by the application (I/O layer)
 #[derive(Debug)]
 pub enum MqttEvent {
@@ -27,7 +36,7 @@ pub enum MqttEvent {
     Published(PublishResult),
     Subscribed(SubscribeResult),
     Unsubscribed(UnsubscribeResult),
-    MessageReceived(MqttPublish),
+    MessageReceived(MqttMessage),
     PingResponse(PingResult),
     Error(MqttClientError),
     /// Signal that a reconnection is needed (e.g. after keep-alive timeout)
@@ -74,7 +83,7 @@ pub enum MqttEvent {
 pub struct MqttEngine {
     options: MqttClientOptions,
     session: Option<ClientSession>,
-    priority_queue: PriorityQueue<u8, PublishCommand>,
+    priority_queue: PriorityQueue<u8, MqttPacket>,
     is_connected: bool,
     last_packet_sent: Instant,
     last_packet_received: Instant,
@@ -88,7 +97,6 @@ pub struct MqttEngine {
     pending_unsubscribes: HashMap<u16, Vec<String>>,
     pending_publishes: HashMap<u16, Instant>,
 
-    mqtt_version: u8,
     events: Vec<MqttEvent>,
 
     // Reconnection state
@@ -132,7 +140,6 @@ impl MqttEngine {
             pending_subscribes: HashMap::new(),
             pending_unsubscribes: HashMap::new(),
             pending_publishes: HashMap::new(),
-            mqtt_version,
             events: Vec::new(),
             reconnect_attempts: 0,
             next_reconnect_at: None,
@@ -250,7 +257,7 @@ impl MqttEngine {
     }
 
     pub fn mqtt_version(&self) -> u8 {
-        self.mqtt_version
+        self.options.mqtt_version
     }
 
     /// Process time-dependent logic (keep-alive, timeouts, retransmissions).
@@ -306,7 +313,7 @@ impl MqttEngine {
 
         // MQTT v5.0: Client MUST NOT retransmit PUBLISH packets
         // Only MQTT v3.1.1 allows client-side retransmission with DUP=1
-        if self.mqtt_version == 5 {
+        if self.options.mqtt_version == 5 {
             return events;
         }
 
@@ -367,7 +374,7 @@ impl MqttEngine {
 
         // 4. Retransmission timeouts (QoS 1/2 messages)
         // Only for MQTT v3.1.1, as v5.0 forbids client-side retransmission
-        if self.mqtt_version != 5 {
+        if self.options.mqtt_version != 5 {
             for &sent_at in self.pending_publishes.values() {
                 let resend_at = sent_at + self.retransmission_timeout;
                 if next.is_none() || resend_at < next.unwrap() {
@@ -406,7 +413,7 @@ impl MqttEngine {
             self.session = Some(ClientSession::new());
         }
 
-        let packet = if self.mqtt_version == 5 {
+        let packet = if self.options.mqtt_version == 5 {
             let connect = connectv5::MqttConnect::new(
                 self.options.client_id.clone(),
                 self.options.username.clone(),
@@ -453,7 +460,13 @@ impl MqttEngine {
             self.pending_publishes.insert(pid, Instant::now());
         }
 
-        self.priority_queue.enqueue(command.priority, command);
+        let packet = if self.options.mqtt_version == 5 {
+            MqttPacket::Publish5(command.to_mqtt_publish())
+        } else {
+            MqttPacket::Publish3(command.to_mqttv3_publish())
+        };
+
+        self.priority_queue.enqueue(command.priority, packet);
         self.process_queue();
         Ok(pid)
     }
@@ -478,11 +491,23 @@ impl MqttEngine {
             .collect();
         self.pending_subscribes.insert(pid, topics);
 
-        let packet = MqttPacket::Subscribe5(subscribev5::MqttSubscribe::new(
-            pid,
-            command.subscriptions,
-            command.properties,
-        ));
+        let packet = if self.options.mqtt_version == 5 {
+            MqttPacket::Subscribe5(subscribev5::MqttSubscribe::new(
+                pid,
+                command.subscriptions,
+                command.properties,
+            ))
+        } else {
+            let v3_subs = command
+                .subscriptions
+                .into_iter()
+                .map(|s| subscribev3::SubscriptionTopic {
+                    topic_filter: s.topic_filter,
+                    qos: s.qos,
+                })
+                .collect();
+            MqttPacket::Subscribe3(subscribev3::MqttSubscribe::new(pid, v3_subs))
+        };
 
         self.enqueue_packet(packet)?;
         Ok(pid)
@@ -500,7 +525,7 @@ impl MqttEngine {
         self.pending_unsubscribes
             .insert(pid, command.topics.clone());
 
-        let packet = if self.mqtt_version == 5 {
+        let packet = if self.options.mqtt_version == 5 {
             MqttPacket::Unsubscribe5(unsubscribev5::MqttUnsubscribe::new(
                 pid,
                 command.topics.clone(),
@@ -520,7 +545,7 @@ impl MqttEngine {
             return;
         }
 
-        let packet = if self.mqtt_version == 5 {
+        let packet = if self.options.mqtt_version == 5 {
             MqttPacket::Disconnect5(disconnectv5::MqttDisconnect::new(0, Vec::new()))
         } else {
             MqttPacket::Disconnect3(disconnectv3::MqttDisconnect::new())
@@ -531,7 +556,7 @@ impl MqttEngine {
     }
 
     pub fn auth(&mut self, reason_code: u8, properties: Vec<Property>) {
-        if self.mqtt_version == 5 {
+        if self.options.mqtt_version == 5 {
             let auth = authv5::MqttAuth::new(reason_code, properties);
             let _ = self.enqueue_packet(MqttPacket::Auth(auth));
         }
@@ -715,7 +740,7 @@ impl MqttEngine {
     }
 
     pub fn send_ping(&mut self) {
-        let packet = if self.mqtt_version == 5 {
+        let packet = if self.options.mqtt_version == 5 {
             MqttPacket::PingReq5(pingreqv5::MqttPingReq::new())
         } else {
             MqttPacket::PingReq3(pingreqv3::MqttPingReq::new())
@@ -744,33 +769,7 @@ impl MqttEngine {
         }
 
         while self.outgoing_buffer.len() < self.options.max_outgoing_packet_count {
-            if let Some((_priority, mut command)) = self.priority_queue.dequeue() {
-                let _pid = if command.qos > 0 {
-                    if let Some(pid) = command.packet_id {
-                        Some(pid)
-                    } else {
-                        match self.next_packet_id() {
-                            Ok(id) => {
-                                self.pending_publishes.insert(id, Instant::now());
-                                command.packet_id = Some(id);
-                                Some(id)
-                            }
-                            Err(e) => {
-                                self.events.push(MqttEvent::Error(e));
-                                continue;
-                            }
-                        }
-                    }
-                } else {
-                    None
-                };
-
-                let packet = if self.mqtt_version == 5 {
-                    MqttPacket::Publish5(command.to_mqtt_publish())
-                } else {
-                    MqttPacket::Publish3(command.to_mqttv3_publish())
-                };
-
+            if let Some((_priority, packet)) = self.priority_queue.dequeue() {
                 if let Err(e) = self.enqueue_packet(packet) {
                     self.events.push(MqttEvent::Error(e));
                 }
