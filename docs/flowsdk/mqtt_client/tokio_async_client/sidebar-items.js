@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["PublishBuilderError","SubscribeBuilderError","TokioMqttEvent"],"struct":["ConfigBuilder","PublishCommand","PublishCommandBuilder","SubscribeCommand","SubscribeCommandBuilder","TokioAsyncClientConfig","TokioAsyncMqttClient","UnsubscribeCommand"],"trait":["TokioMqttEventHandler"]};
+window.SIDEBAR_ITEMS = {"enum":["TokioMqttEvent"],"struct":["ConfigBuilder","TokioAsyncClientConfig","TokioAsyncMqttClient"],"trait":["TokioMqttEventHandler"]};

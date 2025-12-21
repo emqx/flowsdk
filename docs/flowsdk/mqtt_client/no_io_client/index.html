@@ -1,0 +1,91 @@
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1.0"><meta name="generator" content="rustdoc"><meta name="description" content="Pure Sans-I/O MQTT Client"><title>flowsdk::mqtt_client::no_io_client - Rust</title><script>if(window.location.protocol!=="file:")document.head.insertAdjacentHTML("beforeend","SourceSerif4-Regular-6b053e98.ttf.woff2,FiraSans-Italic-81dc35de.woff2,FiraSans-Regular-0fe48ade.woff2,FiraSans-MediumItalic-ccf7e434.woff2,FiraSans-Medium-e1aa3f0a.woff2,SourceCodePro-Regular-8badfe75.ttf.woff2,SourceCodePro-Semibold-aa29a496.ttf.woff2".split(",").map(f=>`<link rel="preload" as="font" type="font/woff2"href="../../../static.files/${f}">`).join(""))</script><link rel="stylesheet" href="../../../static.files/normalize-9960930a.css"><link rel="stylesheet" href="../../../static.files/rustdoc-ca0dd0c4.css"><meta name="rustdoc-vars" data-root-path="../../../" data-static-root-path="../../../static.files/" data-current-crate="flowsdk" data-themes="" data-resource-suffix="" data-rustdoc-version="1.92.0 (ded5c06cf 2025-12-08)" data-channel="1.92.0" data-search-js="search-d69d8955.js" data-stringdex-js="stringdex-c3e638e9.js" data-settings-js="settings-c38705f0.js" ><script src="../../../static.files/storage-e2aeef58.js"></script><script defer src="../sidebar-items.js"></script><script defer src="../../../static.files/main-ce535bd0.js"></script><noscript><link rel="stylesheet" href="../../../static.files/noscript-263c88ec.css"></noscript><link rel="alternate icon" type="image/png" href="../../../static.files/favicon-32x32-eab170b8.png"><link rel="icon" type="image/svg+xml" href="../../../static.files/favicon-044be391.svg"></head><body class="rustdoc mod"><!--[if lte IE 11]><div class="warning">This old browser is unsupported and will most likely display funky things.</div><![endif]--><rustdoc-topbar><h2><a href="#">Module no_io_client</a></h2></rustdoc-topbar><nav class="sidebar"><div class="sidebar-crate"><h2><a href="../../../flowsdk/index.html">flowsdk</a><span class="version">0.1.2</span></h2></div><div class="sidebar-elems"><section id="rustdoc-toc"><h2 class="location"><a href="#">Module no_<wbr>io_<wbr>client</a></h2><h3><a href="#">Sections</a></h3><ul class="block top-toc"><li><a href="#architecture" title="Architecture">Architecture</a></li><li><a href="#example-basic-usage" title="Example: Basic Usage">Example: Basic Usage</a></li><li><a href="#example-event-loop-integration" title="Example: Event Loop Integration">Example: Event Loop Integration</a></li></ul><h3><a href="#structs">Module Items</a></h3><ul class="block"><li><a href="#structs" title="Structs">Structs</a></li></ul></section><div id="rustdoc-modnav"><h2><a href="../index.html">In flowsdk::<wbr>mqtt_<wbr>client</a></h2></div></div></nav><div class="sidebar-resizer" title="Drag to resize sidebar"></div><main><div class="width-limiter"><section id="main-content" class="content"><div class="main-heading"><div class="rustdoc-breadcrumbs"><a href="../../index.html">flowsdk</a>::<wbr><a href="../index.html">mqtt_client</a></div><h1>Module <span>no_<wbr>io_<wbr>client</span>&nbsp;<button id="copy-path" title="Copy item path to clipboard">Copy item path</button></h1><rustdoc-toolbar></rustdoc-toolbar><span class="sub-heading"><a class="src" href="../../../src/flowsdk/mqtt_client/no_io_client.rs.html#1-702">Source</a> </span></div><details class="toggle top-doc" open><summary class="hideme"><span>Expand description</span></summary><div class="docblock"><p>Pure Sans-I/O MQTT Client</p>
+<p>This module provides a protocol-only MQTT client that is completely independent
+of any I/O runtime or networking implementation. It’s designed for:</p>
+<ul>
+<li><strong>Embedded systems</strong> with custom I/O</li>
+<li><strong>FFI bindings</strong> (C, Python, Java, etc.)</li>
+<li><strong>Custom runtimes</strong> (WASM, bare metal, etc.)</li>
+<li><strong>Testing</strong> without network dependencies</li>
+<li><strong>Protocol analysis</strong> and debugging</li>
+</ul>
+<h2 id="architecture"><a class="doc-anchor" href="#architecture">§</a>Architecture</h2>
+<p>The <code>NoIoMqttClient</code> is a thin wrapper around <a href="../engine/struct.MqttEngine.html" title="struct flowsdk::mqtt_client::engine::MqttEngine"><code>MqttEngine</code></a> that provides
+a clean Sans-I/O interface. You are responsible for:</p>
+<ol>
+<li><strong>Network I/O</strong>: Reading/writing bytes to/from sockets</li>
+<li><strong>Timers</strong>: Calling <code>handle_tick()</code> at appropriate intervals</li>
+<li><strong>Event Loop</strong>: Coordinating between network, timers, and protocol</li>
+</ol>
+<h2 id="example-basic-usage"><a class="doc-anchor" href="#example-basic-usage">§</a>Example: Basic Usage</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions, PublishCommand};
+<span class="kw">use </span>std::time::Instant;
+
+<span class="comment">// Create client
+</span><span class="kw">let </span>options = MqttClientOptions::builder()
+    .peer(<span class="string">"broker.example.com:1883"</span>)
+    .client_id(<span class="string">"my_client"</span>)
+    .keep_alive(<span class="number">60</span>)
+    .build();
+
+<span class="kw">let </span><span class="kw-2">mut </span>client = NoIoMqttClient::new(options);
+
+<span class="comment">// Initiate connection
+</span>client.connect();
+
+<span class="comment">// Get bytes to send to network
+</span><span class="kw">let </span>outgoing = client.take_outgoing();
+<span class="comment">// ... write `outgoing` to your socket ...
+
+// Feed incoming bytes from network
+</span><span class="kw">let </span>incoming_bytes = <span class="macro">vec!</span>[<span class="comment">/* bytes from socket */</span>];
+<span class="kw">let </span>events = client.handle_incoming(<span class="kw-2">&amp;</span>incoming_bytes);
+
+<span class="comment">// Process events
+</span><span class="kw">for </span>event <span class="kw">in </span>events {
+    <span class="kw">match </span>event {
+        flowsdk::mqtt_client::MqttEvent::Connected(result) =&gt; {
+            <span class="macro">println!</span>(<span class="string">"Connected! Session present: {}"</span>, result.session_present);
+        }
+        flowsdk::mqtt_client::MqttEvent::MessageReceived(msg) =&gt; {
+            <span class="macro">println!</span>(<span class="string">"Received: {:?}"</span>, msg);
+        }
+        <span class="kw">_ </span>=&gt; {}
+    }
+}
+
+<span class="comment">// Publish a message
+</span><span class="kw">let </span>cmd = PublishCommand::simple(<span class="string">"sensors/temp"</span>, <span class="string">b"23.5"</span>.to_vec(), <span class="number">1</span>, <span class="bool-val">false</span>);
+client.publish(cmd).unwrap();
+
+<span class="comment">// Get bytes to send
+</span><span class="kw">let </span>outgoing = client.take_outgoing();
+<span class="comment">// ... write to socket ...</span></code></pre></div><h2 id="example-event-loop-integration"><a class="doc-anchor" href="#example-event-loop-integration">§</a>Example: Event Loop Integration</h2>
+<div class="example-wrap"><pre class="rust rust-example-rendered"><code><span class="kw">use </span>flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
+<span class="kw">use </span>std::time::Instant;
+
+<span class="kw">fn </span>run_event_loop(<span class="kw-2">mut </span>client: NoIoMqttClient) {
+    <span class="kw">loop </span>{
+        <span class="comment">// 1. Check if we need to handle protocol timers
+        </span><span class="kw">if let </span><span class="prelude-val">Some</span>(next_tick) = client.next_tick_at() {
+            <span class="kw">let </span>now = Instant::now();
+            <span class="kw">if </span>now &gt;= next_tick {
+                <span class="kw">let </span>events = client.handle_tick(now);
+                <span class="comment">// Process events...
+            </span>}
+        }
+
+        <span class="comment">// 2. Read from socket (pseudo-code)
+        // let bytes = socket.read()?;
+        // let events = client.handle_incoming(&amp;bytes);
+        // Process events...
+
+        // 3. Write to socket
+        </span><span class="kw">let </span>outgoing = client.take_outgoing();
+        <span class="kw">if </span>!outgoing.is_empty() {
+            <span class="comment">// socket.write_all(&amp;outgoing)?;
+        </span>}
+
+        <span class="comment">// 4. Sleep until next event
+        // (network data, timer, or user command)
+    </span>}
+}</code></pre></div></div></details><h2 id="structs" class="section-header">Structs<a href="#structs" class="anchor">§</a></h2><dl class="item-table"><dt><a class="struct" href="struct.NoIoMqttClient.html" title="struct flowsdk::mqtt_client::no_io_client::NoIoMqttClient">NoIo<wbr>Mqtt<wbr>Client</a></dt><dd>A pure Sans-I/O MQTT client.</dd></dl></section></div></main></body></html>
