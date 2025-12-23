@@ -1,4 +1,8 @@
+#[cfg(feature = "quic")]
+use quinn_proto::{ClientConfig, Connection, ConnectionHandle, Endpoint, EndpointConfig, StreamId};
 use std::collections::{HashMap, VecDeque};
+#[cfg(feature = "quic")]
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use crate::mqtt_serde::control_packet::MqttPacket;
@@ -787,6 +791,234 @@ impl MqttEngine {
                 message: "No session available for packet ID allocation".into(),
             })?;
         Ok(session.next_packet_id())
+    }
+}
+
+/// A "Sans-I/O" MQTT over QUIC protocol engine.
+///
+/// This engine combines the `MqttEngine` (MQTT state machine) with `quinn_proto` (QUIC state machine)
+/// to provide a complete MQTT-over-QUIC implementation that does not perform any direct I/O.
+#[cfg(feature = "quic")]
+pub struct QuicMqttEngine {
+    mqtt_engine: MqttEngine,
+    endpoint: Endpoint,
+    connection: Option<Connection>,
+    connection_handle: Option<ConnectionHandle>,
+
+    // The bidirectional stream used for MQTT control packets
+    mqtt_stream: Option<StreamId>,
+
+    // Outgoing UDP datagrams to be sent by the application
+    outgoing_datagrams: VecDeque<(std::net::SocketAddr, Vec<u8>)>,
+    // Internal buffer for reading from QUIC stream and feeding to MQTT engine
+    // stream_read_buffer removed
+}
+
+#[cfg(feature = "quic")]
+impl QuicMqttEngine {
+    pub fn new(options: MqttClientOptions) -> Result<Self, MqttClientError> {
+        // Initialize MqttEngine
+        let mqtt_engine = MqttEngine::new(options);
+
+        // Initialize QUIC Endpoint (Client)
+        let endpoint_config = EndpointConfig::default();
+        // Endpoint::new(config, server_config, disable_stateless_retry, reset_token_key)
+        let endpoint = Endpoint::new(Arc::new(endpoint_config), None, true, None);
+
+        Ok(Self {
+            mqtt_engine,
+            endpoint,
+            connection: None,
+            connection_handle: None,
+            mqtt_stream: None,
+            outgoing_datagrams: VecDeque::new(),
+        })
+    }
+
+    pub fn connect(
+        &mut self,
+        server_addr: std::net::SocketAddr,
+        server_name: &str,
+        mut crypto_config: rustls::ClientConfig,
+        now: Instant,
+    ) -> Result<(), MqttClientError> {
+        // Enforce ALPN "mqtt"
+        crypto_config.alpn_protocols = vec![b"mqtt".to_vec()];
+
+        // Wrap in quinn config
+        let mut client_config = ClientConfig::new(Arc::new(
+            quinn_proto::crypto::rustls::QuicClientConfig::try_from(crypto_config).map_err(
+                |e| MqttClientError::InternalError {
+                    message: format!("Failed to create QUIC client config: {}", e),
+                },
+            )?,
+        ));
+
+        // Disable unreliable datagrams (buffer size 0 / None)
+        let mut transport = quinn_proto::TransportConfig::default();
+        transport.datagram_receive_buffer_size(None);
+        client_config.transport_config(Arc::new(transport));
+
+        let (ch, conn) = self
+            .endpoint
+            .connect(now, client_config, server_addr, server_name)
+            .map_err(|e| MqttClientError::InternalError {
+                message: format!("Failed to create QUIC connection: {}", e),
+            })?;
+
+        self.connection = Some(conn);
+        self.connection_handle = Some(ch);
+
+        Ok(())
+    }
+
+    /// Feed an incoming UDP datagram from the network.
+    pub fn handle_datagram(
+        &mut self,
+        data: Vec<u8>,
+        remote_addr: std::net::SocketAddr,
+        now: Instant,
+    ) {
+        use bytes::BytesMut;
+        use quinn_proto::DatagramEvent;
+
+        // Feed to Endpoint
+        let mut buf = Vec::new(); // Buffer for passing to handle (stateless retry etc)
+                                  // BytesMut::from is needed. Make sure bytes crate is used or just use slice.
+                                  // quinn-proto takes BytesMut.
+        let bytes = BytesMut::from(&data[..]);
+        let result = self
+            .endpoint
+            .handle(now, remote_addr, None, None, bytes, &mut buf);
+
+        // Handle immediate outgoing packet if buf is filled
+        if !buf.is_empty() {
+            self.outgoing_datagrams.push_back((remote_addr, buf));
+        }
+
+        // Process any resulting events
+        if let Some(event) = result {
+            match event {
+                DatagramEvent::NewConnection(_incoming) => {
+                    // As a client, we don't expect incoming connections usually.
+                }
+                DatagramEvent::ConnectionEvent(ch, event) => {
+                    if Some(ch) == self.connection_handle {
+                        if let Some(conn) = &mut self.connection {
+                            conn.handle_event(event);
+                        }
+                    }
+                }
+                DatagramEvent::Response(_transmit) => {
+                    // Metadata for sending packet. Content in buffer.
+                }
+            }
+        }
+    }
+
+    /// Drive time-dependent logic for both QUIC and MQTT state machines.
+    pub fn handle_tick(&mut self, now: Instant) -> Vec<MqttEvent> {
+        let mut mqtt_events = Vec::new();
+
+        // 1. Drive QUIC Endpoint - handle_call removed in 0.11?
+        // self.endpoint.handle_call(now);
+
+        // 2. Drive QUIC Connection
+        if let Some(conn) = &mut self.connection {
+            conn.handle_timeout(now);
+
+            // Check for new streams or data
+            while let Some(event) = conn.poll() {
+                match event {
+                    quinn_proto::Event::Stream(_stream_id) => {
+                        // Stream event (readable/writable etc)
+                    }
+                    quinn_proto::Event::Connected => {
+                        // QUIC Handshake done. Open a bidirectional stream for MQTT.
+                        if self.mqtt_stream.is_none() {
+                            if let Some(stream_id) = conn.streams().open(quinn_proto::Dir::Bi) {
+                                self.mqtt_stream = Some(stream_id);
+                                self.mqtt_engine.connect();
+                            }
+                        }
+                    }
+                    quinn_proto::Event::ConnectionLost { .. } => {
+                        self.mqtt_engine.handle_connection_lost();
+                        mqtt_events.push(MqttEvent::Disconnected(None));
+                    }
+                    _ => {}
+                }
+            }
+
+            // 3. Transfer data: QUIC Stream -> MqttEngine
+            if let Some(stream_id) = self.mqtt_stream {
+                let mut stream = conn.recv_stream(stream_id);
+                // 0.11 read(ordered) -> Chunks
+                // Fix lifetime by ensuring the Result temporary is dropped
+                let read_result = stream.read(true);
+                if let Ok(mut chunks) = read_result {
+                    while let Ok(Some(chunk)) = chunks.next(16384) {
+                        mqtt_events.extend(self.mqtt_engine.handle_incoming(&chunk.bytes));
+                    }
+                }
+            }
+
+            // 4. Transfer data: MqttEngine -> QUIC Stream
+            let outgoing_bytes = self.mqtt_engine.take_outgoing();
+            if !outgoing_bytes.is_empty() {
+                if let Some(stream_id) = self.mqtt_stream {
+                    let mut stream = conn.send_stream(stream_id);
+                    let _ = stream.write(&outgoing_bytes);
+                }
+            }
+
+            // 5. Collect outgoing UDP datagrams
+            let mut buf = Vec::new();
+            while let Some(transmit) = conn.poll_transmit(now, 1, &mut buf) {
+                self.outgoing_datagrams
+                    .push_back((transmit.destination, buf.clone()));
+                buf.clear(); // Reuse buffer? poll_transmit fills it.
+            }
+        }
+
+        // 6. Drive MqttEngine tick
+        let tick_events = self.mqtt_engine.handle_tick(now);
+        mqtt_events.extend(tick_events);
+
+        mqtt_events
+    }
+
+    pub fn take_outgoing_datagrams(&mut self) -> VecDeque<(std::net::SocketAddr, Vec<u8>)> {
+        std::mem::take(&mut self.outgoing_datagrams)
+    }
+
+    pub fn take_events(&mut self) -> Vec<MqttEvent> {
+        self.mqtt_engine.take_events()
+    }
+
+    /// Delegate: Queue a PUBLISH packet.
+    pub fn publish(&mut self, command: PublishCommand) -> Result<Option<u16>, MqttClientError> {
+        self.mqtt_engine.publish(command)
+    }
+
+    /// Delegate: Queue a SUBSCRIBE packet.
+    pub fn subscribe(&mut self, command: SubscribeCommand) -> Result<u16, MqttClientError> {
+        self.mqtt_engine.subscribe(command)
+    }
+
+    /// Delegate: Queue an UNSUBSCRIBE packet.
+    pub fn unsubscribe(&mut self, command: UnsubscribeCommand) -> Result<u16, MqttClientError> {
+        self.mqtt_engine.unsubscribe(command)
+    }
+
+    /// Delegate: Queue a DISCONNECT packet.
+    pub fn disconnect(&mut self) {
+        self.mqtt_engine.disconnect();
+    }
+
+    /// Check if the MQTT session is connected.
+    pub fn is_connected(&self) -> bool {
+        self.mqtt_engine.is_connected()
     }
 }
 
