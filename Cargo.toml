@@ -59,6 +59,20 @@ protocol-testing = []
 rustflags = ["-C", "target-feature=+crt-static"]
 
 [dev-dependencies]
-quinn-proto = "0.11"
-rustls = "0.23"
-rustls-native-certs = "0.7"
+futures = "0.3"
+
+[[example]]
+name = "no_io_quic_async_client_example"
+required-features = ["quic"]
+
+[[example]]
+name = "no_io_quic_client_example"
+required-features = ["quic"]
+
+[[example]]
+name = "no_io_quic_mqtt_engine_example"
+required-features = ["quic"]
+
+[[example]]
+name = "tokio_async_mqtt_quic_example"
+required-features = ["quic"]
