@@ -1,6 +1,7 @@
 use flowsdk::mqtt_client::commands::PublishCommand;
 use flowsdk::mqtt_client::engine::{MqttEvent, QuicMqttEngine};
 use flowsdk::mqtt_client::opts::MqttClientOptions;
+use flowsdk::mqtt_client::SubscribeCommand;
 // quinn_proto::ClientConfig is no longer needed in main
 use std::net::{ToSocketAddrs, UdpSocket};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -63,6 +64,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     // 6. Simple Event Loop
     let mut last_tick = Instant::now();
     let mut published = false;
+    let mut subscribed = false;
 
     let running = Arc::new(AtomicBool::new(true));
     let r = running.clone();
@@ -101,6 +103,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             msg.topic_name, msg.payload
                         );
                     }
+                    MqttEvent::Subscribed(res) => {
+                        println!("Subscribed to topic: ID={:?}", res.packet_id);
+                    }
                     MqttEvent::Published(res) => {
                         println!("Message Published: ID={:?}", res.packet_id);
                     }
@@ -120,13 +125,24 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             socket.send_to(&data, dest)?;
         }
 
-        // D. Example: Publish a message once connected
+        // D. Example: Subscribe to a topic
+        if engine.is_connected() && !subscribed {
+            println!("Subscribing to topic...");
+            let sub_cmd = SubscribeCommand::builder()
+                .add_topic("test/quic/topic", 1)
+                .build()
+                .unwrap();
+            engine.subscribe(sub_cmd)?;
+            subscribed = true;
+        }
+
+        // E. Example: Publish a message
         if engine.is_connected() && !published {
             println!("Publishing test message...");
             let pub_cmd = PublishCommand::builder()
-                .topic("test/topic")
+                .topic("test/quic/topic")
                 .payload("Hello QUIC world!".to_string())
-                .qos(1)
+                .qos(2)
                 .build();
             engine.publish(pub_cmd?)?;
             published = true;
