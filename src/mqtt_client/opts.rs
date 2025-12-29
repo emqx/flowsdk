@@ -106,11 +106,16 @@ pub struct MqttClientOptions {
     /// - Default: 2 (wait 2x keep_alive before timing out)
     pub ping_timeout_multiplier: u32,
 
-    /// Maximum number of outgoing packets to buffer (Default: 1000)
+    /// Maximum number of outgoing packets to network buffer (Default: 1000)
     pub max_outgoing_packet_count: usize,
 
     /// Maximum number of events to buffer (Default: 1000)
     pub max_event_count: usize,
+
+    /// Receive Maximum (MQTT v5 only)
+    /// - For outgoing: Limits how many QoS 1/2 messages can be inflight.
+    /// - Default: 65535
+    pub receive_maximum: u16,
 }
 
 impl Default for MqttClientOptions {
@@ -145,6 +150,7 @@ impl Default for MqttClientOptions {
             ping_timeout_multiplier: 2,
             max_outgoing_packet_count: 1000,
             max_event_count: 1000,
+            receive_maximum: 65535,
         }
     }
 }
@@ -556,6 +562,12 @@ impl MqttClientOptions {
     /// Set the maximum number of events to buffer
     pub fn max_event_count(mut self, count: usize) -> Self {
         self.max_event_count = count;
+        self
+    }
+
+    /// Set the Receive Maximum (MQTT v5)
+    pub fn receive_maximum(mut self, max: u16) -> Self {
+        self.receive_maximum = max;
         self
     }
 }
