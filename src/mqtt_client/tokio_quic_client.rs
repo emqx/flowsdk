@@ -139,6 +139,7 @@ async fn run_engine_loop(
     let mut socket: Option<UdpSocket> = None;
     let mut interval = tokio::time::interval(Duration::from_millis(10));
     let mut outgoing_buffer: VecDeque<(SocketAddr, Vec<u8>)> = VecDeque::new();
+    //@TODO: 2048 should be enough for most cases, make it configurable for large datagrams.
     let mut buf = [0u8; 2048];
 
     loop {
@@ -208,6 +209,7 @@ async fn run_engine_loop(
                         break;
                     }
                     Err(e) => {
+                        //@TODO: more error information, e.g. remote address
                         eprintln!("UDP Send Error: {}", e);
                     }
                 }

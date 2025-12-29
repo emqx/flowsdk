@@ -5,9 +5,9 @@ use flowsdk::mqtt_client::tokio_quic_client::TokioQuicMqttClient;
 use std::net::ToSocketAddrs;
 use std::time::Duration;
 
-/// Demonstrates how to use the TokioQuicMqttClient which is a wrapper around the QuicMqttEngine.
-/// This is a more low-level example that shows how to use the QuicMqttEngine directly.
-/// User should use TokioQuicMqttClient in most cases.
+/// Demonstrates how to use the `TokioQuicMqttClient`, which is a wrapper around the `QuicMqttEngine`,
+/// in a more low-level, event-driven style where you manually drive the client's event loop.
+/// In most cases, users should prefer higher-level helpers, but this shows direct use of `TokioQuicMqttClient`.
 async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
     let _ = rustls::crypto::ring::default_provider().install_default();
     let mqtt_opts = MqttClientOptions::builder()

@@ -842,8 +842,10 @@ impl QuicMqttEngine {
         mut crypto_config: rustls::ClientConfig,
         now: Instant,
     ) -> Result<(), MqttClientError> {
-        // Enforce ALPN "mqtt"
-        crypto_config.alpn_protocols = vec![b"mqtt".to_vec()];
+        // Set default ALPN "mqtt" only if none are configured by the caller
+        if crypto_config.alpn_protocols.is_empty() {
+            crypto_config.alpn_protocols = vec![b"mqtt".to_vec()];
+        }
 
         // Wrap in quinn config
         let mut client_config = ClientConfig::new(Arc::new(
@@ -883,9 +885,9 @@ impl QuicMqttEngine {
         use quinn_proto::DatagramEvent;
 
         // Feed to Endpoint
-        let mut buf = Vec::new(); // Buffer for passing to handle (stateless retry etc)
-                                  // BytesMut::from is needed. Make sure bytes crate is used or just use slice.
-                                  // quinn-proto takes BytesMut.
+        let mut buf = Vec::new();
+
+        // Convert the incoming datagram into BytesMut as required by quinn-proto::Endpoint::handle.
         let bytes = BytesMut::from(&data[..]);
         let result = self
             .endpoint

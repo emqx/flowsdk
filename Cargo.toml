@@ -70,7 +70,7 @@ name = "no_io_quic_client_example"
 required-features = ["quic"]
 
 [[example]]
-name = "no_io_quic_mqtt_engine_example"
+name = "no_io_tokio_quic_client_example"
 required-features = ["quic"]
 
 [[example]]
