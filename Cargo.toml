@@ -29,6 +29,7 @@ native-tls = { version = "0.2", optional = true }
 
 # QUIC support (optional)
 quinn = { version = "0.11", optional = true }
+quinn-proto = { version = "0.11", optional = true }
 rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std"] }
 rustls-native-certs = { version = "0.7", optional = true }
 rustls-pki-types = { version = "1", optional = true }
@@ -39,7 +40,7 @@ default = ["strict-protocol-compliance", "tls"]
 # TLS/SSL transport support
 tls = ["dep:tokio-native-tls", "dep:native-tls"]
 # QUIC transport support
-quic = ["dep:quinn", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
+quic = ["dep:quinn", "dep:quinn-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
 # Rustls-based TLS over TCP (mqtts://) transport support
 rustls-tls = [
 	"dep:tokio-rustls",
@@ -56,3 +57,22 @@ protocol-testing = []
 # usage: cargo build --target aarch64-unknown-linux-musl --examples --features quic
 [target.aarch64-unknown-linux-musl]
 rustflags = ["-C", "target-feature=+crt-static"]
+
+[dev-dependencies]
+futures = "0.3"
+
+[[example]]
+name = "no_io_quic_async_client_example"
+required-features = ["quic"]
+
+[[example]]
+name = "no_io_quic_client_example"
+required-features = ["quic"]
+
+[[example]]
+name = "no_io_tokio_quic_client_example"
+required-features = ["quic"]
+
+[[example]]
+name = "tokio_async_mqtt_quic_example"
+required-features = ["quic"]

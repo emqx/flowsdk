@@ -8,6 +8,8 @@ pub mod opts;
 #[cfg(feature = "protocol-testing")]
 pub mod raw_packet;
 pub mod tokio_async_client;
+#[cfg(feature = "quic")]
+pub mod tokio_quic_client;
 pub mod transport;
 
 // Re-exports
@@ -27,3 +29,5 @@ pub use opts::{MqttClientOptions, MqttClientOptionsBuilder};
 pub use tokio_async_client::{
     TokioAsyncClientConfig, TokioAsyncMqttClient, TokioMqttEvent, TokioMqttEventHandler,
 };
+#[cfg(feature = "quic")]
+pub use tokio_quic_client::TokioQuicMqttClient;
