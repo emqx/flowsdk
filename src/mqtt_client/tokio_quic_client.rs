@@ -1,4 +1,3 @@
-#![cfg(feature = "quic")]
 use super::commands::{PublishCommand, SubscribeCommand, UnsubscribeCommand};
 use super::engine::{MqttEvent, QuicMqttEngine};
 use super::opts::MqttClientOptions;
@@ -22,7 +21,7 @@ pub enum QuicCommand {
     Connect {
         server_addr: SocketAddr,
         server_name: String,
-        crypto: rustls::ClientConfig,
+        crypto: Box<rustls::ClientConfig>,
         resp: oneshot::Sender<CommandResult<()>>,
     },
     Publish {
@@ -73,7 +72,7 @@ impl TokioQuicMqttClient {
             .send(QuicCommand::Connect {
                 server_addr,
                 server_name,
-                crypto,
+                crypto: Box::new(crypto),
                 resp: tx,
             })
             .await
@@ -151,7 +150,7 @@ async fn run_engine_loop(
                             let std_socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
                             std_socket.set_nonblocking(true)?;
                             socket = Some(UdpSocket::from_std(std_socket)?);
-                            engine.connect(server_addr, &server_name, crypto, Instant::now())?;
+                            engine.connect(server_addr, &server_name, *crypto, Instant::now())?;
                             Ok(())
                         })();
                         let _ = resp.send(res);
@@ -192,7 +191,7 @@ async fn run_engine_loop(
             _ = interval.tick() => {
                 let events = engine.handle_tick(Instant::now());
                 for event in events {
-                    if let Err(_) = event_tx.send(event).await {
+                    if (event_tx.send(event).await).is_err() {
                         return Ok(());
                     }
                 }
