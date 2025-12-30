@@ -106,7 +106,8 @@ pub struct MqttClientOptions {
     /// - Default: 2 (wait 2x keep_alive before timing out)
     pub ping_timeout_multiplier: u32,
 
-    /// Maximum number of outgoing packets to network buffer (Default: 1000)
+    /// Maximum number of outgoing packets in the internal outgoing queue
+    /// before they are handed off to the network layer (Default: 1000)
     pub max_outgoing_packet_count: usize,
 
     /// Maximum number of events to buffer (Default: 1000)

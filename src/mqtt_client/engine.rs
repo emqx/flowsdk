@@ -469,12 +469,6 @@ impl MqttEngine {
             pid
         };
 
-        let _topics: Vec<String> = command
-            .subscriptions
-            .iter()
-            .map(|s| s.topic_filter.clone())
-            .collect();
-
         let packet = if self.options.mqtt_version == 5 {
             MqttPacket::Subscribe5(subscribev5::MqttSubscribe::new(
                 pid,
@@ -572,7 +566,8 @@ impl MqttEngine {
                 }
 
                 // Handle session resumption: resend pending messages
-                if self.is_connected && !self.options.clean_start {
+                // Only when server confirms session resumption (session_present=true)
+                if ack.session_present {
                     let pending = self.inflight_queue.get_all_for_reconnect();
                     for packet in pending {
                         if let Ok(bytes) = packet.to_bytes() {
@@ -593,7 +588,8 @@ impl MqttEngine {
                 }));
 
                 // Handle session resumption: resend pending messages
-                if self.is_connected && !self.options.clean_start {
+                // Only when server confirms session resumption (session_present=true)
+                if ack.session_present {
                     let pending = self.inflight_queue.get_all_for_reconnect();
                     for packet in pending {
                         if let Ok(bytes) = packet.to_bytes() {

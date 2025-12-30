@@ -101,7 +101,11 @@ impl InflightQueue {
         };
 
         self.entries.insert(packet_id, entry);
-        self.deadline_queue.push_back((packet_id, now));
+        // Only track deadlines for MQTT v3 which needs timeout-based retransmission
+        // MQTT v5 forbids retransmission, so deadline_queue is not needed
+        if self.mqtt_version != 5 {
+            self.deadline_queue.push_back((packet_id, now));
+        }
         Ok(())
     }
 
@@ -118,7 +122,6 @@ impl InflightQueue {
         } else {
             None
         }
-        // Note: deadline_queue cleanup happens lazily during get_expired
     }
 
     /// Get all expired messages that need retransmission (MQTT 3.1.1 only)
@@ -174,7 +177,9 @@ impl InflightQueue {
 
     pub fn clear(&mut self) {
         self.entries.clear();
-        self.deadline_queue.clear();
+        if self.mqtt_version != 5 {
+            self.deadline_queue.clear();
+        }
         self.publish_count = 0;
     }
 
@@ -252,5 +257,53 @@ mod tests {
 
         let expired = q.get_expired(start + Duration::from_secs(2));
         assert!(expired.is_empty());
+    }
+
+    #[test]
+    fn test_inflight_v5_deadline_queue_cleanup() {
+        let mut q = InflightQueue::new(100, 5, Duration::from_secs(5));
+
+        // For MQTT v5, deadline_queue should never be populated
+        // Push and acknowledge many messages to simulate sustained load
+        for i in 1..=50 {
+            q.push(i, create_packet(i), 1).unwrap();
+        }
+
+        // Verify deadline_queue remains empty (never populated for v5)
+        assert_eq!(q.deadline_queue.len(), 0);
+        assert_eq!(q.len(), 50);
+
+        // Acknowledge all messages
+        for i in 1..=50 {
+            q.acknowledge(i);
+        }
+
+        // After acknowledging all, entries should be empty
+        assert_eq!(q.len(), 0);
+        // deadline_queue should still be empty
+        assert_eq!(q.deadline_queue.len(), 0);
+
+        // Push and acknowledge more messages to verify it stays empty
+        for i in 51..=100 {
+            q.push(i, create_packet(i), 1).unwrap();
+        }
+        assert_eq!(q.deadline_queue.len(), 0);
+        assert_eq!(q.len(), 50);
+
+        for i in 51..=100 {
+            q.acknowledge(i);
+        }
+        assert_eq!(q.len(), 0);
+        assert_eq!(q.deadline_queue.len(), 0);
+
+        // Verify get_expired() still works (returns empty for v5)
+        for i in 101..=110 {
+            q.push(i, create_packet(i), 1).unwrap();
+        }
+
+        let expired = q.get_expired(Instant::now());
+        assert!(expired.is_empty()); // MQTT v5 doesn't retransmit
+        assert_eq!(q.deadline_queue.len(), 0); // Still empty
+        assert_eq!(q.len(), 10); // Unacknowledged entries remain
     }
 }
