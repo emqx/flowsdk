@@ -37,9 +37,8 @@ impl MqttControlPacket for MqttConnAck {
         // MQTT 5.0: 3.2.2.2, Connect Reason Code
         bytes.push(self.reason_code);
         // MQTT 5.0: 3.2.2.3, CONNACK Properties
-        if let Some(properties) = &self.properties {
-            bytes.extend(encode_properities_hdr(properties)?);
-        }
+        let properties = self.properties.as_ref().cloned().unwrap_or_default();
+        bytes.extend(encode_properities_hdr(&properties)?);
         Ok(bytes)
     }
 

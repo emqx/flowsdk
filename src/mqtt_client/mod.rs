@@ -3,6 +3,7 @@ pub mod client;
 pub mod commands;
 pub mod engine;
 pub mod error;
+pub mod inflight;
 pub mod no_io_client;
 pub mod opts;
 #[cfg(feature = "protocol-testing")]
