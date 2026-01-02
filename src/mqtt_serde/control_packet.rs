@@ -85,6 +85,14 @@ impl MqttPacket {
         }
     }
 
+    pub fn set_dup(&mut self, dup: bool) {
+        match self {
+            MqttPacket::Publish5(p) => p.dup = dup,
+            MqttPacket::Publish3(p) => p.dup = dup,
+            _ => {}
+        }
+    }
+
     pub fn from_bytes_with_version(buffer: &[u8], mqtt_version: u8) -> Result<ParseOk, ParseError> {
         match mqtt_version {
             3 | 4 => Self::from_bytes_v3(buffer), // Both MQTT v3.1 and v3.1.1 use v3 parser

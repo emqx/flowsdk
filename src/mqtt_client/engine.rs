@@ -231,7 +231,6 @@ impl MqttEngine {
     /// consume events via `take_events()` and call `handle_incoming(&[])` again to resume processing.
     pub fn handle_incoming(&mut self, data: &[u8]) -> Vec<MqttEvent> {
         self.parser.feed(data);
-        self.last_packet_received = Instant::now();
 
         loop {
             if self.events.len() >= self.options.max_event_count {
@@ -242,6 +241,7 @@ impl MqttEngine {
 
             match self.parser.next_packet() {
                 Ok(Some(packet)) => {
+                    self.last_packet_received = Instant::now();
                     let packet_events = self.handle_packet(packet);
                     self.events.extend(packet_events);
                 }
@@ -252,7 +252,7 @@ impl MqttEngine {
                 }
             }
         }
-
+        self.process_queue();
         self.take_events()
     }
 
@@ -312,7 +312,8 @@ impl MqttEngine {
         let events = Vec::new();
 
         let expired = self.inflight_queue.get_expired(now);
-        for packet in expired {
+        for mut packet in expired {
+            packet.set_dup(true);
             if let Ok(bytes) = packet.to_bytes() {
                 self.outgoing_buffer.push_back(bytes);
                 self.last_packet_sent = now;
@@ -569,7 +570,8 @@ impl MqttEngine {
                 // Only when server confirms session resumption (session_present=true)
                 if ack.session_present {
                     let pending = self.inflight_queue.get_all_for_reconnect();
-                    for packet in pending {
+                    for mut packet in pending {
+                        packet.set_dup(true);
                         if let Ok(bytes) = packet.to_bytes() {
                             self.outgoing_buffer.push_back(bytes);
                         }
@@ -591,7 +593,8 @@ impl MqttEngine {
                 // Only when server confirms session resumption (session_present=true)
                 if ack.session_present {
                     let pending = self.inflight_queue.get_all_for_reconnect();
-                    for packet in pending {
+                    for mut packet in pending {
+                        packet.set_dup(true);
                         if let Ok(bytes) = packet.to_bytes() {
                             self.outgoing_buffer.push_back(bytes);
                         }
