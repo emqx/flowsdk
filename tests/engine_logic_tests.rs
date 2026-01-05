@@ -277,8 +277,11 @@ fn test_v5_qos1_retransmission_after_reconnect() {
 
 #[test]
 fn test_outgoing_buffer_full() {
-    let mut options = MqttClientOptions::default();
-    options.max_outgoing_packet_count = 1;
+    let options = MqttClientOptions {
+        max_outgoing_packet_count: 1,
+        ..Default::default()
+    };
+
     let mut engine = MqttEngine::new(options);
 
     // Initial CONNECT
@@ -294,8 +297,11 @@ fn test_outgoing_buffer_full() {
 
 #[test]
 fn test_back_pressure_event_buffer() {
-    let mut options = MqttClientOptions::default();
-    options.max_event_count = 1;
+    let options = MqttClientOptions {
+        max_event_count: 1,
+        ..Default::default()
+    };
+
     let mut engine = MqttEngine::new(options);
 
     let connack = MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
