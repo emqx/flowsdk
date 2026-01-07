@@ -2129,6 +2129,20 @@ impl TokioClientWorker {
             }
             Err(e) => {
                 self.event_handler.on_error(&e).await;
+
+                // If this was a sync connect attempt, notify the waiting caller
+                if let Some(tx) = self.pending_connect.take() {
+                    let _ = tx.send(ConnectionResult {
+                        reason_code: 128, // Unspecified error
+                        session_present: false,
+                        properties: None,
+                    });
+                }
+
+                // If auto-reconnect is enabled, schedule the next attempt
+                if self.config.auto_reconnect {
+                    self.engine.schedule_reconnect(Instant::now());
+                }
             }
         }
     }
