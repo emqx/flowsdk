@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use flowsdk::mqtt_client::client::{ConnectionResult, PublishResult};
 use flowsdk::mqtt_client::{
     MqttClientError, MqttClientOptions, TokioAsyncClientConfig, TokioAsyncMqttClient,

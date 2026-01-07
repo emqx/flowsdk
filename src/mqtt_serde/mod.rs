@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 pub mod base_data;
 pub mod control_packet;
 pub mod mqttv3;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Integration tests for transport abstraction layer
 
 use flowsdk::mqtt_client::transport::{TcpTransport, Transport};

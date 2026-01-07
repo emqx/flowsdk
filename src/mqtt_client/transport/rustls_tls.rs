@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Rustls-based TLS transport implementation (feature-gated)
 
 #[cfg(feature = "rustls-tls")]

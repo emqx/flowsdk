@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use flowsdk::mqtt_client::client::{
     ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
 };

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use std::env;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};

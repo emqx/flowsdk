@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Transport abstraction layer for MQTT connections
 //!
 //! This module provides a clean abstraction for different connection types (TCP, TLS, WebSocket, etc.)

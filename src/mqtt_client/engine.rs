@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 #[cfg(feature = "quic")]
 use quinn_proto::{ClientConfig, Connection, ConnectionHandle, Endpoint, EndpointConfig, StreamId};
 use std::collections::VecDeque;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! # MQTT Protocol Buffer Conversion Library
 //!
 //! This library provides bidirectional conversion between MQTT packets and Protocol Buffer

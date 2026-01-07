@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 pub mod async_client;
 pub mod client;
 pub mod commands;

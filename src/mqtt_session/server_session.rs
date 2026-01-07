@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use crate::mqtt_serde::control_packet::MqttPacket;
 use crate::mqtt_serde::mqttv5::puback::MqttPubAck;
 use crate::mqtt_serde::mqttv5::pubcomp::MqttPubComp;
