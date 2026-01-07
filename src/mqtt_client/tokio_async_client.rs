@@ -148,7 +148,7 @@ enum TokioClientCommand {
     Connect,
     /// Connect to the broker and wait for acknowledgment
     ConnectSync {
-        response_tx: tokio::sync::oneshot::Sender<ConnectionResult>,
+        response_tx: tokio::sync::oneshot::Sender<Result<ConnectionResult, MqttClientError>>,
     },
     /// Subscribe to topics
     Subscribe(SubscribeCommand),
@@ -1159,12 +1159,14 @@ impl TokioAsyncMqttClient {
         self.send_command(TokioClientCommand::ConnectSync { response_tx: tx })
             .await?;
 
-        rx.await.map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Response channel closed before CONNACK received (connection may have failed)",
-            )
-        })
+        rx.await
+            .map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::BrokenPipe,
+                    "Response channel closed before CONNACK received (connection may have failed)",
+                )
+            })?
+            .map_err(|e| e.into())
     }
 
     /// Subscribe to topics and wait for SUBACK acknowledgment
@@ -1653,7 +1655,8 @@ struct TokioClientWorker {
     /// Pending synchronous publish operations keyed by packet identifier
     pending_publishes: HashMap<u16, tokio::sync::oneshot::Sender<PublishResult>>,
     /// Pending synchronous connect operations (only one at a time)
-    pending_connect: Option<tokio::sync::oneshot::Sender<ConnectionResult>>,
+    pending_connect:
+        Option<tokio::sync::oneshot::Sender<Result<ConnectionResult, MqttClientError>>>,
     /// Pending synchronous subscribe operations keyed by packet identifier
     pending_subscribes_sync: HashMap<u16, tokio::sync::oneshot::Sender<SubscribeResult>>,
     /// Pending synchronous unsubscribe operations keyed by packet identifier
@@ -1693,7 +1696,7 @@ impl TokioClientWorker {
             match event {
                 MqttEvent::Connected(res) => {
                     if let Some(tx) = self.pending_connect.take() {
-                        let _ = tx.send(res.clone());
+                        let _ = tx.send(Ok(res.clone()));
                     }
                     self.event_handler.on_connected(&res).await;
                     self.engine_last_connected = true;
@@ -2129,6 +2132,16 @@ impl TokioClientWorker {
             }
             Err(e) => {
                 self.event_handler.on_error(&e).await;
+
+                // If this was a sync connect attempt, notify the waiting caller
+                if let Some(tx) = self.pending_connect.take() {
+                    let _ = tx.send(Err(e.clone()));
+                }
+
+                // If auto-reconnect is enabled, schedule the next attempt
+                if self.config.auto_reconnect {
+                    self.engine.schedule_reconnect(Instant::now());
+                }
             }
         }
     }
@@ -2200,7 +2213,7 @@ impl TokioClientWorker {
     /// Handle synchronous connect command
     async fn handle_connect_sync(
         &mut self,
-        response_tx: tokio::sync::oneshot::Sender<ConnectionResult>,
+        response_tx: tokio::sync::oneshot::Sender<Result<ConnectionResult, MqttClientError>>,
     ) {
         // Check if already connected or connecting
         if self.stream.is_some() {
@@ -2209,7 +2222,7 @@ impl TokioClientWorker {
                 session_present: false,
                 properties: Some(vec![]),
             };
-            let _ = response_tx.send(result);
+            let _ = response_tx.send(Ok(result));
             return;
         }
 
@@ -2282,11 +2295,9 @@ impl TokioClientWorker {
         // Clean up any pending synchronous operations that cannot be retried automatically
         // Connect always fails on connection loss if not already established
         if let Some(tx) = self.pending_connect.take() {
-            let _ = tx.send(ConnectionResult {
-                reason_code: 128, // Unspecified error
-                session_present: false,
-                properties: None,
-            });
+            let _ = tx.send(Err(MqttClientError::ConnectionLost {
+                reason: "Connection lost before CONNACK received".to_string(),
+            }));
         }
 
         // Ping always fails
