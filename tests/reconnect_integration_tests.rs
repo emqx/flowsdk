@@ -215,11 +215,13 @@ async fn test_auto_reconnect_on_broker_restart() {
             };
 
             // Wait for automatic reconnection (with backoff attempts)
-            // The backoff schedule is: 300ms, 600ms, 1000ms (capped)
-            // So we need to wait through multiple cycles for reconnection to succeed
-            println!("⏳ Waiting for automatic reconnection (checking every 2 seconds, max 10 seconds)...");
+            // The backoff schedule is: 300ms, 600ms, 1000ms (capped), then repeats at 1000ms
+            // With multiple retry cycles, reconnection should succeed within 15 seconds
+            println!("⏳ Waiting for automatic reconnection (checking every 2 seconds, max 15 seconds)...");
             let mut reconnected = false;
-            for i in 0..5 {
+            let max_checks = 8; // 8 checks * 2 seconds = 16 seconds total
+
+            for i in 0..max_checks {
                 sleep(Duration::from_secs(2)).await;
                 let current_connections = handler_clone.get_connected_count();
                 let current_attempts = handler_clone.get_reconnect_attempts();
@@ -232,6 +234,7 @@ async fn test_auto_reconnect_on_broker_restart() {
 
                 if current_connections >= 2 {
                     reconnected = true;
+                    println!("   ✅ Reconnection detected!");
                     break;
                 }
             }
@@ -251,21 +254,28 @@ async fn test_auto_reconnect_on_broker_restart() {
             // We should have reconnection attempts
             assert!(!attempts.is_empty(), "Should have reconnection attempts");
 
-            // Should have successfully reconnected
-            if reconnected {
-                println!("✅ Automatic reconnection successful!");
-                assert!(
-                    final_connected_count >= 2,
-                    "Should have reconnected (got {} connections)",
-                    final_connected_count
-                );
-            } else {
-                println!("⚠️ Did not reconnect within timeout. This may indicate:");
-                println!("   - Backoff delays are working correctly but need more time");
-                println!("   - Client needs to continue retry attempts");
-                println!("   Attempts made: {:?}", attempts);
-                // Don't fail the test - just note the behavior
-            }
+            // MUST have successfully reconnected - fail the test if not
+            assert!(
+                reconnected,
+                "❌ FAILED: Automatic reconnection did not occur within {} seconds.\n\
+                 Expected: Client should reconnect after broker restart\n\
+                 Actual: {} connection(s), {} attempt(s)\n\
+                 This indicates the reconnection mechanism is not working correctly.\n\
+                 Backoff schedule: 300ms, 600ms, 1000ms (capped), repeating at 1000ms\n\
+                 Total time available: {} seconds should allow 10+ retry attempts.",
+                max_checks * 2,
+                final_connected_count,
+                attempts.len(),
+                max_checks * 2
+            );
+
+            assert!(
+                final_connected_count >= 2,
+                "Should have reconnected (got {} connections)",
+                final_connected_count
+            );
+
+            println!("✅ Automatic reconnection successful!");
 
             // Cleanup
             let _ = client.shutdown().await;
@@ -422,10 +432,39 @@ async fn test_dynamic_reconnect_control() {
             let final_attempts = handler_clone.get_reconnect_attempts().len();
             println!("   Final attempts: {}", final_attempts);
 
-            // Should have some attempts initially, then they should resume after re-enabling
+            // Verify dynamic control behavior
             assert!(
                 initial_attempts > 0,
                 "Should have initial reconnection attempts"
+            );
+
+            // After disabling, attempts should have stopped (allow small buffer for race conditions)
+            assert!(
+                after_disable <= initial_attempts + 2,
+                "Reconnection attempts should stop after disabling (initial: {}, after_disable: {})",
+                initial_attempts,
+                after_disable
+            );
+
+            // After re-enabling, attempts should resume
+            assert!(
+                final_attempts > after_disable,
+                "Reconnection attempts should resume after re-enabling (after_disable: {}, final: {})",
+                after_disable,
+                final_attempts
+            );
+
+            println!("   ✅ Dynamic reconnect control verified:");
+            println!("      - Started with {} attempts", initial_attempts);
+            println!(
+                "      - Stopped at {} attempts (delta: {})",
+                after_disable,
+                after_disable - initial_attempts
+            );
+            println!(
+                "      - Resumed to {} attempts (delta: {})",
+                final_attempts,
+                final_attempts - after_disable
             );
 
             let _ = client.shutdown().await;
