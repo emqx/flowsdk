@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! TLS/SSL MQTT Client Example
 //!
 //! This example demonstrates how to connect to an MQTT broker using TLS/SSL encryption.

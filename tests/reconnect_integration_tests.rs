@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Reconnection Integration Tests
 //!
 //! Tests to verify automatic reconnection behavior in TokioAsyncMqttClient:

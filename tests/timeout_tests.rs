@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Timeout Integration Tests
 //!
 //! Tests to verify timeout behavior for sync operations in TokioAsyncMqttClient:

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use dashmap::DashMap;
 use std::sync::Arc;
 use std::{env, net::SocketAddr};

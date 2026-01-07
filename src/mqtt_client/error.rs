@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Error types for MQTT client operations
 //!
 //! This module provides a comprehensive error type system that distinguishes between

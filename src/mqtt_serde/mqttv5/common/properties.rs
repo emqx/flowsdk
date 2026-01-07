@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use serde::{Deserialize, Serialize};
 
 use crate::mqtt_serde::parser;

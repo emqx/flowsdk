@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 // Integration tests for MQTT parser module
 // These tests are run as integration tests from the tests/ directory
 

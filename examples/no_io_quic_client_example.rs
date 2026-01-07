@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use flowsdk::mqtt_client::commands::PublishCommand;
 use flowsdk::mqtt_client::engine::{MqttEvent, QuicMqttEngine};
 use flowsdk::mqtt_client::opts::MqttClientOptions;

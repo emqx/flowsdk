@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Pure Sans-I/O MQTT Client
 //!
 //! This module provides a protocol-only MQTT client that is completely independent

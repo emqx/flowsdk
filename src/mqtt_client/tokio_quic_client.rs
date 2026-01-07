@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use super::commands::{PublishCommand, SubscribeCommand, UnsubscribeCommand};
 use super::engine::{MqttEvent, QuicMqttEngine};
 use super::opts::MqttClientOptions;

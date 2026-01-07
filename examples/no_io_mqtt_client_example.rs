@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 // Example: Using NoIoMqttClient with custom I/O
 //
 // This example demonstrates how to use the Sans-I/O MQTT client with

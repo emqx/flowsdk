@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
 use crate::mqtt_serde::mqttv5::common::properties::{encode_properities_hdr, Property};
 use crate::mqtt_serde::parser;
