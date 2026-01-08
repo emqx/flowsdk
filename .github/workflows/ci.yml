@@ -153,9 +153,22 @@ jobs:
     - name: Generate coverage report
       run: |
         cargo llvm-cov clean --workspace
-        cargo llvm-cov --workspace --no-report --tests
-        cargo llvm-cov --workspace --no-report --examples
-        # Generate lcov for Codecov
+        # Run unit tests and example tests
+        cargo llvm-cov --workspace --no-report --tests --examples --all-features
+        
+        # Build binaries and library with instrumentation for integration/FFI tests
+        export RUSTFLAGS="-C instrument-coverage"
+        export LLVM_PROFILE_FILE="coverage-%p-%m.profraw"
+        
+        # Build and run C FFI Example
+        make -C examples/c_ffi_example
+        ./examples/c_ffi_example/out/mqtt_c_example || true
+        
+        # Build and run integration tests (Proxy binaries)
+        cargo build --workspace --bins --all-features
+        cd mqtt_grpc_duality && ./run_integration_tests.sh --mqtt-ver=both && cd ..
+        
+        # Generate the unified report
         cargo llvm-cov report --lcov --output-path lcov.info
 
     - name: Upload coverage to Codecov
@@ -164,6 +177,7 @@ jobs:
         files: lcov.info
         fail_ci_if_error: false
         token: ${{ secrets.CODECOV_TOKEN }}
+        verbose: true
 
   benchmarks:
     name: Performance Benchmarks
