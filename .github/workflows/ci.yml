@@ -76,8 +76,8 @@ jobs:
       run: |
         make -C examples/c_ffi_example clean
         make -C examples/c_ffi_example
-        # Run a quick check (will likely timeout/fail if no network, but proves binary runs)
-        # timeout 5s ./examples/c_ffi_example/mqtt_c_example || true
+        # Run for 5 seconds to verify basic protocol flow against demo broker
+        timeout 5s ./examples/c_ffi_example/mqtt_c_example || true
 
   fuzz:
     name: Fuzz Tests
@@ -153,22 +153,29 @@ jobs:
     - name: Generate coverage report
       run: |
         cargo llvm-cov clean --workspace
-        # Run unit tests and example tests
-        cargo llvm-cov --workspace --no-report --tests --examples --all-features
+        mkdir -p target/llvm-cov-target
         
-        # Build binaries and library with instrumentation for integration/FFI tests
-        export RUSTFLAGS="-C instrument-coverage"
-        export LLVM_PROFILE_FILE="coverage-%p-%m.profraw"
+        # 1. Collect coverage from Rust tests and examples
+        cargo llvm-cov --workspace --no-report --tests
+        cargo llvm-cov --workspace --no-report --examples --all-features
         
-        # Build and run C FFI Example
+        # 2. Collect coverage from C example calling the Rust FFI
+        cargo llvm-cov build -p mqtt_ffi --all-features
         make -C examples/c_ffi_example
-        ./examples/c_ffi_example/out/mqtt_c_example || true
+        LLVM_PROFILE_FILE="ffi-%p-%m.profraw" timeout 10s ./examples/c_ffi_example/mqtt_c_example || true
         
-        # Build and run integration tests (Proxy binaries)
-        cargo build --workspace --bins --all-features
+        # 3. Collect coverage from integration tests (Proxy binaries)
+        RUSTFLAGS="-C instrument-coverage" cargo build --workspace --bins --all-features
+        export LLVM_PROFILE_FILE="integration-%p-%m.profraw"
         cd mqtt_grpc_duality && ./run_integration_tests.sh --mqtt-ver=both && cd ..
         
-        # Generate the unified report
+        # 4. Merge all raw profile data (*.profraw) into the unified profdata
+        # We find the llvm-profdata tool via cargo llvm-cov
+        PROFDATA_TOOL=$(cargo llvm-cov show-env | grep LLVM_PROFDATA | cut -d'"' -f2)
+        find . -name "*.profraw" -exec cp {} target/llvm-cov-target/ \;
+        $PROFDATA_TOOL merge -sparse target/llvm-cov-target/*.profraw -o target/llvm-cov-target/cargo-llvm-cov.profdata
+        
+        # 5. Final step: generate the unified LCOV report
         cargo llvm-cov report --lcov --output-path lcov.info
 
     - name: Upload coverage to Codecov
