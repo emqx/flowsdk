@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 /// Comprehensive example demonstrating all synchronous MQTT operations
 ///
 /// This example shows how to use the sync API for:

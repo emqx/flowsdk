@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Malformed packet generators for protocol compliance testing
 //!
 //! ⚠️ **DANGER**: All functions create packets that violate the MQTT specification.

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Raw Packet API - FOR TESTING ONLY
 //!
 //! ⚠️ **DANGER**: This module provides dangerous low-level packet access.

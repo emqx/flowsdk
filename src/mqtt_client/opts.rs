@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use crate::mqtt_serde::mqttv5::subscribev5;
 use crate::mqtt_serde::mqttv5::willv5::Will;
 

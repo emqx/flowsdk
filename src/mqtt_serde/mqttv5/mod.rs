@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 pub mod common;
 pub mod connack;
 pub mod connect;

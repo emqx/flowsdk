@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! TLS transport implementation
 //!
 //! This module provides TLS/SSL support for MQTT connections using tokio-native-tls.

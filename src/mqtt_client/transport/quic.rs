@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! QUIC transport implementation (feature-gated)
 
 #[cfg(feature = "quic")]

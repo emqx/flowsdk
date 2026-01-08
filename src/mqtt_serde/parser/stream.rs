@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use crate::mqtt_serde::control_packet::MqttPacket;
 use crate::mqtt_serde::parser::{parse_utf8_string, parse_vbi, ParseError, ParseOk};
 use bytes::{Buf, BytesMut};

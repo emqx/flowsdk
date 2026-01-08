@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use flowsdk::mqtt_client::{MqttClient, MqttClientOptions};
 
 fn run_example() -> Result<(), Box<dyn std::error::Error>> {

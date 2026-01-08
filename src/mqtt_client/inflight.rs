@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 

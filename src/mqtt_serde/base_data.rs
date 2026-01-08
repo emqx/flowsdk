@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use crate::mqtt_serde::parser::ParseError;
 
 pub struct TwoByteInteger;

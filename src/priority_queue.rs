@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::File;

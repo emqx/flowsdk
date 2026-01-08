@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 use crate::mqtt_session::ClientSession;
 
 use crate::mqtt_serde::control_packet::MqttControlPacket;

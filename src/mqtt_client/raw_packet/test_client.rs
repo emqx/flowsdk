@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 //! Raw TCP client for protocol testing
 //!
 //! ⚠️ **DANGER**: This module provides direct TCP access for sending malformed packets.
