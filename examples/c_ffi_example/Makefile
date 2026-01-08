@@ -7,7 +7,8 @@ all: mqtt_c_example
 
 mqtt_c_example: main.c
 	cargo build -p mqtt_ffi
+	mkdir -p out
 	$(CC) $(CFLAGS) main.c -o out/mqtt_c_example $(LDFLAGS)
 
 clean:
-	rm -f mqtt_c_example
+	rm -rf out
