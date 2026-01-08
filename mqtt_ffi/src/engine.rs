@@ -115,7 +115,7 @@ pub unsafe extern "C" fn mqtt_engine_take_outgoing(
 pub unsafe extern "C" fn mqtt_engine_free_bytes(ptr: *mut u8, len: size_t) {
     if !ptr.is_null() {
         unsafe {
-            let _ = Box::from_raw(std::slice::from_raw_parts_mut(ptr, len));
+            let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len));
         }
     }
 }
