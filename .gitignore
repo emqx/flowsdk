@@ -4,3 +4,5 @@
 docs/source
 *cov.info
 Cargo.lock
+
+coverage-*.profraw

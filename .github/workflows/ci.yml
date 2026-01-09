@@ -160,7 +160,7 @@ jobs:
         cargo llvm-cov --workspace --no-report --examples --all-features
         
         # 2. Collect coverage from C example calling the Rust FFI
-        cargo llvm-cov build -p mqtt_ffi --all-features
+        RUSTFLAGS="-C instrument-coverage" cargo build -p mqtt_ffi --all-features
         make -C examples/c_ffi_example
         LLVM_PROFILE_FILE="ffi-%p-%m.profraw" timeout 10s ./examples/c_ffi_example/mqtt_c_example || true
         
