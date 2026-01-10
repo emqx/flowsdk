@@ -86,7 +86,7 @@ pub fn reason_code_to_string(code: u8) -> &'static str {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct ConnectionResult {
     pub reason_code: u8,
     pub session_present: bool,
@@ -110,7 +110,7 @@ impl ConnectionResult {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct AuthResult {
     pub reason_code: u8,
     pub properties: Vec<Property>,
@@ -143,7 +143,7 @@ impl AuthResult {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct SubscribeResult {
     pub packet_id: u16,
     pub reason_codes: Vec<u8>,
@@ -160,7 +160,7 @@ impl SubscribeResult {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct UnsubscribeResult {
     pub packet_id: u16,
     pub reason_codes: Vec<u8>,
@@ -175,7 +175,7 @@ impl UnsubscribeResult {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PublishResult {
     pub packet_id: Option<u16>,
     pub reason_code: Option<u8>, // None for QoS 0
@@ -198,7 +198,7 @@ impl PublishResult {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub struct PingResult {
     // PINGRESP has no variable header or payload, just the fact that we received it
     pub success: bool,

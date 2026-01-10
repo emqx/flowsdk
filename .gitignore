@@ -4,3 +4,6 @@
 docs/source
 *cov.info
 Cargo.lock
+
+*.profraw
+*.profdata

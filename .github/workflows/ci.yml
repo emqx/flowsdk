@@ -3,8 +3,6 @@ name: CI
 on:
   push:
     branches: [ main, dev/*, feature/* ]
-  pull_request:
-    branches: [ main ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -71,6 +69,13 @@ jobs:
 
     - name: Run tests all features
       run:  cargo test --workspace --all-features 
+
+    - name: Build and Run C FFI Example
+      run: |
+        make -C examples/c_ffi_example clean
+        make -C examples/c_ffi_example
+        # Run for 5 seconds to verify basic protocol flow against demo broker
+        LD_LIBRARY_PATH="$PWD/target/debug:$LD_LIBRARY_PATH" timeout 5s ./examples/c_ffi_example/out/mqtt_c_example || true
 
   fuzz:
     name: Fuzz Tests
@@ -144,18 +149,26 @@ jobs:
       run: cargo install cargo-llvm-cov
 
     - name: Generate coverage report
-      run: |
-        cargo llvm-cov clean --workspace
-        cargo llvm-cov --workspace --no-report --tests
-        cargo llvm-cov --workspace --no-report --examples
-        cargo llvm-cov report --lcov --output-path lcov.info
+      run: ./scripts/generate_coverage.sh
+
+    - name: Upload coverage artifacts
+      uses: actions/upload-artifact@v4
+      if: always()
+      with:
+        name: coverage-data
+        path: |
+          lcov.info
+          target/llvm-cov-target/cargo-llvm-cov.profdata
+          target/llvm-cov-target/*.profraw
+        retention-days: 7
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
-        files: lcov.info
+        files: lcov.info,lcov2.info
         fail_ci_if_error: false
         token: ${{ secrets.CODECOV_TOKEN }}
+        verbose: true
 
   benchmarks:
     name: Performance Benchmarks

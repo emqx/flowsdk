@@ -135,7 +135,16 @@ impl TokioMqttEventHandler for QuicExampleHandler {
     }
 }
 
+/// Initialize the default crypto provider for rustls (required in 0.23+)
+fn init_crypto() {
+    #[cfg(feature = "quic")]
+    {
+        let _ = rustls::crypto::ring::default_provider().install_default();
+    }
+}
+
 async fn run_example(test_mode: bool) -> Result<(), Box<dyn std::error::Error>> {
+    init_crypto();
     println!("🚀 Starting Tokio Async MQTT Client with QUIC Transport");
     println!();
     println!("⚠️  NOTE: This example uses insecure_skip_verify for testing.");

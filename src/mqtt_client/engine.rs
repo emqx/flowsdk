@@ -36,7 +36,7 @@ use super::opts::MqttClientOptions;
 pub type MqttMessage = MqttPublish;
 
 /// Events emitted by the MqttEngine to be handled by the application (I/O layer)
-#[derive(Debug)]
+#[derive(Debug, serde::Serialize)]
 pub enum MqttEvent {
     Connected(ConnectionResult),
     Disconnected(Option<u8>),

@@ -10,7 +10,7 @@ use std::fmt;
 use std::io;
 
 /// Comprehensive error type for MQTT client operations
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, serde::Serialize)]
 pub enum MqttClientError {
     // ==================== Connection Errors (Recoverable) ====================
     /// Connection refused by broker with reason code
@@ -24,6 +24,7 @@ pub enum MqttClientError {
 
     /// Network I/O error occurred
     NetworkError {
+        #[serde(skip)]
         kind: io::ErrorKind,
         message: String,
     },
