@@ -15,7 +15,21 @@
 // FFI declarations
 typedef struct MqttEngineFFI MqttEngineFFI;
 
+typedef struct {
+  const char *client_id;
+  uint8_t mqtt_version;
+  uint8_t clean_start;
+  uint16_t keep_alive;
+  const char *username;
+  const uint8_t *password;
+  size_t password_len;
+  uint64_t reconnect_base_delay_ms;
+  uint64_t reconnect_max_delay_ms;
+  uint32_t max_reconnect_attempts;
+} MqttOptionsFFI;
+
 MqttEngineFFI *mqtt_engine_new(const char *client_id, uint8_t mqtt_version);
+MqttEngineFFI *mqtt_engine_new_with_opts(const MqttOptionsFFI *opts);
 void mqtt_engine_free(MqttEngineFFI *ptr);
 void mqtt_engine_connect(MqttEngineFFI *ptr);
 void mqtt_engine_handle_incoming(MqttEngineFFI *ptr, const uint8_t *data,
@@ -29,6 +43,14 @@ void mqtt_engine_free_string(char *ptr);
 int32_t mqtt_engine_publish(MqttEngineFFI *ptr, const char *topic,
                             const uint8_t *payload, size_t payload_len,
                             uint8_t qos);
+int32_t mqtt_engine_subscribe(MqttEngineFFI *ptr, const char *topic_filter,
+                              uint8_t qos);
+int32_t mqtt_engine_unsubscribe(MqttEngineFFI *ptr, const char *topic_filter);
+void mqtt_engine_disconnect(MqttEngineFFI *ptr);
+int mqtt_engine_is_connected(MqttEngineFFI *ptr);
+uint8_t mqtt_engine_get_version(MqttEngineFFI *ptr);
+void mqtt_engine_auth(MqttEngineFFI *ptr, uint8_t reason_code);
+void mqtt_engine_handle_connection_lost(MqttEngineFFI *ptr);
 
 // Helper to get monotonic time in milliseconds
 uint64_t get_time_ms() {
@@ -87,7 +109,16 @@ int main(int argc, char **argv) {
   printf("TCP Connection established.\n");
 
   // 2. Initialize Engine
-  MqttEngineFFI *engine = mqtt_engine_new("c_tcp_client", 5);
+  MqttOptionsFFI opts = {0};
+  opts.client_id = "c_tcp_client";
+  opts.mqtt_version = 5;
+  opts.clean_start = 1;
+  opts.keep_alive = 60;
+
+  MqttEngineFFI *engine = mqtt_engine_new_with_opts(&opts);
+  printf("Engine initialized (Version: %u).\n",
+         mqtt_engine_get_version(engine));
+
   uint64_t start_time = get_time_ms();
   mqtt_engine_connect(engine);
 
@@ -95,8 +126,10 @@ int main(int argc, char **argv) {
   uint8_t read_buf[4096];
   int running = 1;
   uint32_t loop_without_activity = 0;
+  int subscribed = 0;
   int published = 0;
   int puback_received = 0;
+  int disconnected = 0;
 
   printf("Starting I/O loop...\n");
   while (running) {
@@ -144,8 +177,14 @@ int main(int argc, char **argv) {
       if (strcmp(events, "[]") != 0) {
         printf("Events: %s\n", events);
 
-        if (strstr(events, "Connected") && !published) {
-          printf("Connection acknowledged! Publishing QoS 1 message...\n");
+        if (strstr(events, "Connected") && !subscribed) {
+          printf("Connection acknowledged! Subscribing to test/topic/ffi...\n");
+          mqtt_engine_subscribe(engine, "test/topic/ffi", 1);
+          subscribed = 1;
+        }
+
+        if (strstr(events, "Subscribed") && subscribed && !published) {
+          printf("Subscription acknowledged! Publishing QoS 1 message...\n");
           int32_t pid =
               mqtt_engine_publish(engine, "test/topic/ffi",
                                   (const uint8_t *)"hello qos1 from C", 17, 1);
@@ -153,9 +192,18 @@ int main(int argc, char **argv) {
           published = 1;
         }
 
-        if (strstr(events, "Published") && published) {
+        if (strstr(events, "Published") && published && !disconnected) {
           printf("Publish acknowledged by broker (PUBACK received)!\n");
-          puback_received = 1;
+          printf("Unsubscribing from test/topic/ffi...\n");
+          mqtt_engine_unsubscribe(engine, "test/topic/ffi");
+          printf("Disconnecting...\n");
+          mqtt_engine_disconnect(engine);
+          disconnected = 1;
+        }
+
+        if (disconnected && strstr(events, "Disconnected")) {
+          printf("Gracefully disconnected from broker.\n");
+          puback_received = 1; // Reuse this flag to exit loop
         }
       }
       mqtt_engine_free_string(events);

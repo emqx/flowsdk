@@ -14,6 +14,20 @@ pub struct MqttEngineFFI {
     events: Vec<MqttEvent>,
 }
 
+#[repr(C)]
+pub struct MqttOptionsFFI {
+    pub client_id: *const c_char,
+    pub mqtt_version: u8,
+    pub clean_start: u8,
+    pub keep_alive: u16,
+    pub username: *const c_char,
+    pub password: *const u8,
+    pub password_len: size_t,
+    pub reconnect_base_delay_ms: u64,
+    pub reconnect_max_delay_ms: u64,
+    pub max_reconnect_attempts: u32,
+}
+
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_engine_new(
     client_id: *const c_char,
@@ -43,6 +57,62 @@ pub unsafe extern "C" fn mqtt_engine_new(
     });
 
     Box::into_raw(wrapper)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mqtt_engine_new_with_opts(
+    opts_ptr: *const MqttOptionsFFI,
+) -> *mut MqttEngineFFI {
+    if opts_ptr.is_null() {
+        return std::ptr::null_mut();
+    }
+    let opts = unsafe { &*opts_ptr };
+
+    let client_id = if opts.client_id.is_null() {
+        "mqtt_client".to_string()
+    } else {
+        unsafe {
+            CStr::from_ptr(opts.client_id)
+                .to_str()
+                .unwrap_or("mqtt_client")
+                .to_string()
+        }
+    };
+
+    let mut builder = MqttClientOptions::builder()
+        .client_id(client_id)
+        .mqtt_version(opts.mqtt_version)
+        .clean_start(opts.clean_start != 0)
+        .keep_alive(opts.keep_alive)
+        .reconnect_base_delay_ms(opts.reconnect_base_delay_ms)
+        .reconnect_max_delay_ms(opts.reconnect_max_delay_ms)
+        .max_reconnect_attempts(opts.max_reconnect_attempts);
+
+    if !opts.username.is_null() {
+        if let Ok(username) = unsafe { CStr::from_ptr(opts.username).to_str() } {
+            builder = builder.username(username);
+        }
+    }
+
+    if !opts.password.is_null() && opts.password_len > 0 {
+        let password = unsafe { std::slice::from_raw_parts(opts.password, opts.password_len) };
+        builder = builder.password(password.to_vec());
+    }
+
+    let engine = MqttEngine::new(builder.build());
+    let wrapper = Box::new(MqttEngineFFI {
+        engine,
+        start_time: Instant::now(),
+        events: Vec::new(),
+    });
+
+    Box::into_raw(wrapper)
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mqtt_engine_handle_connection_lost(ptr: *mut MqttEngineFFI) {
+    let wrapper = unsafe { &mut *ptr };
+    wrapper.engine.handle_connection_lost();
 }
 
 #[no_mangle]
@@ -168,4 +238,76 @@ pub unsafe extern "C" fn mqtt_engine_publish(
         Ok(None) => 0,
         Err(_) => -1,
     }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mqtt_engine_subscribe(
+    ptr: *mut MqttEngineFFI,
+    topic_filter: *const c_char,
+    qos: u8,
+) -> i32 {
+    let wrapper = unsafe { &mut *ptr };
+    let topic_filter = unsafe {
+        CStr::from_ptr(topic_filter)
+            .to_str()
+            .unwrap_or("")
+            .to_string()
+    };
+
+    let command = flowsdk::mqtt_client::commands::SubscribeCommand::single(topic_filter, qos);
+
+    match wrapper.engine.subscribe(command) {
+        Ok(pid) => pid as i32,
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mqtt_engine_unsubscribe(
+    ptr: *mut MqttEngineFFI,
+    topic_filter: *const c_char,
+) -> i32 {
+    let wrapper = unsafe { &mut *ptr };
+    let topic_filter = unsafe {
+        CStr::from_ptr(topic_filter)
+            .to_str()
+            .unwrap_or("")
+            .to_string()
+    };
+
+    let command =
+        flowsdk::mqtt_client::commands::UnsubscribeCommand::from_topics(vec![topic_filter]);
+
+    match wrapper.engine.unsubscribe(command) {
+        Ok(pid) => pid as i32,
+        Err(_) => -1,
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mqtt_engine_disconnect(ptr: *mut MqttEngineFFI) {
+    let wrapper = unsafe { &mut *ptr };
+    wrapper.engine.disconnect();
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mqtt_engine_is_connected(ptr: *mut MqttEngineFFI) -> i32 {
+    let wrapper = unsafe { &mut *ptr };
+    if wrapper.engine.is_connected() {
+        1
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mqtt_engine_get_version(ptr: *mut MqttEngineFFI) -> u8 {
+    let wrapper = unsafe { &mut *ptr };
+    wrapper.engine.mqtt_version()
+}
+
+#[no_mangle]
+pub unsafe extern "C" fn mqtt_engine_auth(ptr: *mut MqttEngineFFI, reason_code: u8) {
+    let wrapper = unsafe { &mut *ptr };
+    wrapper.engine.auth(reason_code, Vec::new());
 }
