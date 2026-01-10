@@ -180,6 +180,8 @@ int main(int argc, char **argv) {
         if (strstr(events, "Connected") && !subscribed) {
           printf("Connection acknowledged! Subscribing to test/topic/ffi...\n");
           mqtt_engine_subscribe(engine, "test/topic/ffi", 1);
+          mqtt_engine_is_connected(engine) ? printf("Engine reports connected.\n")
+                                          : printf("Engine reports not connected.\n");
           subscribed = 1;
         }
 

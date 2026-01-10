@@ -75,7 +75,7 @@ jobs:
         make -C examples/c_ffi_example clean
         make -C examples/c_ffi_example
         # Run for 5 seconds to verify basic protocol flow against demo broker
-        LD_LIBRARY_PATH="$PWD/target/debug:$LD_LIBRARY_PATH" timeout 5s ./examples/c_ffi_example/mqtt_c_example || true
+        LD_LIBRARY_PATH="$PWD/target/debug:$LD_LIBRARY_PATH" timeout 5s ./examples/c_ffi_example/out/mqtt_c_example || true
 
   fuzz:
     name: Fuzz Tests
@@ -137,7 +137,7 @@ jobs:
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
       with:
-        components: llvm-tools, 
+        components: llvm-tools-preview
 
     - name: Install protoc
       uses: arduino/setup-protoc@v3

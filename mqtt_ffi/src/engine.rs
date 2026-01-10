@@ -219,7 +219,15 @@ pub unsafe extern "C" fn mqtt_engine_take_events(ptr: *mut MqttEngineFFI) -> *mu
     }
     let json = serde_json::to_string(&wrapper.events).unwrap_or_else(|_| "[]".to_string());
     wrapper.events.clear();
-    CString::new(json).unwrap().into_raw()
+    let c_string = CString::new(json).unwrap_or_else(|err| {
+        eprintln!(
+            "mqtt_engine_take_events: failed to create CString from JSON events: {}",
+            err
+        );
+        // Fallback to an empty JSON array, which is known to be free of interior NUL bytes.
+        CString::new("[]").expect("CString::new on a literal without NUL bytes should not fail")
+    });
+    c_string.into_raw()
 }
 
 #[no_mangle]
