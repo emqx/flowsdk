@@ -86,7 +86,7 @@
 <a href=#86 id=86 data-nosnippet>86</a>    }
 <a href=#87 id=87 data-nosnippet>87</a>}
 <a href=#88 id=88 data-nosnippet>88</a>
-<a href=#89 id=89 data-nosnippet>89</a><span class="attr">#[derive(Debug, Clone)]
+<a href=#89 id=89 data-nosnippet>89</a><span class="attr">#[derive(Debug, Clone, serde::Serialize)]
 <a href=#90 id=90 data-nosnippet>90</a></span><span class="kw">pub struct </span>ConnectionResult {
 <a href=#91 id=91 data-nosnippet>91</a>    <span class="kw">pub </span>reason_code: u8,
 <a href=#92 id=92 data-nosnippet>92</a>    <span class="kw">pub </span>session_present: bool,
@@ -110,7 +110,7 @@
 <a href=#110 id=110 data-nosnippet>110</a>    }
 <a href=#111 id=111 data-nosnippet>111</a>}
 <a href=#112 id=112 data-nosnippet>112</a>
-<a href=#113 id=113 data-nosnippet>113</a><span class="attr">#[derive(Debug, Clone)]
+<a href=#113 id=113 data-nosnippet>113</a><span class="attr">#[derive(Debug, Clone, serde::Serialize)]
 <a href=#114 id=114 data-nosnippet>114</a></span><span class="kw">pub struct </span>AuthResult {
 <a href=#115 id=115 data-nosnippet>115</a>    <span class="kw">pub </span>reason_code: u8,
 <a href=#116 id=116 data-nosnippet>116</a>    <span class="kw">pub </span>properties: Vec&lt;Property&gt;,
@@ -143,7 +143,7 @@
 <a href=#143 id=143 data-nosnippet>143</a>    }
 <a href=#144 id=144 data-nosnippet>144</a>}
 <a href=#145 id=145 data-nosnippet>145</a>
-<a href=#146 id=146 data-nosnippet>146</a><span class="attr">#[derive(Debug, Clone)]
+<a href=#146 id=146 data-nosnippet>146</a><span class="attr">#[derive(Debug, Clone, serde::Serialize)]
 <a href=#147 id=147 data-nosnippet>147</a></span><span class="kw">pub struct </span>SubscribeResult {
 <a href=#148 id=148 data-nosnippet>148</a>    <span class="kw">pub </span>packet_id: u16,
 <a href=#149 id=149 data-nosnippet>149</a>    <span class="kw">pub </span>reason_codes: Vec&lt;u8&gt;,
@@ -160,7 +160,7 @@
 <a href=#160 id=160 data-nosnippet>160</a>    }
 <a href=#161 id=161 data-nosnippet>161</a>}
 <a href=#162 id=162 data-nosnippet>162</a>
-<a href=#163 id=163 data-nosnippet>163</a><span class="attr">#[derive(Debug, Clone)]
+<a href=#163 id=163 data-nosnippet>163</a><span class="attr">#[derive(Debug, Clone, serde::Serialize)]
 <a href=#164 id=164 data-nosnippet>164</a></span><span class="kw">pub struct </span>UnsubscribeResult {
 <a href=#165 id=165 data-nosnippet>165</a>    <span class="kw">pub </span>packet_id: u16,
 <a href=#166 id=166 data-nosnippet>166</a>    <span class="kw">pub </span>reason_codes: Vec&lt;u8&gt;,
@@ -175,7 +175,7 @@
 <a href=#175 id=175 data-nosnippet>175</a>    </span>}
 <a href=#176 id=176 data-nosnippet>176</a>}
 <a href=#177 id=177 data-nosnippet>177</a>
-<a href=#178 id=178 data-nosnippet>178</a><span class="attr">#[derive(Debug, Clone)]
+<a href=#178 id=178 data-nosnippet>178</a><span class="attr">#[derive(Debug, Clone, serde::Serialize)]
 <a href=#179 id=179 data-nosnippet>179</a></span><span class="kw">pub struct </span>PublishResult {
 <a href=#180 id=180 data-nosnippet>180</a>    <span class="kw">pub </span>packet_id: <span class="prelude-ty">Option</span>&lt;u16&gt;,
 <a href=#181 id=181 data-nosnippet>181</a>    <span class="kw">pub </span>reason_code: <span class="prelude-ty">Option</span>&lt;u8&gt;, <span class="comment">// None for QoS 0
@@ -198,7 +198,7 @@
 <a href=#198 id=198 data-nosnippet>198</a>    }
 <a href=#199 id=199 data-nosnippet>199</a>}
 <a href=#200 id=200 data-nosnippet>200</a>
-<a href=#201 id=201 data-nosnippet>201</a><span class="attr">#[derive(Debug, Clone)]
+<a href=#201 id=201 data-nosnippet>201</a><span class="attr">#[derive(Debug, Clone, serde::Serialize)]
 <a href=#202 id=202 data-nosnippet>202</a></span><span class="kw">pub struct </span>PingResult {
 <a href=#203 id=203 data-nosnippet>203</a>    <span class="comment">// PINGRESP has no variable header or payload, just the fact that we received it
 <a href=#204 id=204 data-nosnippet>204</a>    </span><span class="kw">pub </span>success: bool,

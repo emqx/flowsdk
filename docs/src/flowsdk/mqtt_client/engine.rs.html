@@ -36,7 +36,7 @@
 <a href=#36 id=36 data-nosnippet>36</a></span><span class="kw">pub type </span>MqttMessage = MqttPublish;
 <a href=#37 id=37 data-nosnippet>37</a>
 <a href=#38 id=38 data-nosnippet>38</a><span class="doccomment">/// Events emitted by the MqttEngine to be handled by the application (I/O layer)
-<a href=#39 id=39 data-nosnippet>39</a></span><span class="attr">#[derive(Debug)]
+<a href=#39 id=39 data-nosnippet>39</a></span><span class="attr">#[derive(Debug, serde::Serialize)]
 <a href=#40 id=40 data-nosnippet>40</a></span><span class="kw">pub enum </span>MqttEvent {
 <a href=#41 id=41 data-nosnippet>41</a>    Connected(ConnectionResult),
 <a href=#42 id=42 data-nosnippet>42</a>    Disconnected(<span class="prelude-ty">Option</span>&lt;u8&gt;),
