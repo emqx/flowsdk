@@ -111,6 +111,9 @@ pub unsafe extern "C" fn mqtt_engine_new_with_opts(
 
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_engine_handle_connection_lost(ptr: *mut MqttEngineFFI) {
+    if ptr.is_null() {
+        return;
+    }
     let wrapper = unsafe { &mut *ptr };
     wrapper.engine.handle_connection_lost();
 }
@@ -126,6 +129,9 @@ pub unsafe extern "C" fn mqtt_engine_free(ptr: *mut MqttEngineFFI) {
 
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_engine_connect(ptr: *mut MqttEngineFFI) {
+    if ptr.is_null() {
+        return;
+    }
     let wrapper = unsafe { &mut *ptr };
     wrapper.engine.connect();
 }
@@ -136,6 +142,9 @@ pub unsafe extern "C" fn mqtt_engine_handle_incoming(
     data: *const u8,
     len: size_t,
 ) {
+    if ptr.is_null() || data.is_null() {
+        return;
+    }
     let wrapper = unsafe { &mut *ptr };
     let data = unsafe { std::slice::from_raw_parts(data, len) };
     let events = wrapper.engine.handle_incoming(data);
@@ -144,6 +153,9 @@ pub unsafe extern "C" fn mqtt_engine_handle_incoming(
 
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_engine_handle_tick(ptr: *mut MqttEngineFFI, now_ms: u64) {
+    if ptr.is_null() {
+        return;
+    }
     let wrapper = unsafe { &mut *ptr };
     let now = wrapper.start_time + Duration::from_millis(now_ms);
     let events = wrapper.engine.handle_tick(now);
@@ -152,6 +164,9 @@ pub unsafe extern "C" fn mqtt_engine_handle_tick(ptr: *mut MqttEngineFFI, now_ms
 
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_engine_next_tick_ms(ptr: *mut MqttEngineFFI) -> i64 {
+    if ptr.is_null() {
+        return -1;
+    }
     let wrapper = unsafe { &mut *ptr };
     match wrapper.engine.next_tick_at() {
         Some(tick) => {
@@ -167,6 +182,9 @@ pub unsafe extern "C" fn mqtt_engine_take_outgoing(
     ptr: *mut MqttEngineFFI,
     out_len: *mut size_t,
 ) -> *mut u8 {
+    if ptr.is_null() || out_len.is_null() {
+        return std::ptr::null_mut();
+    }
     let wrapper = unsafe { &mut *ptr };
     let bytes = wrapper.engine.take_outgoing();
     if bytes.is_empty() {
@@ -192,6 +210,9 @@ pub unsafe extern "C" fn mqtt_engine_free_bytes(ptr: *mut u8, len: size_t) {
 
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_engine_take_events(ptr: *mut MqttEngineFFI) -> *mut c_char {
+    if ptr.is_null() {
+        return CString::new("[]").unwrap().into_raw();
+    }
     let wrapper = unsafe { &mut *ptr };
     if wrapper.events.is_empty() {
         return CString::new("[]").unwrap().into_raw();
@@ -218,6 +239,9 @@ pub unsafe extern "C" fn mqtt_engine_publish(
     payload_len: size_t,
     qos: u8,
 ) -> i32 {
+    if ptr.is_null() || topic.is_null() || payload.is_null() {
+        return -1;
+    }
     let wrapper = unsafe { &mut *ptr };
     let topic = unsafe { CStr::from_ptr(topic).to_str().unwrap_or("").to_string() };
     let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) }.to_vec();
@@ -246,6 +270,9 @@ pub unsafe extern "C" fn mqtt_engine_subscribe(
     topic_filter: *const c_char,
     qos: u8,
 ) -> i32 {
+    if ptr.is_null() || topic_filter.is_null() {
+        return -1;
+    }
     let wrapper = unsafe { &mut *ptr };
     let topic_filter = unsafe {
         CStr::from_ptr(topic_filter)
@@ -267,6 +294,9 @@ pub unsafe extern "C" fn mqtt_engine_unsubscribe(
     ptr: *mut MqttEngineFFI,
     topic_filter: *const c_char,
 ) -> i32 {
+    if ptr.is_null() || topic_filter.is_null() {
+        return -1;
+    }
     let wrapper = unsafe { &mut *ptr };
     let topic_filter = unsafe {
         CStr::from_ptr(topic_filter)
@@ -286,12 +316,18 @@ pub unsafe extern "C" fn mqtt_engine_unsubscribe(
 
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_engine_disconnect(ptr: *mut MqttEngineFFI) {
+    if ptr.is_null() {
+        return;
+    }
     let wrapper = unsafe { &mut *ptr };
     wrapper.engine.disconnect();
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_engine_is_connected(ptr: *mut MqttEngineFFI) -> i32 {
+    if ptr.is_null() {
+        return 0;
+    }
     let wrapper = unsafe { &mut *ptr };
     if wrapper.engine.is_connected() {
         1
@@ -302,12 +338,18 @@ pub unsafe extern "C" fn mqtt_engine_is_connected(ptr: *mut MqttEngineFFI) -> i3
 
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_engine_get_version(ptr: *mut MqttEngineFFI) -> u8 {
+    if ptr.is_null() {
+        return 0;
+    }
     let wrapper = unsafe { &mut *ptr };
     wrapper.engine.mqtt_version()
 }
 
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_engine_auth(ptr: *mut MqttEngineFFI, reason_code: u8) {
+    if ptr.is_null() {
+        return;
+    }
     let wrapper = unsafe { &mut *ptr };
     wrapper.engine.auth(reason_code, Vec::new());
 }
