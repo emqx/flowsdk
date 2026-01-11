@@ -717,7 +717,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_free_datagrams(ptr: *mut MqttDatagramF
                 let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(dg.data, dg.len));
             }
         }
-        let _ = Box::from_raw(std::slice::from_raw_parts_mut(ptr, count));
+        let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, count));
     }
 }
 
