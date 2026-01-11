@@ -369,11 +369,11 @@ pub unsafe extern "C" fn mqtt_engine_auth(ptr: *mut MqttEngineFFI, reason_code: 
     wrapper.engine.auth(reason_code, Vec::new());
 }
 
-#[cfg(feature = "quic")]
+#[cfg(any(feature = "quic", feature = "tls"))]
 use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
-#[cfg(feature = "quic")]
+#[cfg(any(feature = "quic", feature = "tls"))]
 use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-#[cfg(feature = "quic")]
+#[cfg(any(feature = "quic", feature = "tls"))]
 use std::sync::Arc;
 
 #[cfg(feature = "quic")]
@@ -383,11 +383,11 @@ pub struct QuicMqttEngineFFI {
     events: Vec<MqttEvent>,
 }
 
-#[cfg(feature = "quic")]
+#[cfg(any(feature = "quic", feature = "tls"))]
 #[derive(Debug)]
 struct InsecureServerCertVerifier;
 
-#[cfg(feature = "quic")]
+#[cfg(any(feature = "quic", feature = "tls"))]
 impl ServerCertVerifier for InsecureServerCertVerifier {
     fn verify_server_cert(
         &self,
@@ -434,7 +434,7 @@ impl ServerCertVerifier for InsecureServerCertVerifier {
     }
 }
 
-#[cfg(feature = "quic")]
+#[cfg(any(feature = "quic", feature = "tls"))]
 #[repr(C)]
 pub struct MqttQuicOptionsFFI {
     pub insecure_skip_verify: u8,
