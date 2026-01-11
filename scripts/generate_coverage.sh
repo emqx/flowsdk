@@ -16,6 +16,8 @@ cargo +stable llvm-cov --workspace --no-report --examples --all-features
 # Build instrumented library
 export RUSTFLAGS="-C instrument-coverage"
 cargo build -p mqtt_ffi --all-features
+make -C examples/c_ffi_example clean
+make -C examples/c_ffi_example
 # Run C examples with profile file output
 export LLVM_PROFILE_FILE="target/llvm-cov-target/ffi-%p-%m.profraw"
 LD_LIBRARY_PATH=target/debug/ timeout 5s ./examples/c_ffi_example/out/mqtt_c_example || true
