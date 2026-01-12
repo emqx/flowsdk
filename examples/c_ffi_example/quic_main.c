@@ -116,7 +116,7 @@ int main(int argc, char **argv) {
   }
 
   MqttQuicOptionsFFI q_opts = {0};
-  q_opts.insecure_skip_verify = 1; // For testing
+  q_opts.insecure_skip_verify = 1; // For testing coverage, set to 0 should work as well.
   q_opts.alpn = "mqtt";
 
   if (mqtt_quic_engine_connect(engine, server_addr_str, broker_host, &q_opts) !=
