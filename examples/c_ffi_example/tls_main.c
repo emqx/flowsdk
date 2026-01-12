@@ -41,6 +41,8 @@ int32_t mqtt_tls_engine_publish(TlsMqttEngineFFI *ptr, const char *topic,
                                 uint8_t qos);
 int32_t mqtt_tls_engine_subscribe(TlsMqttEngineFFI *ptr,
                                   const char *topic_filter, uint8_t qos);
+int32_t mqtt_tls_engine_unsubscribe(TlsMqttEngineFFI *ptr,
+                                    const char *topic_filter);
 void mqtt_tls_engine_disconnect(TlsMqttEngineFFI *ptr);
 int32_t mqtt_tls_engine_is_connected(TlsMqttEngineFFI *ptr);
 
@@ -104,6 +106,7 @@ int main(int argc, char **argv) {
   uint64_t start_time = get_time_ms();
   int running = 1;
   int subscribed = 0;
+  int unsubscribed = 0;
   uint32_t loop_without_activity = 0;
 
   uint8_t read_buf[4096];
@@ -154,8 +157,13 @@ int main(int argc, char **argv) {
           printf("Published! Wait a bit then disconnect...\n");
         }
         if (strstr(events, "MessageReceived")) {
-          printf("Message received! Disconnecting...\n");
+          printf("Message received! Unsubscribing...\n");
+          mqtt_tls_engine_unsubscribe(engine, "test/topic/tls");
+        }
+        if (strstr(events, "Unsubscribed") && !unsubscribed) {
+          printf("Unsubscribed! Disconnecting...\n");
           mqtt_tls_engine_disconnect(engine);
+          unsubscribed = 1;
         }
         if (strstr(events, "Disconnected")) {
           printf("Disconnected gracefully.\n");
