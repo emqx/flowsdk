@@ -22,7 +22,7 @@ typedef struct {
   const char *ca_cert_file;
   const char *client_cert_file;
   const char *client_key_file;
-} MqttQuicOptionsFFI;
+} MqttTlsOptionsFFI;
 
 typedef struct {
   char *remote_addr;
@@ -36,7 +36,7 @@ void mqtt_quic_engine_free(QuicMqttEngineFFI *ptr);
 int32_t mqtt_quic_engine_connect(QuicMqttEngineFFI *ptr,
                                  const char *server_addr,
                                  const char *server_name,
-                                 const MqttQuicOptionsFFI *opts);
+                                 const MqttTlsOptionsFFI *opts);
 void mqtt_quic_engine_handle_datagram(QuicMqttEngineFFI *ptr,
                                       const uint8_t *data, size_t len,
                                       const char *remote_addr);
@@ -123,7 +123,7 @@ int main(int argc, char **argv) {
     return 1;
   }
 
-  MqttQuicOptionsFFI q_opts = {0};
+  MqttTlsOptionsFFI q_opts = {0};
   q_opts.insecure_skip_verify =
       1; // For testing coverage, set to 0 should work as well.
   q_opts.alpn = "mqtt";

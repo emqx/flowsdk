@@ -436,7 +436,7 @@ impl ServerCertVerifier for InsecureServerCertVerifier {
 
 #[cfg(any(feature = "quic", feature = "tls"))]
 #[repr(C)]
-pub struct MqttQuicOptionsFFI {
+pub struct MqttTlsOptionsFFI {
     pub insecure_skip_verify: u8,
     pub alpn: *const c_char,
     pub ca_cert_file: *const c_char,
@@ -505,7 +505,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_connect(
     ptr: *mut QuicMqttEngineFFI,
     server_addr: *const c_char,
     server_name: *const c_char,
-    opts_ptr: *const MqttQuicOptionsFFI,
+    opts_ptr: *const MqttTlsOptionsFFI,
 ) -> i32 {
     if ptr.is_null() || server_addr.is_null() {
         return -1;
@@ -865,7 +865,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_new(
     client_id: *const c_char,
     mqtt_version: u8,
     server_name: *const c_char,
-    opts_ptr: *const MqttQuicOptionsFFI, // Reuse same opts for CA/certs
+    opts_ptr: *const MqttTlsOptionsFFI, // Reuse same opts for CA/certs
 ) -> *mut TlsMqttEngineFFI {
     let client_id = if client_id.is_null() {
         "mqtt_tls_client".to_string()
@@ -919,9 +919,40 @@ pub unsafe extern "C" fn mqtt_tls_engine_new(
                 }
             }
 
+            // Handle client cert/key
+            let mut client_auth = None;
+            if !opts.client_cert_file.is_null() && !opts.client_key_file.is_null() {
+                let cert_path =
+                    unsafe { CStr::from_ptr(opts.client_cert_file).to_str().unwrap_or("") };
+                let key_path =
+                    unsafe { CStr::from_ptr(opts.client_key_file).to_str().unwrap_or("") };
+
+                if let (Ok(cert_file), Ok(key_file)) = (
+                    std::fs::File::open(cert_path),
+                    std::fs::File::open(key_path),
+                ) {
+                    let mut cert_reader = std::io::BufReader::new(cert_file);
+                    let mut key_reader = std::io::BufReader::new(key_file);
+
+                    let certs = rustls_pemfile::certs(&mut cert_reader)
+                        .filter_map(|r| r.ok())
+                        .collect::<Vec<_>>();
+                    let key = rustls_pemfile::private_key(&mut key_reader).ok().flatten();
+
+                    if !certs.is_empty() && key.is_some() {
+                        client_auth = Some((certs, key));
+                    }
+                }
+            }
+
             let builder = crypto_builder.with_root_certificates(root_store);
-            // Handle client auth if needed (reuse same logic as QUIC if possible, or skip for now)
-            builder.with_no_client_auth()
+            if let Some((certs, key)) = client_auth {
+                builder
+                    .with_client_auth_cert(certs, key.expect("Missing private key"))
+                    .unwrap()
+            } else {
+                builder.with_no_client_auth()
+            }
         }
     } else {
         let mut root_store = rustls::RootCertStore::empty();

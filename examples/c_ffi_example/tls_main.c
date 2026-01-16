@@ -22,12 +22,12 @@ typedef struct {
   const char *ca_cert_file;
   const char *client_cert_file;
   const char *client_key_file;
-} MqttQuicOptionsFFI;
+} MqttTlsOptionsFFI;
 
 TlsMqttEngineFFI *mqtt_tls_engine_new(const char *client_id,
                                       uint8_t mqtt_version,
                                       const char *server_name,
-                                      const MqttQuicOptionsFFI *opts);
+                                      const MqttTlsOptionsFFI *opts);
 void mqtt_tls_engine_free(TlsMqttEngineFFI *ptr);
 void mqtt_tls_engine_connect(TlsMqttEngineFFI *ptr);
 int32_t mqtt_tls_engine_handle_socket_data(TlsMqttEngineFFI *ptr,
