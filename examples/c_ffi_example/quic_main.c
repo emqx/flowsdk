@@ -65,6 +65,14 @@ uint64_t get_time_ms() {
 }
 
 int main(int argc, char **argv) {
+  /*
+   * NOTE: This is an example to demonstrate the FFI usage.
+   * To keep it simple and readable, some production-grade robustness checks are
+   * omitted:
+   * - Unchecked return values for some system calls (sendto, fcntl, recvfrom).
+   * - Minimal error handling and resource cleanup on failure paths.
+   * - Simplified string handling (potential buffer overflows if misused).
+   */
   const char *broker_host = "broker.emqx.io";
   const char *broker_port = "14567";
 
@@ -116,7 +124,8 @@ int main(int argc, char **argv) {
   }
 
   MqttQuicOptionsFFI q_opts = {0};
-  q_opts.insecure_skip_verify = 1; // For testing coverage, set to 0 should work as well.
+  q_opts.insecure_skip_verify =
+      1; // For testing coverage, set to 0 should work as well.
   q_opts.alpn = "mqtt";
 
   if (mqtt_quic_engine_connect(engine, server_addr_str, broker_host, &q_opts) !=

@@ -56,6 +56,13 @@ uint64_t get_time_ms() {
 }
 
 int main(int argc, char **argv) {
+  /*
+   * NOTE: This is an example to demonstrate the FFI usage.
+   * To keep it simple and readable, some production-grade robustness checks are
+   * omitted:
+   * - Unchecked return values for some system calls (send, recv).
+   * - Minimal error handling and resource cleanup on failure paths.
+   */
   const char *broker_host = "broker.emqx.io";
   const char *broker_port = "8883";
 
@@ -179,7 +186,7 @@ int main(int argc, char **argv) {
       printf("No activity for a while, exiting...\n");
       break;
     }
-  } //end of while(running)
+  } // end of while(running)
 
   mqtt_tls_engine_free(engine);
   close(sock);

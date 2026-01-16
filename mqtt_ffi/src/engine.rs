@@ -585,6 +585,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_connect(
             let builder = crypto_builder.with_root_certificates(root_store);
             if let Some((certs, key)) = client_auth {
                 builder
+                    // SAFETY: We verified key is Some at line 579
                     .with_client_auth_cert(certs, key.expect("Missing private key"))
                     .unwrap()
             } else {
@@ -892,7 +893,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_new(
 
     let crypto_builder = rustls::ClientConfig::builder();
 
-    let config = if !opts_ptr.is_null() {
+    let mut config = if !opts_ptr.is_null() {
         let opts = unsafe { &*opts_ptr };
         if opts.insecure_skip_verify != 0 {
             crypto_builder
@@ -931,8 +932,6 @@ pub unsafe extern "C" fn mqtt_tls_engine_new(
             .with_root_certificates(root_store)
             .with_no_client_auth()
     };
-
-    let mut config = config;
     config.alpn_protocols = vec![b"mqtt".to_vec()];
 
     match TlsMqttEngine::new(options, server_name_str, Arc::new(config)) {
