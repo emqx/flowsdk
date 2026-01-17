@@ -16,11 +16,13 @@ cargo +stable llvm-cov --workspace --no-report --examples --all-features
 # Build instrumented library
 export RUSTFLAGS="-C instrument-coverage"
 cargo build -p mqtt_ffi --all-features
-# Compile C example (it links against the library in target/debug)
 make -C examples/c_ffi_example clean
 make -C examples/c_ffi_example
-# Run C example with profile file output
-LLVM_PROFILE_FILE="target/llvm-cov-target/ffi-%p-%m.profraw"  LD_LIBRARY_PATH=target/debug/ timeout 10s ./examples/c_ffi_example/out/mqtt_c_example || true
+# Run C examples with profile file output
+export LLVM_PROFILE_FILE="target/llvm-cov-target/ffi-%p-%m.profraw"
+LD_LIBRARY_PATH=target/debug/ timeout 5s ./examples/c_ffi_example/out/mqtt_c_example || true
+LD_LIBRARY_PATH=target/debug/ timeout 5s ./examples/c_ffi_example/out/quic_c_example broker.emqx.io 14567 || true
+LD_LIBRARY_PATH=target/debug/ timeout 5s ./examples/c_ffi_example/out/tls_c_example broker.emqx.io 8883 || true
 
 # 3. Collect coverage from integration tests (Proxy binaries)
 cargo build --workspace --bins --all-features --all

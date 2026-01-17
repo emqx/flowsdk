@@ -10,6 +10,8 @@ pub mod no_io_client;
 pub mod opts;
 #[cfg(feature = "protocol-testing")]
 pub mod raw_packet;
+#[cfg(feature = "rustls-tls")]
+pub mod tls_engine;
 pub mod tokio_async_client;
 #[cfg(feature = "quic")]
 pub mod tokio_quic_client;
@@ -29,6 +31,8 @@ pub use engine::{MqttEngine, MqttEvent, MqttMessage};
 pub use error::{MqttClientError, MqttClientResult};
 pub use no_io_client::NoIoMqttClient;
 pub use opts::{MqttClientOptions, MqttClientOptionsBuilder};
+#[cfg(feature = "rustls-tls")]
+pub use tls_engine::TlsMqttEngine;
 pub use tokio_async_client::{
     TokioAsyncClientConfig, TokioAsyncMqttClient, TokioMqttEvent, TokioMqttEventHandler,
 };

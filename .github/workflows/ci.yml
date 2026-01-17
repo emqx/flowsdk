@@ -2,7 +2,9 @@ name: CI
 
 on:
   push:
-    branches: [ main, dev/*, feature/* ]
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
 
 env:
   CARGO_TERM_COLOR: always
@@ -70,12 +72,18 @@ jobs:
     - name: Run tests all features
       run:  cargo test --workspace --all-features 
 
-    - name: Build and Run C FFI Example
+    - name: Build and Run C FFI Examples
       run: |
         make -C examples/c_ffi_example clean
-        make -C examples/c_ffi_example
-        # Run for 5 seconds to verify basic protocol flow against demo broker
+        # Build all variations
+        make -C examples/c_ffi_example mqtt_c_example
+        make -C examples/c_ffi_example quic_c_example
+        make -C examples/c_ffi_example tls_c_example
+        
+        # Run brief verifications against demo broker
         LD_LIBRARY_PATH="$PWD/target/debug:$LD_LIBRARY_PATH" timeout 5s ./examples/c_ffi_example/out/mqtt_c_example || true
+        LD_LIBRARY_PATH="$PWD/target/debug:$LD_LIBRARY_PATH" timeout 5s ./examples/c_ffi_example/out/quic_c_example broker.emqx.io 14567 || true
+        LD_LIBRARY_PATH="$PWD/target/debug:$LD_LIBRARY_PATH" timeout 5s ./examples/c_ffi_example/out/tls_c_example broker.emqx.io 8883 || true
 
   fuzz:
     name: Fuzz Tests
