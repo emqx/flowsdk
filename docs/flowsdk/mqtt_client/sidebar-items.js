@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["async_client","client","commands","engine","error","inflight","no_io_client","opts","raw_packet","tokio_async_client","tokio_quic_client","transport"]};
+window.SIDEBAR_ITEMS = {"mod":["async_client","client","commands","engine","error","inflight","no_io_client","opts","raw_packet","tls_engine","tokio_async_client","tokio_quic_client","transport"]};
