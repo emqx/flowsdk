@@ -284,8 +284,10 @@ impl TlsMqttEngineFFI {
                         .filter_map(|r| r.ok())
                         .collect::<Vec<_>>();
                     let key = rustls_pemfile::private_key(&mut key_reader).ok().flatten();
-                    if !certs.is_empty() && key.is_some() {
-                        client_auth = Some((certs, key.unwrap()));
+                    if !certs.is_empty() {
+                        if let Some(key) = key {
+                            client_auth = Some((certs, key));
+                        }
                     }
                 }
             }
@@ -587,53 +589,49 @@ impl QuicMqttEngineFFI {
 // --- C-Compatible FFI Layer ---
 // This layer provides a stable ABI for the C examples, mapping to the UniFFI objects.
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer for `client_id`
+/// and returns a raw pointer to a new `MqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_new(
+pub unsafe extern "C" fn mqtt_engine_new(
     client_id: *const c_char,
     mqtt_version: u8,
 ) -> *mut MqttEngineFFI {
     let client_id = if client_id.is_null() {
         None
     } else {
-        Some(
-            unsafe { CStr::from_ptr(client_id) }
-                .to_string_lossy()
-                .into_owned(),
-        )
+        Some(CStr::from_ptr(client_id).to_string_lossy().into_owned())
     };
     Box::into_raw(Box::new(MqttEngineFFI::new(client_id, mqtt_version)))
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer for `opts`
+/// and returns a raw pointer to a new `MqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_new_with_opts(opts: *const MqttOptionsC) -> *mut MqttEngineFFI {
+pub unsafe extern "C" fn mqtt_engine_new_with_opts(
+    opts: *const MqttOptionsC,
+) -> *mut MqttEngineFFI {
     if opts.is_null() {
         return std::ptr::null_mut();
     }
-    let r = unsafe { &*opts };
+    let r = &*opts;
     let client_id = if r.client_id.is_null() {
         "mqtt_client".to_string()
     } else {
-        unsafe { CStr::from_ptr(r.client_id) }
-            .to_string_lossy()
-            .into_owned()
+        CStr::from_ptr(r.client_id).to_string_lossy().into_owned()
     };
     let username = if r.username.is_null() {
         None
     } else {
-        Some(
-            unsafe { CStr::from_ptr(r.username) }
-                .to_string_lossy()
-                .into_owned(),
-        )
+        Some(CStr::from_ptr(r.username).to_string_lossy().into_owned())
     };
     let password = if r.password.is_null() {
         None
     } else {
-        Some(
-            unsafe { CStr::from_ptr(r.password) }
-                .to_string_lossy()
-                .into_owned(),
-        )
+        Some(CStr::from_ptr(r.password).to_string_lossy().into_owned())
     };
 
     let new_opts = MqttOptionsFFI {
@@ -650,64 +648,81 @@ pub extern "C" fn mqtt_engine_new_with_opts(opts: *const MqttOptionsC) -> *mut M
     Box::into_raw(Box::new(MqttEngineFFI::new_with_opts(new_opts)))
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`
+/// and performs manual memory deallocation.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_free(ptr: *mut MqttEngineFFI) {
+pub unsafe extern "C" fn mqtt_engine_free(ptr: *mut MqttEngineFFI) {
     if !ptr.is_null() {
-        unsafe {
-            drop(Box::from_raw(ptr));
-        }
+        drop(Box::from_raw(ptr));
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_connect(ptr: *mut MqttEngineFFI) {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_engine_connect(ptr: *mut MqttEngineFFI) {
+    if let Some(engine) = ptr.as_ref() {
         engine.connect();
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr` and `data`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_handle_incoming(
+pub unsafe extern "C" fn mqtt_engine_handle_incoming(
     ptr: *mut MqttEngineFFI,
     data: *const u8,
     len: usize,
 ) {
-    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !data.is_null()) {
-        let buf = unsafe { std::slice::from_raw_parts(data, len) };
+    if let (Some(engine), true) = (ptr.as_ref(), !data.is_null()) {
+        let buf = std::slice::from_raw_parts(data, len);
         engine.handle_incoming(buf.to_vec());
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_handle_tick(ptr: *mut MqttEngineFFI, now_ms: u64) {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_engine_handle_tick(ptr: *mut MqttEngineFFI, now_ms: u64) {
+    if let Some(engine) = ptr.as_ref() {
         engine.handle_tick(now_ms);
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_next_tick_ms(ptr: *mut MqttEngineFFI) -> i64 {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_engine_next_tick_ms(ptr: *mut MqttEngineFFI) -> i64 {
+    if let Some(engine) = ptr.as_ref() {
         engine.next_tick_ms()
     } else {
         -1
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_take_outgoing(
+pub unsafe extern "C" fn mqtt_engine_take_outgoing(
     ptr: *mut MqttEngineFFI,
     out_len: *mut usize,
 ) -> *mut u8 {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+    if let Some(engine) = ptr.as_ref() {
         let bytes = engine.take_outgoing();
         if bytes.is_empty() {
-            unsafe {
+            if !out_len.is_null() {
                 *out_len = 0;
             }
             return std::ptr::null_mut();
         }
-        unsafe {
+        if !out_len.is_null() {
             *out_len = bytes.len();
         }
         let mut b = bytes.into_boxed_slice();
@@ -719,79 +734,85 @@ pub extern "C" fn mqtt_engine_take_outgoing(
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it performs manual memory deallocation.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_free_bytes(ptr: *mut u8, len: usize) {
+pub unsafe extern "C" fn mqtt_engine_free_bytes(ptr: *mut u8, len: usize) {
     if !ptr.is_null() {
-        unsafe {
-            drop(Box::from_raw(std::slice::from_raw_parts_mut(ptr, len)));
-        }
+        drop(Box::from_raw(std::slice::from_raw_parts_mut(ptr, len)));
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr`, `topic`, and `payload`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_publish(
+pub unsafe extern "C" fn mqtt_engine_publish(
     ptr: *mut MqttEngineFFI,
     topic: *const c_char,
     payload: *const u8,
     payload_len: usize,
     qos: u8,
 ) -> i32 {
-    if let (Some(engine), true, true) = (
-        unsafe { ptr.as_ref() },
-        !topic.is_null(),
-        !payload.is_null(),
-    ) {
-        let topic = unsafe { CStr::from_ptr(topic) }
-            .to_string_lossy()
-            .into_owned();
-        let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) }.to_vec();
+    if let (Some(engine), true, true) = (ptr.as_ref(), !topic.is_null(), !payload.is_null()) {
+        let topic = CStr::from_ptr(topic).to_string_lossy().into_owned();
+        let payload = std::slice::from_raw_parts(payload, payload_len).to_vec();
         engine.publish(topic, payload, qos, None)
     } else {
         -1
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr` and `topic_filter`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_subscribe(
+pub unsafe extern "C" fn mqtt_engine_subscribe(
     ptr: *mut MqttEngineFFI,
     topic_filter: *const c_char,
     qos: u8,
 ) -> i32 {
-    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !topic_filter.is_null()) {
-        let topic = unsafe { CStr::from_ptr(topic_filter) }
-            .to_string_lossy()
-            .into_owned();
+    if let (Some(engine), true) = (ptr.as_ref(), !topic_filter.is_null()) {
+        let topic = CStr::from_ptr(topic_filter).to_string_lossy().into_owned();
         engine.subscribe(topic, qos)
     } else {
         -1
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr` and `topic_filter`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_unsubscribe(
+pub unsafe extern "C" fn mqtt_engine_unsubscribe(
     ptr: *mut MqttEngineFFI,
     topic_filter: *const c_char,
 ) -> i32 {
-    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !topic_filter.is_null()) {
-        let topic = unsafe { CStr::from_ptr(topic_filter) }
-            .to_string_lossy()
-            .into_owned();
+    if let (Some(engine), true) = (ptr.as_ref(), !topic_filter.is_null()) {
+        let topic = CStr::from_ptr(topic_filter).to_string_lossy().into_owned();
         engine.unsubscribe(topic)
     } else {
         -1
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_disconnect(ptr: *mut MqttEngineFFI) {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_engine_disconnect(ptr: *mut MqttEngineFFI) {
+    if let Some(engine) = ptr.as_ref() {
         engine.disconnect();
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_is_connected(ptr: *mut MqttEngineFFI) -> c_int {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_engine_is_connected(ptr: *mut MqttEngineFFI) -> c_int {
+    if let Some(engine) = ptr.as_ref() {
         if engine.is_connected() {
             1
         } else {
@@ -802,41 +823,55 @@ pub extern "C" fn mqtt_engine_is_connected(ptr: *mut MqttEngineFFI) -> c_int {
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_get_version(ptr: *mut MqttEngineFFI) -> u8 {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_engine_get_version(ptr: *mut MqttEngineFFI) -> u8 {
+    if let Some(engine) = ptr.as_ref() {
         engine.get_version()
     } else {
         0
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_auth(ptr: *mut MqttEngineFFI, reason_code: u8) {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_engine_auth(ptr: *mut MqttEngineFFI, reason_code: u8) {
+    if let Some(engine) = ptr.as_ref() {
         engine.auth(reason_code);
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_handle_connection_lost(ptr: *mut MqttEngineFFI) {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_engine_handle_connection_lost(ptr: *mut MqttEngineFFI) {
+    if let Some(engine) = ptr.as_ref() {
         engine.handle_connection_lost();
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it performs manual memory deallocation of a `CString`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_free_string(ptr: *mut c_char) {
+pub unsafe extern "C" fn mqtt_engine_free_string(ptr: *mut c_char) {
     if !ptr.is_null() {
-        unsafe {
-            drop(CString::from_raw(ptr));
-        }
+        drop(CString::from_raw(ptr));
     }
 }
 
 // TLS Engine C wrappers
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `client_id`,
+/// `server_name`, and `tls_opts`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_new(
+pub unsafe extern "C" fn mqtt_tls_engine_new(
     client_id: *const c_char,
     mqtt_version: u8,
     server_name: *const c_char,
@@ -845,16 +880,12 @@ pub extern "C" fn mqtt_tls_engine_new(
     let client_id = if client_id.is_null() {
         "mqtt_client".to_string()
     } else {
-        unsafe { CStr::from_ptr(client_id) }
-            .to_string_lossy()
-            .into_owned()
+        CStr::from_ptr(client_id).to_string_lossy().into_owned()
     };
     let server_name = if server_name.is_null() {
         "localhost".to_string()
     } else {
-        unsafe { CStr::from_ptr(server_name) }
-            .to_string_lossy()
-            .into_owned()
+        CStr::from_ptr(server_name).to_string_lossy().into_owned()
     };
 
     let opts = MqttOptionsFFI {
@@ -878,12 +909,12 @@ pub extern "C" fn mqtt_tls_engine_new(
             alpn_protocols: vec!["mqtt".to_string()],
         }
     } else {
-        let r = unsafe { &*tls_opts };
+        let r = &*tls_opts;
         let ca_cert_file = if r.ca_cert_file.is_null() {
             None
         } else {
             Some(
-                unsafe { CStr::from_ptr(r.ca_cert_file) }
+                CStr::from_ptr(r.ca_cert_file)
                     .to_string_lossy()
                     .into_owned(),
             )
@@ -892,7 +923,7 @@ pub extern "C" fn mqtt_tls_engine_new(
             None
         } else {
             Some(
-                unsafe { CStr::from_ptr(r.client_cert_file) }
+                CStr::from_ptr(r.client_cert_file)
                     .to_string_lossy()
                     .into_owned(),
             )
@@ -901,17 +932,22 @@ pub extern "C" fn mqtt_tls_engine_new(
             None
         } else {
             Some(
-                unsafe { CStr::from_ptr(r.client_key_file) }
+                CStr::from_ptr(r.client_key_file)
                     .to_string_lossy()
                     .into_owned(),
             )
+        };
+        let alpn_protocols = if r.alpn.is_null() {
+            vec!["mqtt".to_string()]
+        } else {
+            vec![CStr::from_ptr(r.alpn).to_string_lossy().into_owned()]
         };
         MqttTlsOptionsFFI {
             ca_cert_file,
             client_cert_file,
             client_key_file,
             insecure_skip_verify: r.insecure_skip_verify != 0,
-            alpn_protocols: vec!["mqtt".to_string()],
+            alpn_protocols,
         }
     };
 
@@ -922,48 +958,58 @@ pub extern "C" fn mqtt_tls_engine_new(
     )))
 }
 
+/// # Safety
+///
+/// This function is unsafe because it performs manual memory deallocation of a `TlsMqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_free(ptr: *mut TlsMqttEngineFFI) {
+pub unsafe extern "C" fn mqtt_tls_engine_free(ptr: *mut TlsMqttEngineFFI) {
     if !ptr.is_null() {
-        unsafe {
-            drop(Box::from_raw(ptr));
-        }
+        drop(Box::from_raw(ptr));
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_connect(ptr: *mut TlsMqttEngineFFI) {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_tls_engine_connect(ptr: *mut TlsMqttEngineFFI) {
+    if let Some(engine) = ptr.as_ref() {
         engine.connect();
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr` and `data`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_handle_socket_data(
+pub unsafe extern "C" fn mqtt_tls_engine_handle_socket_data(
     ptr: *mut TlsMqttEngineFFI,
     data: *const u8,
     len: usize,
 ) {
-    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !data.is_null()) {
-        let buf = unsafe { std::slice::from_raw_parts(data, len) };
+    if let (Some(engine), true) = (ptr.as_ref(), !data.is_null()) {
+        let buf = std::slice::from_raw_parts(data, len);
         engine.handle_socket_data(buf.to_vec());
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr` and `out_len`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_take_socket_data(
+pub unsafe extern "C" fn mqtt_tls_engine_take_socket_data(
     ptr: *mut TlsMqttEngineFFI,
     out_len: *mut usize,
 ) -> *mut u8 {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+    if let Some(engine) = ptr.as_ref() {
         let bytes = engine.take_socket_data();
         if bytes.is_empty() {
-            unsafe {
+            if !out_len.is_null() {
                 *out_len = 0;
             }
             return std::ptr::null_mut();
         }
-        unsafe {
+        if !out_len.is_null() {
             *out_len = bytes.len();
         }
         let mut b = bytes.into_boxed_slice();
@@ -975,77 +1021,85 @@ pub extern "C" fn mqtt_tls_engine_take_socket_data(
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_handle_tick(ptr: *mut TlsMqttEngineFFI, now_ms: u64) {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_tls_engine_handle_tick(ptr: *mut TlsMqttEngineFFI, now_ms: u64) {
+    if let Some(engine) = ptr.as_ref() {
         engine.handle_tick(now_ms);
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr`, `topic`, and `payload`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_publish(
+pub unsafe extern "C" fn mqtt_tls_engine_publish(
     ptr: *mut TlsMqttEngineFFI,
     topic: *const c_char,
     payload: *const u8,
     payload_len: usize,
     qos: u8,
 ) -> i32 {
-    if let (Some(engine), true, true) = (
-        unsafe { ptr.as_ref() },
-        !topic.is_null(),
-        !payload.is_null(),
-    ) {
-        let topic = unsafe { CStr::from_ptr(topic) }
-            .to_string_lossy()
-            .into_owned();
-        let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) }.to_vec();
+    if let (Some(engine), true, true) = (ptr.as_ref(), !topic.is_null(), !payload.is_null()) {
+        let topic = CStr::from_ptr(topic).to_string_lossy().into_owned();
+        let payload = std::slice::from_raw_parts(payload, payload_len).to_vec();
         engine.publish(topic, payload, qos)
     } else {
         -1
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr` and `topic_filter`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_subscribe(
+pub unsafe extern "C" fn mqtt_tls_engine_subscribe(
     ptr: *mut TlsMqttEngineFFI,
     topic_filter: *const c_char,
     qos: u8,
 ) -> i32 {
-    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !topic_filter.is_null()) {
-        let topic = unsafe { CStr::from_ptr(topic_filter) }
-            .to_string_lossy()
-            .into_owned();
+    if let (Some(engine), true) = (ptr.as_ref(), !topic_filter.is_null()) {
+        let topic = CStr::from_ptr(topic_filter).to_string_lossy().into_owned();
         engine.subscribe(topic, qos)
     } else {
         -1
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr` and `topic_filter`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_unsubscribe(
+pub unsafe extern "C" fn mqtt_tls_engine_unsubscribe(
     ptr: *mut TlsMqttEngineFFI,
     topic_filter: *const c_char,
 ) -> i32 {
-    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !topic_filter.is_null()) {
-        let topic = unsafe { CStr::from_ptr(topic_filter) }
-            .to_string_lossy()
-            .into_owned();
+    if let (Some(engine), true) = (ptr.as_ref(), !topic_filter.is_null()) {
+        let topic = CStr::from_ptr(topic_filter).to_string_lossy().into_owned();
         engine.unsubscribe(topic)
     } else {
         -1
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_disconnect(ptr: *mut TlsMqttEngineFFI) {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_tls_engine_disconnect(ptr: *mut TlsMqttEngineFFI) {
+    if let Some(engine) = ptr.as_ref() {
         engine.disconnect();
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_is_connected(ptr: *mut TlsMqttEngineFFI) -> i32 {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_tls_engine_is_connected(ptr: *mut TlsMqttEngineFFI) -> i32 {
+    if let Some(engine) = ptr.as_ref() {
         if engine.is_connected() {
             1
         } else {
@@ -1056,9 +1110,13 @@ pub extern "C" fn mqtt_tls_engine_is_connected(ptr: *mut TlsMqttEngineFFI) -> i3
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`
+/// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_take_events(ptr: *mut MqttEngineFFI) -> *mut c_char {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_engine_take_events(ptr: *mut MqttEngineFFI) -> *mut c_char {
+    if let Some(engine) = ptr.as_ref() {
         let events = engine.take_events();
         let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
         CString::new(json).unwrap().into_raw()
@@ -1067,9 +1125,13 @@ pub extern "C" fn mqtt_engine_take_events(ptr: *mut MqttEngineFFI) -> *mut c_cha
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`
+/// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_take_events(ptr: *mut TlsMqttEngineFFI) -> *mut c_char {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_tls_engine_take_events(ptr: *mut TlsMqttEngineFFI) -> *mut c_char {
+    if let Some(engine) = ptr.as_ref() {
         let events = engine.take_events();
         let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
         CString::new(json).unwrap().into_raw()
@@ -1079,17 +1141,19 @@ pub extern "C" fn mqtt_tls_engine_take_events(ptr: *mut TlsMqttEngineFFI) -> *mu
 }
 
 // QUIC Engine C wrappers
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer for `client_id`
+/// and returns a raw pointer to a new `QuicMqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_new(
+pub unsafe extern "C" fn mqtt_quic_engine_new(
     client_id: *const c_char,
     mqtt_version: u8,
 ) -> *mut QuicMqttEngineFFI {
     let client_id = if client_id.is_null() {
         "mqtt_client".to_string()
     } else {
-        unsafe { CStr::from_ptr(client_id) }
-            .to_string_lossy()
-            .into_owned()
+        CStr::from_ptr(client_id).to_string_lossy().into_owned()
     };
     let opts = MqttOptionsFFI {
         client_id,
@@ -1105,33 +1169,32 @@ pub extern "C" fn mqtt_quic_engine_new(
     Box::into_raw(Box::new(QuicMqttEngineFFI::new(opts)))
 }
 
+/// # Safety
+///
+/// This function is unsafe because it performs manual memory deallocation of a `QuicMqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_free(ptr: *mut QuicMqttEngineFFI) {
+pub unsafe extern "C" fn mqtt_quic_engine_free(ptr: *mut QuicMqttEngineFFI) {
     if !ptr.is_null() {
-        unsafe {
-            drop(Box::from_raw(ptr));
-        }
+        drop(Box::from_raw(ptr));
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr`, `server_addr`,
+/// `server_name`, and `tls_opts`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_connect(
+pub unsafe extern "C" fn mqtt_quic_engine_connect(
     ptr: *mut QuicMqttEngineFFI,
     server_addr: *const c_char,
     server_name: *const c_char,
     tls_opts: *const MqttTlsOptionsC,
 ) -> i32 {
-    if let (Some(engine), true, true) = (
-        unsafe { ptr.as_ref() },
-        !server_addr.is_null(),
-        !server_name.is_null(),
-    ) {
-        let server_addr = unsafe { CStr::from_ptr(server_addr) }
-            .to_string_lossy()
-            .into_owned();
-        let server_name = unsafe { CStr::from_ptr(server_name) }
-            .to_string_lossy()
-            .into_owned();
+    if let (Some(engine), true, true) =
+        (ptr.as_ref(), !server_addr.is_null(), !server_name.is_null())
+    {
+        let server_addr = CStr::from_ptr(server_addr).to_string_lossy().into_owned();
+        let server_name = CStr::from_ptr(server_name).to_string_lossy().into_owned();
 
         let tls_opts_v = if tls_opts.is_null() {
             MqttTlsOptionsFFI {
@@ -1142,12 +1205,12 @@ pub extern "C" fn mqtt_quic_engine_connect(
                 alpn_protocols: vec!["mqtt".to_string()],
             }
         } else {
-            let r = unsafe { &*tls_opts };
+            let r = &*tls_opts;
             let ca_cert_file = if r.ca_cert_file.is_null() {
                 None
             } else {
                 Some(
-                    unsafe { CStr::from_ptr(r.ca_cert_file) }
+                    CStr::from_ptr(r.ca_cert_file)
                         .to_string_lossy()
                         .into_owned(),
                 )
@@ -1156,7 +1219,7 @@ pub extern "C" fn mqtt_quic_engine_connect(
                 None
             } else {
                 Some(
-                    unsafe { CStr::from_ptr(r.client_cert_file) }
+                    CStr::from_ptr(r.client_cert_file)
                         .to_string_lossy()
                         .into_owned(),
                 )
@@ -1165,7 +1228,7 @@ pub extern "C" fn mqtt_quic_engine_connect(
                 None
             } else {
                 Some(
-                    unsafe { CStr::from_ptr(r.client_key_file) }
+                    CStr::from_ptr(r.client_key_file)
                         .to_string_lossy()
                         .into_owned(),
                 )
@@ -1186,35 +1249,35 @@ pub extern "C" fn mqtt_quic_engine_connect(
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr`, `data`, and `remote_addr`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_handle_datagram(
+pub unsafe extern "C" fn mqtt_quic_engine_handle_datagram(
     ptr: *mut QuicMqttEngineFFI,
     data: *const u8,
     len: usize,
     remote_addr: *const c_char,
 ) {
-    if let (Some(engine), true, true) = (
-        unsafe { ptr.as_ref() },
-        !data.is_null(),
-        !remote_addr.is_null(),
-    ) {
-        let buf = unsafe { std::slice::from_raw_parts(data, len) };
-        let remote_addr = unsafe { CStr::from_ptr(remote_addr) }
-            .to_string_lossy()
-            .into_owned();
+    if let (Some(engine), true, true) = (ptr.as_ref(), !data.is_null(), !remote_addr.is_null()) {
+        let buf = std::slice::from_raw_parts(data, len);
+        let remote_addr = CStr::from_ptr(remote_addr).to_string_lossy().into_owned();
         engine.handle_datagram(buf.to_vec(), remote_addr, 0);
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr` and `out_count`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_take_outgoing_datagrams(
+pub unsafe extern "C" fn mqtt_quic_engine_take_outgoing_datagrams(
     ptr: *mut QuicMqttEngineFFI,
     out_count: *mut usize,
 ) -> *mut MqttDatagramC {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+    if let Some(engine) = ptr.as_ref() {
         let dgs = engine.take_outgoing_datagrams();
         if dgs.is_empty() {
-            unsafe {
+            if !out_count.is_null() {
                 *out_count = 0;
             }
             return std::ptr::null_mut();
@@ -1234,7 +1297,7 @@ pub extern "C" fn mqtt_quic_engine_take_outgoing_datagrams(
             });
         }
 
-        unsafe {
+        if !out_count.is_null() {
             *out_count = result.len();
         }
         let mut b = result.into_boxed_slice();
@@ -1246,39 +1309,45 @@ pub extern "C" fn mqtt_quic_engine_take_outgoing_datagrams(
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it performs manual memory deallocation of a datagram slice.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_free_datagrams(ptr: *mut MqttDatagramC, count: usize) {
+pub unsafe extern "C" fn mqtt_quic_engine_free_datagrams(ptr: *mut MqttDatagramC, count: usize) {
     if !ptr.is_null() {
-        let slice = unsafe { std::slice::from_raw_parts_mut(ptr, count) };
+        let slice = std::slice::from_raw_parts_mut(ptr, count);
         for dg in &mut *slice {
-            unsafe {
-                if !dg.addr.is_null() {
-                    drop(CString::from_raw(dg.addr));
-                }
-                if !dg.data.is_null() {
-                    drop(Box::from_raw(std::slice::from_raw_parts_mut(
-                        dg.data,
-                        dg.data_len,
-                    )));
-                }
+            if !dg.addr.is_null() {
+                drop(CString::from_raw(dg.addr));
+            }
+            if !dg.data.is_null() {
+                drop(Box::from_raw(std::slice::from_raw_parts_mut(
+                    dg.data,
+                    dg.data_len,
+                )));
             }
         }
-        unsafe {
-            drop(Box::from_raw(slice));
-        }
+        drop(Box::from_raw(slice));
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `QuicMqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_handle_tick(ptr: *mut QuicMqttEngineFFI, now_ms: u64) {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_quic_engine_handle_tick(ptr: *mut QuicMqttEngineFFI, now_ms: u64) {
+    if let Some(engine) = ptr.as_ref() {
         engine.handle_tick(now_ms);
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `QuicMqttEngineFFI`
+/// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_take_events(ptr: *mut QuicMqttEngineFFI) -> *mut c_char {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_quic_engine_take_events(ptr: *mut QuicMqttEngineFFI) -> *mut c_char {
+    if let Some(engine) = ptr.as_ref() {
         let events = engine.take_events();
         let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
         CString::new(json).unwrap().into_raw()
@@ -1287,70 +1356,75 @@ pub extern "C" fn mqtt_quic_engine_take_events(ptr: *mut QuicMqttEngineFFI) -> *
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr`, `topic`, and `payload`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_publish(
+pub unsafe extern "C" fn mqtt_quic_engine_publish(
     ptr: *mut QuicMqttEngineFFI,
     topic: *const c_char,
     payload: *const u8,
     payload_len: usize,
     qos: u8,
 ) -> i32 {
-    if let (Some(engine), true, true) = (
-        unsafe { ptr.as_ref() },
-        !topic.is_null(),
-        !payload.is_null(),
-    ) {
-        let topic = unsafe { CStr::from_ptr(topic) }
-            .to_string_lossy()
-            .into_owned();
-        let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) }.to_vec();
+    if let (Some(engine), true, true) = (ptr.as_ref(), !topic.is_null(), !payload.is_null()) {
+        let topic = CStr::from_ptr(topic).to_string_lossy().into_owned();
+        let payload = std::slice::from_raw_parts(payload, payload_len).to_vec();
         engine.publish(topic, payload, qos)
     } else {
         -1
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr` and `topic_filter`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_subscribe(
+pub unsafe extern "C" fn mqtt_quic_engine_subscribe(
     ptr: *mut QuicMqttEngineFFI,
     topic_filter: *const c_char,
     qos: u8,
 ) -> i32 {
-    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !topic_filter.is_null()) {
-        let topic = unsafe { CStr::from_ptr(topic_filter) }
-            .to_string_lossy()
-            .into_owned();
+    if let (Some(engine), true) = (ptr.as_ref(), !topic_filter.is_null()) {
+        let topic = CStr::from_ptr(topic_filter).to_string_lossy().into_owned();
         engine.subscribe(topic, qos)
     } else {
         -1
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr` and `topic_filter`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_unsubscribe(
+pub unsafe extern "C" fn mqtt_quic_engine_unsubscribe(
     ptr: *mut QuicMqttEngineFFI,
     topic_filter: *const c_char,
 ) -> i32 {
-    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !topic_filter.is_null()) {
-        let topic = unsafe { CStr::from_ptr(topic_filter) }
-            .to_string_lossy()
-            .into_owned();
+    if let (Some(engine), true) = (ptr.as_ref(), !topic_filter.is_null()) {
+        let topic = CStr::from_ptr(topic_filter).to_string_lossy().into_owned();
         engine.unsubscribe(topic)
     } else {
         -1
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `QuicMqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_disconnect(ptr: *mut QuicMqttEngineFFI) {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_quic_engine_disconnect(ptr: *mut QuicMqttEngineFFI) {
+    if let Some(engine) = ptr.as_ref() {
         engine.disconnect();
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `QuicMqttEngineFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_is_connected(ptr: *mut QuicMqttEngineFFI) -> i32 {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_quic_engine_is_connected(ptr: *mut QuicMqttEngineFFI) -> i32 {
+    if let Some(engine) = ptr.as_ref() {
         if engine.is_connected() {
             1
         } else {
@@ -1379,6 +1453,7 @@ pub struct MqttTlsOptionsC {
     pub ca_cert_file: *const c_char,
     pub client_cert_file: *const c_char,
     pub client_key_file: *const c_char,
+    pub alpn: *const c_char,
     pub insecure_skip_verify: u8,
 }
 
@@ -1402,14 +1477,23 @@ impl MqttEventListFFI {
     pub fn len(&self) -> u32 {
         self.events.len() as u32
     }
+    pub fn is_empty(&self) -> bool {
+        self.events.is_empty()
+    }
     pub fn get(&self, index: u32) -> Option<MqttEventFFI> {
         self.events.get(index as usize).cloned()
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`
+/// and returns an allocated `MqttEventListFFI` pointer that must be freed with `mqtt_event_list_free`.
 #[no_mangle]
-pub extern "C" fn mqtt_engine_take_events_list(ptr: *mut MqttEngineFFI) -> *mut MqttEventListFFI {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_engine_take_events_list(
+    ptr: *mut MqttEngineFFI,
+) -> *mut MqttEventListFFI {
+    if let Some(engine) = ptr.as_ref() {
         let events = engine.take_events();
         Box::into_raw(Box::new(MqttEventListFFI { events }))
     } else {
@@ -1417,28 +1501,35 @@ pub extern "C" fn mqtt_engine_take_events_list(ptr: *mut MqttEngineFFI) -> *mut 
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it performs manual memory deallocation of a `MqttEventListFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_event_list_free(ptr: *mut MqttEventListFFI) {
+pub unsafe extern "C" fn mqtt_event_list_free(ptr: *mut MqttEventListFFI) {
     if !ptr.is_null() {
-        unsafe {
-            drop(Box::from_raw(ptr));
-        }
+        drop(Box::from_raw(ptr));
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEventListFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_event_list_len(ptr: *const MqttEventListFFI) -> usize {
-    if let Some(list) = unsafe { ptr.as_ref() } {
-        list.len() as usize
+pub unsafe extern "C" fn mqtt_event_list_len(ptr: *const MqttEventListFFI) -> usize {
+    if let Some(list) = ptr.as_ref() {
+        list.events.len()
     } else {
         0
     }
 }
 
 // I'll provide a way to get event details as raw types
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEventListFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_event_list_get_tag(ptr: *const MqttEventListFFI, index: usize) -> u8 {
-    if let Some(list) = unsafe { ptr.as_ref() } {
+pub unsafe extern "C" fn mqtt_event_list_get_tag(ptr: *const MqttEventListFFI, index: usize) -> u8 {
+    if let Some(list) = ptr.as_ref() {
         if let Some(event) = list.events.get(index) {
             match event {
                 MqttEventFFI::Connected(_) => 1,
@@ -1460,12 +1551,15 @@ pub extern "C" fn mqtt_event_list_get_tag(ptr: *const MqttEventListFFI, index: u
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEventListFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_event_list_get_connected_rc(
+pub unsafe extern "C" fn mqtt_event_list_get_connected_rc(
     ptr: *const MqttEventListFFI,
     index: usize,
 ) -> u8 {
-    if let Some(list) = unsafe { ptr.as_ref() } {
+    if let Some(list) = ptr.as_ref() {
         if let Some(MqttEventFFI::Connected(res)) = list.events.get(index) {
             res.reason_code
         } else {
@@ -1476,12 +1570,16 @@ pub extern "C" fn mqtt_event_list_get_connected_rc(
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEventListFFI`
+/// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
 #[no_mangle]
-pub extern "C" fn mqtt_event_list_get_message_topic(
+pub unsafe extern "C" fn mqtt_event_list_get_message_topic(
     ptr: *const MqttEventListFFI,
     index: usize,
 ) -> *mut c_char {
-    if let Some(list) = unsafe { ptr.as_ref() } {
+    if let Some(list) = ptr.as_ref() {
         if let Some(MqttEventFFI::MessageReceived(msg)) = list.events.get(index) {
             return CString::new(msg.topic.clone()).unwrap().into_raw();
         }
@@ -1489,15 +1587,19 @@ pub extern "C" fn mqtt_event_list_get_message_topic(
     std::ptr::null_mut()
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences raw pointers for `ptr` and `out_len`,
+/// and returns an allocated `u8` pointer that must be freed with `mqtt_engine_free_bytes`.
 #[no_mangle]
-pub extern "C" fn mqtt_event_list_get_message_payload(
+pub unsafe extern "C" fn mqtt_event_list_get_message_payload(
     ptr: *const MqttEventListFFI,
     index: usize,
     out_len: *mut usize,
 ) -> *mut u8 {
-    if let Some(list) = unsafe { ptr.as_ref() } {
+    if let Some(list) = ptr.as_ref() {
         if let Some(MqttEventFFI::MessageReceived(msg)) = list.events.get(index) {
-            unsafe {
+            if !out_len.is_null() {
                 *out_len = msg.payload.len();
             }
             let mut b = msg.payload.clone().into_boxed_slice();
@@ -1509,12 +1611,15 @@ pub extern "C" fn mqtt_event_list_get_message_payload(
     std::ptr::null_mut()
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEventListFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_event_list_get_published_pid(
+pub unsafe extern "C" fn mqtt_event_list_get_published_pid(
     ptr: *const MqttEventListFFI,
     index: usize,
 ) -> i32 {
-    if let Some(list) = unsafe { ptr.as_ref() } {
+    if let Some(list) = ptr.as_ref() {
         if let Some(MqttEventFFI::Published(res)) = list.events.get(index) {
             return res.packet_id.map(|id| id as i32).unwrap_or(0);
         }
@@ -1522,12 +1627,15 @@ pub extern "C" fn mqtt_event_list_get_published_pid(
     -1
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEventListFFI`.
 #[no_mangle]
-pub extern "C" fn mqtt_event_list_get_subscribed_pid(
+pub unsafe extern "C" fn mqtt_event_list_get_subscribed_pid(
     ptr: *const MqttEventListFFI,
     index: usize,
 ) -> i32 {
-    if let Some(list) = unsafe { ptr.as_ref() } {
+    if let Some(list) = ptr.as_ref() {
         if let Some(MqttEventFFI::Subscribed(res)) = list.events.get(index) {
             return res.packet_id as i32;
         }
@@ -1535,12 +1643,16 @@ pub extern "C" fn mqtt_event_list_get_subscribed_pid(
     -1
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEventListFFI`
+/// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
 #[no_mangle]
-pub extern "C" fn mqtt_event_list_get_error_message(
+pub unsafe extern "C" fn mqtt_event_list_get_error_message(
     ptr: *const MqttEventListFFI,
     index: usize,
 ) -> *mut c_char {
-    if let Some(list) = unsafe { ptr.as_ref() } {
+    if let Some(list) = ptr.as_ref() {
         if let Some(MqttEventFFI::Error { message }) = list.events.get(index) {
             return CString::new(message.clone()).unwrap().into_raw();
         }
@@ -1548,11 +1660,15 @@ pub extern "C" fn mqtt_event_list_get_error_message(
     std::ptr::null_mut()
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `QuicMqttEngineFFI`
+/// and returns an allocated `MqttEventListFFI` pointer that must be freed with `mqtt_event_list_free`.
 #[no_mangle]
-pub extern "C" fn mqtt_quic_engine_take_events_list(
+pub unsafe extern "C" fn mqtt_quic_engine_take_events_list(
     ptr: *mut QuicMqttEngineFFI,
 ) -> *mut MqttEventListFFI {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+    if let Some(engine) = ptr.as_ref() {
         let events = engine.take_events();
         Box::into_raw(Box::new(MqttEventListFFI { events }))
     } else {
@@ -1560,11 +1676,15 @@ pub extern "C" fn mqtt_quic_engine_take_events_list(
     }
 }
 
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`
+/// and returns an allocated `MqttEventListFFI` pointer that must be freed with `mqtt_event_list_free`.
 #[no_mangle]
-pub extern "C" fn mqtt_tls_engine_take_events_list(
+pub unsafe extern "C" fn mqtt_tls_engine_take_events_list(
     ptr: *mut TlsMqttEngineFFI,
 ) -> *mut MqttEventListFFI {
-    if let Some(engine) = unsafe { ptr.as_ref() } {
+    if let Some(engine) = ptr.as_ref() {
         let events = engine.take_events();
         Box::into_raw(Box::new(MqttEventListFFI { events }))
     } else {
