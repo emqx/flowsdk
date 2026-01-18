@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: MPL-2.0
+
 #include <arpa/inet.h>
 #include <errno.h>
 #include <fcntl.h>
@@ -21,15 +23,16 @@ typedef struct {
   uint8_t clean_start;
   uint16_t keep_alive;
   const char *username;
-  const uint8_t *password;
-  size_t password_len;
+  const char *password;
   uint64_t reconnect_base_delay_ms;
   uint64_t reconnect_max_delay_ms;
   uint32_t max_reconnect_attempts;
-} MqttOptionsFFI;
+} MqttOptionsC;
+
+typedef struct MqttEventListFFI MqttEventListFFI;
 
 MqttEngineFFI *mqtt_engine_new(const char *client_id, uint8_t mqtt_version);
-MqttEngineFFI *mqtt_engine_new_with_opts(const MqttOptionsFFI *opts);
+MqttEngineFFI *mqtt_engine_new_with_opts(const MqttOptionsC *opts);
 void mqtt_engine_free(MqttEngineFFI *ptr);
 void mqtt_engine_connect(MqttEngineFFI *ptr);
 void mqtt_engine_handle_incoming(MqttEngineFFI *ptr, const uint8_t *data,
@@ -38,7 +41,6 @@ void mqtt_engine_handle_tick(MqttEngineFFI *ptr, uint64_t now_ms);
 int64_t mqtt_engine_next_tick_ms(MqttEngineFFI *ptr);
 uint8_t *mqtt_engine_take_outgoing(MqttEngineFFI *ptr, size_t *out_len);
 void mqtt_engine_free_bytes(uint8_t *ptr, size_t len);
-char *mqtt_engine_take_events(MqttEngineFFI *ptr);
 void mqtt_engine_free_string(char *ptr);
 int32_t mqtt_engine_publish(MqttEngineFFI *ptr, const char *topic,
                             const uint8_t *payload, size_t payload_len,
@@ -51,6 +53,18 @@ int mqtt_engine_is_connected(MqttEngineFFI *ptr);
 uint8_t mqtt_engine_get_version(MqttEngineFFI *ptr);
 void mqtt_engine_auth(MqttEngineFFI *ptr, uint8_t reason_code);
 void mqtt_engine_handle_connection_lost(MqttEngineFFI *ptr);
+
+// Native Event API
+MqttEventListFFI *mqtt_engine_take_events_list(MqttEngineFFI *ptr);
+void mqtt_event_list_free(MqttEventListFFI *ptr);
+size_t mqtt_event_list_len(const MqttEventListFFI *ptr);
+uint8_t mqtt_event_list_get_tag(const MqttEventListFFI *ptr, size_t index);
+uint8_t mqtt_event_list_get_connected_rc(const MqttEventListFFI *ptr,
+                                         size_t index);
+char *mqtt_event_list_get_message_topic(const MqttEventListFFI *ptr,
+                                        size_t index);
+uint8_t *mqtt_event_list_get_message_payload(const MqttEventListFFI *ptr,
+                                             size_t index, size_t *out_len);
 
 // Helper to get monotonic time in milliseconds
 uint64_t get_time_ms() {
@@ -109,15 +123,19 @@ int main(int argc, char **argv) {
   printf("TCP Connection established.\n");
 
   // 2. Initialize Engine
-  MqttOptionsFFI opts = {0};
-  opts.client_id = "c_tcp_client";
+  char client_id[32];
+  snprintf(client_id, sizeof(client_id), "c_ffi_tcp_%u",
+           (unsigned int)(get_time_ms() % 100000));
+
+  MqttOptionsC opts = {0};
+  opts.client_id = client_id;
   opts.mqtt_version = 5;
   opts.clean_start = 1;
   opts.keep_alive = 60;
 
   MqttEngineFFI *engine = mqtt_engine_new_with_opts(&opts);
-  printf("Engine initialized (Version: %u).\n",
-         mqtt_engine_get_version(engine));
+  printf("Engine initialized (Version: %u, ClientID: %s).\n",
+         mqtt_engine_get_version(engine), client_id);
 
   uint64_t start_time = get_time_ms();
   mqtt_engine_connect(engine);
@@ -126,10 +144,7 @@ int main(int argc, char **argv) {
   uint8_t read_buf[4096];
   int running = 1;
   uint32_t loop_without_activity = 0;
-  int subscribed = 0;
-  int published = 0;
   int puback_received = 0;
-  int disconnected = 0;
 
   printf("Starting I/O loop...\n");
   while (running) {
@@ -171,45 +186,47 @@ int main(int argc, char **argv) {
       running = 0;
     }
 
-    // D. Process Events
-    char *events = mqtt_engine_take_events(engine);
+    // D. Process Events (Native Structs)
+    MqttEventListFFI *events = mqtt_engine_take_events_list(engine);
     if (events) {
-      if (strcmp(events, "[]") != 0) {
-        printf("Events: %s\n", events);
+      size_t len = mqtt_event_list_len(events);
+      for (size_t i = 0; i < len; i++) {
+        uint8_t tag = mqtt_event_list_get_tag(events, i);
+        loop_without_activity = 0;
 
-        if (strstr(events, "Connected") && !subscribed) {
-          printf("Connection acknowledged! Subscribing to test/topic/ffi...\n");
+        if (tag == 1) { // Connected
+          uint8_t rc = mqtt_event_list_get_connected_rc(events, i);
+          printf("Connection acknowledged (RC: %u)! Subscribing...\n", rc);
           mqtt_engine_subscribe(engine, "test/topic/ffi", 1);
-          mqtt_engine_is_connected(engine) ? printf("Engine reports connected.\n")
-                                          : printf("Engine reports not connected.\n");
-          subscribed = 1;
-        }
-
-        if (strstr(events, "Subscribed") && subscribed && !published) {
+        } else if (tag == 5) { // Subscribed
           printf("Subscription acknowledged! Publishing QoS 1 message...\n");
-          int32_t pid =
-              mqtt_engine_publish(engine, "test/topic/ffi",
-                                  (const uint8_t *)"hello qos1 from C", 17, 1);
+          int32_t pid = mqtt_engine_publish(
+              engine, "test/topic/ffi", (const uint8_t *)"hello from C native",
+              19, 1);
           printf("Publish sent, PID: %d\n", pid);
-          published = 1;
-        }
-
-        if (strstr(events, "Published") && published && !disconnected) {
+        } else if (tag == 4) { // Published
           printf("Publish acknowledged by broker (PUBACK received)!\n");
           printf("Unsubscribing from test/topic/ffi...\n");
           mqtt_engine_unsubscribe(engine, "test/topic/ffi");
           printf("Disconnecting...\n");
           mqtt_engine_disconnect(engine);
-          disconnected = 1;
-        }
-
-        if (disconnected && strstr(events, "Disconnected")) {
+        } else if (tag == 2) { // Disconnected
           printf("Gracefully disconnected from broker.\n");
           puback_received = 1; // Reuse this flag to exit loop
+        } else if (tag == 3) { // MessageReceived
+          char *topic = mqtt_event_list_get_message_topic(events, i);
+          size_t p_len = 0;
+          uint8_t *payload =
+              mqtt_event_list_get_message_payload(events, i, &p_len);
+          printf("Message received on topic %s: %.*s\n", topic, (int)p_len,
+                 (char *)payload);
+          mqtt_engine_free_string(topic);
+          mqtt_engine_free_bytes(payload, p_len);
+        } else if (tag == 8) { // Error
+          printf("Engine Error!\n");
         }
       }
-      mqtt_engine_free_string(events);
-      loop_without_activity = 0;
+      mqtt_event_list_free(events);
     }
 
     // E. Sleep until next tick or small interval

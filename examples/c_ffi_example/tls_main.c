@@ -15,27 +15,26 @@
 
 // FFI declarations
 typedef struct TlsMqttEngineFFI TlsMqttEngineFFI;
+typedef struct MqttEventListFFI MqttEventListFFI;
 
 typedef struct {
-  uint8_t insecure_skip_verify;
-  const char *alpn;
   const char *ca_cert_file;
   const char *client_cert_file;
   const char *client_key_file;
-} MqttTlsOptionsFFI;
+  uint8_t insecure_skip_verify;
+} MqttTlsOptionsC;
 
 TlsMqttEngineFFI *mqtt_tls_engine_new(const char *client_id,
                                       uint8_t mqtt_version,
                                       const char *server_name,
-                                      const MqttTlsOptionsFFI *opts);
+                                      const MqttTlsOptionsC *opts);
 void mqtt_tls_engine_free(TlsMqttEngineFFI *ptr);
 void mqtt_tls_engine_connect(TlsMqttEngineFFI *ptr);
-int32_t mqtt_tls_engine_handle_socket_data(TlsMqttEngineFFI *ptr,
-                                           const uint8_t *data, size_t len);
+void mqtt_tls_engine_handle_socket_data(TlsMqttEngineFFI *ptr,
+                                        const uint8_t *data, size_t len);
 uint8_t *mqtt_tls_engine_take_socket_data(TlsMqttEngineFFI *ptr,
                                           size_t *out_len);
 void mqtt_tls_engine_handle_tick(TlsMqttEngineFFI *ptr, uint64_t now_ms);
-char *mqtt_tls_engine_take_events(TlsMqttEngineFFI *ptr);
 int32_t mqtt_tls_engine_publish(TlsMqttEngineFFI *ptr, const char *topic,
                                 const uint8_t *payload, size_t payload_len,
                                 uint8_t qos);
@@ -48,6 +47,18 @@ int32_t mqtt_tls_engine_is_connected(TlsMqttEngineFFI *ptr);
 
 void mqtt_engine_free_bytes(uint8_t *ptr, size_t len);
 void mqtt_engine_free_string(char *ptr);
+
+// Native Event API
+MqttEventListFFI *mqtt_tls_engine_take_events_list(TlsMqttEngineFFI *ptr);
+void mqtt_event_list_free(MqttEventListFFI *ptr);
+size_t mqtt_event_list_len(const MqttEventListFFI *ptr);
+uint8_t mqtt_event_list_get_tag(const MqttEventListFFI *ptr, size_t index);
+uint8_t mqtt_event_list_get_connected_rc(const MqttEventListFFI *ptr,
+                                         size_t index);
+char *mqtt_event_list_get_message_topic(const MqttEventListFFI *ptr,
+                                        size_t index);
+uint8_t *mqtt_event_list_get_message_payload(const MqttEventListFFI *ptr,
+                                             size_t index, size_t *out_len);
 
 uint64_t get_time_ms() {
   struct timespec ts;
@@ -100,20 +111,25 @@ int main(int argc, char **argv) {
   fcntl(sock, F_SETFL, O_NONBLOCK);
 
   // Initialize TLS Engine
-  // Using NULL for opts means it will use system CA certificates
+  MqttTlsOptionsC q_opts = {0};
+  q_opts.insecure_skip_verify = 1;
+
+  char client_id[32];
+  snprintf(client_id, sizeof(client_id), "c_ffi_tls_%u",
+           (unsigned int)(get_time_ms() % 100000));
+
   TlsMqttEngineFFI *engine =
-      mqtt_tls_engine_new("c_tls_client", 5, broker_host, NULL);
+      mqtt_tls_engine_new(client_id, 5, broker_host, &q_opts);
   if (!engine) {
     fprintf(stderr, "Failed to create TLS engine\n");
     return 1;
   }
+  printf("Engine initialized (ClientID: %s).\n", client_id);
 
   mqtt_tls_engine_connect(engine);
 
   uint64_t start_time = get_time_ms();
   int running = 1;
-  int subscribed = 0;
-  int unsubscribed = 0;
   uint32_t loop_without_activity = 0;
 
   uint8_t read_buf[4096];
@@ -144,40 +160,49 @@ int main(int argc, char **argv) {
       break;
     }
 
-    // 4. Events
-    char *events = mqtt_tls_engine_take_events(engine);
+    // 4. Events (Native C API)
+    MqttEventListFFI *events = mqtt_tls_engine_take_events_list(engine);
     if (events) {
-      if (strcmp(events, "[]") != 0) {
-        printf("Events: %s\n", events);
-        if (strstr(events, "Connected") && !subscribed) {
-          printf("Connected! Subscribing...\n");
+      size_t len = mqtt_event_list_len(events);
+      for (size_t i = 0; i < len; i++) {
+        uint8_t tag = mqtt_event_list_get_tag(events, i);
+        loop_without_activity = 0;
+
+        if (tag == 1) { // Connected
+          printf("TLS Connected! Subscribing...\n");
           mqtt_tls_engine_subscribe(engine, "test/topic/tls", 1);
-          subscribed = 1;
-        }
-        if (strstr(events, "Subscribed")) {
+        } else if (tag == 5) { // Subscribed
           printf("Subscribed! Publishing...\n");
-          const char *payload = "hello from C over TLS";
+          const char *payload = "hello from C over TLS native";
           mqtt_tls_engine_publish(engine, "test/topic/tls",
                                   (const uint8_t *)payload, strlen(payload), 1);
-        }
-        if (strstr(events, "Published")) {
-          printf("Published! Wait a bit then disconnect...\n");
-        }
-        if (strstr(events, "MessageReceived")) {
-          printf("Message received! Unsubscribing...\n");
+        } else if (tag == 3) { // MessageReceived
+          char *topic = mqtt_event_list_get_message_topic(events, i);
+          size_t p_len = 0;
+          uint8_t *payload =
+              mqtt_event_list_get_message_payload(events, i, &p_len);
+          printf("Message received on topic %s: %.*s\n", topic, (int)p_len,
+                 (char *)payload);
+          mqtt_engine_free_string(topic);
+          mqtt_engine_free_bytes(payload, p_len);
+
+          printf("Unsubscribing from test/topic/tls...\n");
           mqtt_tls_engine_unsubscribe(engine, "test/topic/tls");
-        }
-        if (strstr(events, "Unsubscribed") && !unsubscribed) {
+        } else if (tag == 6) { // Unsubscribed
           printf("Unsubscribed! Disconnecting...\n");
           mqtt_tls_engine_disconnect(engine);
-          unsubscribed = 1;
-        }
-        if (strstr(events, "Disconnected")) {
+        } else if (tag == 2) { // Disconnected
           printf("Disconnected gracefully.\n");
           running = 0;
+        } else if (tag == 4) { // Published
+          printf("Publish acknowledged.\n");
+        } else if (tag == 8) { // Error
+          printf("TLS Engine Error!\n");
+        } else {
+          printf("Unhandled event tag: %u\n", tag);
         }
       }
-      mqtt_engine_free_string(events);
+      mqtt_event_list_free(events);
     }
 
     usleep(10000);

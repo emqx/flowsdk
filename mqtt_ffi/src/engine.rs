@@ -1,409 +1,407 @@
 // SPDX-License-Identifier: MPL-2.0
-#![allow(clippy::missing_safety_doc)]
-
 use flowsdk::mqtt_client::commands::PublishCommand;
 use flowsdk::mqtt_client::engine::{MqttEngine, MqttEvent};
 use flowsdk::mqtt_client::opts::MqttClientOptions;
-use libc::{c_char, size_t};
 use std::ffi::{CStr, CString};
+use std::os::raw::{c_char, c_int};
 use std::time::{Duration, Instant};
+
+pub mod ffi_types;
+use ffi_types::*;
+
+use std::sync::Mutex;
+
+#[derive(uniffi::Object)]
+pub struct MqttEngineFFI {
+    engine: Mutex<MqttEngine>,
+    start_time: Instant,
+    events: Mutex<Vec<MqttEventFFI>>,
+}
 
 #[cfg(feature = "quic")]
 use flowsdk::mqtt_client::engine::QuicMqttEngine;
 #[cfg(feature = "tls")]
 use flowsdk::mqtt_client::tls_engine::TlsMqttEngine;
-#[cfg(feature = "quic")]
 use std::net::SocketAddr;
-
-pub struct MqttEngineFFI {
-    engine: MqttEngine,
-    start_time: Instant,
-    events: Vec<MqttEvent>,
-}
-
-#[repr(C)]
-pub struct MqttOptionsFFI {
-    pub client_id: *const c_char,
-    pub mqtt_version: u8,
-    pub clean_start: u8,
-    pub keep_alive: u16,
-    pub username: *const c_char,
-    pub password: *const u8,
-    pub password_len: size_t,
-    pub reconnect_base_delay_ms: u64,
-    pub reconnect_max_delay_ms: u64,
-    pub max_reconnect_attempts: u32,
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_new(
-    client_id: *const c_char,
-    mqtt_version: u8,
-) -> *mut MqttEngineFFI {
-    let client_id = if client_id.is_null() {
-        "mqtt_client".to_string()
-    } else {
-        unsafe {
-            CStr::from_ptr(client_id)
-                .to_str()
-                .unwrap_or("mqtt_client")
-                .to_string()
-        }
-    };
-
-    let options = MqttClientOptions::builder()
-        .client_id(client_id)
-        .mqtt_version(mqtt_version)
-        .build();
-
-    let engine = MqttEngine::new(options);
-    let wrapper = Box::new(MqttEngineFFI {
-        engine,
-        start_time: Instant::now(),
-        events: Vec::new(),
-    });
-
-    Box::into_raw(wrapper)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_new_with_opts(
-    opts_ptr: *const MqttOptionsFFI,
-) -> *mut MqttEngineFFI {
-    if opts_ptr.is_null() {
-        return std::ptr::null_mut();
-    }
-    let opts = unsafe { &*opts_ptr };
-
-    let client_id = if opts.client_id.is_null() {
-        "mqtt_client".to_string()
-    } else {
-        unsafe {
-            CStr::from_ptr(opts.client_id)
-                .to_str()
-                .unwrap_or("mqtt_client")
-                .to_string()
-        }
-    };
-
-    let mut builder = MqttClientOptions::builder()
-        .client_id(client_id)
-        .mqtt_version(opts.mqtt_version)
-        .clean_start(opts.clean_start != 0)
-        .keep_alive(opts.keep_alive)
-        .reconnect_base_delay_ms(opts.reconnect_base_delay_ms)
-        .reconnect_max_delay_ms(opts.reconnect_max_delay_ms)
-        .max_reconnect_attempts(opts.max_reconnect_attempts);
-
-    if !opts.username.is_null() {
-        if let Ok(username) = unsafe { CStr::from_ptr(opts.username).to_str() } {
-            builder = builder.username(username);
-        }
-    }
-
-    if !opts.password.is_null() && opts.password_len > 0 {
-        let password = unsafe { std::slice::from_raw_parts(opts.password, opts.password_len) };
-        builder = builder.password(password.to_vec());
-    }
-
-    let engine = MqttEngine::new(builder.build());
-    let wrapper = Box::new(MqttEngineFFI {
-        engine,
-        start_time: Instant::now(),
-        events: Vec::new(),
-    });
-
-    Box::into_raw(wrapper)
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_handle_connection_lost(ptr: *mut MqttEngineFFI) {
-    if ptr.is_null() {
-        return;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    wrapper.engine.handle_connection_lost();
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_free(ptr: *mut MqttEngineFFI) {
-    if !ptr.is_null() {
-        unsafe {
-            let _ = Box::from_raw(ptr);
-        }
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_connect(ptr: *mut MqttEngineFFI) {
-    if ptr.is_null() {
-        return;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    wrapper.engine.connect();
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_handle_incoming(
-    ptr: *mut MqttEngineFFI,
-    data: *const u8,
-    len: size_t,
-) {
-    if ptr.is_null() || data.is_null() {
-        return;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let data = unsafe { std::slice::from_raw_parts(data, len) };
-    let events = wrapper.engine.handle_incoming(data);
-    wrapper.events.extend(events);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_handle_tick(ptr: *mut MqttEngineFFI, now_ms: u64) {
-    if ptr.is_null() {
-        return;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let now = wrapper.start_time + Duration::from_millis(now_ms);
-    let events = wrapper.engine.handle_tick(now);
-    wrapper.events.extend(events);
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_next_tick_ms(ptr: *mut MqttEngineFFI) -> i64 {
-    if ptr.is_null() {
-        return -1;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    match wrapper.engine.next_tick_at() {
-        Some(tick) => {
-            let duration = tick.duration_since(wrapper.start_time);
-            duration.as_millis() as i64
-        }
-        None => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_take_outgoing(
-    ptr: *mut MqttEngineFFI,
-    out_len: *mut size_t,
-) -> *mut u8 {
-    if ptr.is_null() || out_len.is_null() {
-        return std::ptr::null_mut();
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let bytes = wrapper.engine.take_outgoing();
-    if bytes.is_empty() {
-        unsafe { *out_len = 0 };
-        return std::ptr::null_mut();
-    }
-
-    unsafe { *out_len = bytes.len() };
-    let mut boxed_slice = bytes.into_boxed_slice();
-    let res = boxed_slice.as_mut_ptr();
-    std::mem::forget(boxed_slice);
-    res
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_free_bytes(ptr: *mut u8, len: size_t) {
-    if !ptr.is_null() {
-        unsafe {
-            let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len));
-        }
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_take_events(ptr: *mut MqttEngineFFI) -> *mut c_char {
-    if ptr.is_null() {
-        return CString::new("[]").unwrap().into_raw();
-    }
-    let wrapper = unsafe { &mut *ptr };
-    if wrapper.events.is_empty() {
-        return CString::new("[]").unwrap().into_raw();
-    }
-    let json = serde_json::to_string(&wrapper.events).unwrap_or_else(|_| "[]".to_string());
-    wrapper.events.clear();
-    let c_string = CString::new(json).unwrap_or_else(|err| {
-        eprintln!(
-            "mqtt_engine_take_events: failed to create CString from JSON events: {}",
-            err
-        );
-        // Fallback to an empty JSON array, which is known to be free of interior NUL bytes.
-        CString::new("[]").expect("CString::new on a literal without NUL bytes should not fail")
-    });
-    c_string.into_raw()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_free_string(ptr: *mut c_char) {
-    if !ptr.is_null() {
-        unsafe {
-            let _ = CString::from_raw(ptr);
-        }
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_publish(
-    ptr: *mut MqttEngineFFI,
-    topic: *const c_char,
-    payload: *const u8,
-    payload_len: size_t,
-    qos: u8,
-) -> i32 {
-    if ptr.is_null() || topic.is_null() || payload.is_null() {
-        return -1;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let topic = unsafe { CStr::from_ptr(topic).to_str().unwrap_or("").to_string() };
-    let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) }.to_vec();
-
-    let command_res = PublishCommand::builder()
-        .topic(topic)
-        .payload(payload)
-        .qos(qos)
-        .build();
-
-    let command = match command_res {
-        Ok(c) => c,
-        Err(_) => return -1,
-    };
-
-    match wrapper.engine.publish(command) {
-        Ok(Some(pid)) => pid as i32,
-        Ok(None) => 0,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_subscribe(
-    ptr: *mut MqttEngineFFI,
-    topic_filter: *const c_char,
-    qos: u8,
-) -> i32 {
-    if ptr.is_null() || topic_filter.is_null() {
-        return -1;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let topic_filter = unsafe {
-        CStr::from_ptr(topic_filter)
-            .to_str()
-            .unwrap_or("")
-            .to_string()
-    };
-
-    let command = flowsdk::mqtt_client::commands::SubscribeCommand::single(topic_filter, qos);
-
-    match wrapper.engine.subscribe(command) {
-        Ok(pid) => pid as i32,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_unsubscribe(
-    ptr: *mut MqttEngineFFI,
-    topic_filter: *const c_char,
-) -> i32 {
-    if ptr.is_null() || topic_filter.is_null() {
-        return -1;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let topic_filter = unsafe {
-        CStr::from_ptr(topic_filter)
-            .to_str()
-            .unwrap_or("")
-            .to_string()
-    };
-
-    let command =
-        flowsdk::mqtt_client::commands::UnsubscribeCommand::from_topics(vec![topic_filter]);
-
-    match wrapper.engine.unsubscribe(command) {
-        Ok(pid) => pid as i32,
-        Err(_) => -1,
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_disconnect(ptr: *mut MqttEngineFFI) {
-    if ptr.is_null() {
-        return;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    wrapper.engine.disconnect();
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_is_connected(ptr: *mut MqttEngineFFI) -> i32 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    if wrapper.engine.is_connected() {
-        1
-    } else {
-        0
-    }
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_get_version(ptr: *mut MqttEngineFFI) -> u8 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    wrapper.engine.mqtt_version()
-}
-
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_auth(ptr: *mut MqttEngineFFI, reason_code: u8) {
-    if ptr.is_null() {
-        return;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    wrapper.engine.auth(reason_code, Vec::new());
-}
-
-#[cfg(any(feature = "quic", feature = "tls"))]
-use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
-#[cfg(any(feature = "quic", feature = "tls"))]
-use rustls::pki_types::{CertificateDer, ServerName, UnixTime};
-#[cfg(any(feature = "quic", feature = "tls"))]
 use std::sync::Arc;
 
-#[cfg(feature = "quic")]
-pub struct QuicMqttEngineFFI {
-    engine: QuicMqttEngine,
-    start_time: Instant,
-    events: Vec<MqttEvent>,
+#[uniffi::export]
+impl MqttEngineFFI {
+    #[uniffi::constructor]
+    pub fn new(client_id: Option<String>, mqtt_version: u8) -> Self {
+        let client_id = client_id.unwrap_or_else(|| "mqtt_client".to_string());
+        let options = MqttClientOptions::builder()
+            .client_id(client_id)
+            .mqtt_version(mqtt_version)
+            .build();
+
+        let engine = MqttEngine::new(options);
+        MqttEngineFFI {
+            engine: Mutex::new(engine),
+            start_time: Instant::now(),
+            events: Mutex::new(Vec::new()),
+        }
+    }
+
+    #[uniffi::constructor]
+    pub fn new_with_opts(opts: MqttOptionsFFI) -> Self {
+        let mut builder = MqttClientOptions::builder()
+            .client_id(opts.client_id)
+            .mqtt_version(opts.mqtt_version)
+            .clean_start(opts.clean_start)
+            .keep_alive(opts.keep_alive)
+            .reconnect_base_delay_ms(opts.reconnect_base_delay_ms)
+            .reconnect_max_delay_ms(opts.reconnect_max_delay_ms)
+            .max_reconnect_attempts(opts.max_reconnect_attempts);
+
+        if let Some(username) = opts.username {
+            builder = builder.username(username);
+        }
+
+        if let Some(password) = opts.password {
+            builder = builder.password(password);
+        }
+
+        let engine = MqttEngine::new(builder.build());
+        MqttEngineFFI {
+            engine: Mutex::new(engine),
+            start_time: Instant::now(),
+            events: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn handle_connection_lost(&self) {
+        self.engine.lock().unwrap().handle_connection_lost();
+    }
+
+    pub fn connect(&self) {
+        self.engine.lock().unwrap().connect();
+    }
+
+    pub fn handle_incoming(&self, data: Vec<u8>) -> Vec<MqttEventFFI> {
+        let mut engine = self.engine.lock().unwrap();
+        let events = engine.handle_incoming(&data);
+        let mapped: Vec<_> = events.into_iter().map(map_event).collect();
+        self.events.lock().unwrap().extend(mapped.iter().cloned());
+        mapped
+    }
+
+    pub fn handle_tick(&self, now_ms: u64) -> Vec<MqttEventFFI> {
+        let now = self.start_time + Duration::from_millis(now_ms);
+        let mut engine = self.engine.lock().unwrap();
+        let events = engine.handle_tick(now);
+        let mapped: Vec<_> = events.into_iter().map(map_event).collect();
+        self.events.lock().unwrap().extend(mapped.iter().cloned());
+        mapped
+    }
+
+    pub fn next_tick_ms(&self) -> i64 {
+        match self.engine.lock().unwrap().next_tick_at() {
+            Some(tick) => {
+                if tick <= self.start_time {
+                    0
+                } else {
+                    let duration = tick.duration_since(self.start_time);
+                    duration.as_millis() as i64
+                }
+            }
+            None => -1,
+        }
+    }
+
+    pub fn take_outgoing(&self) -> Vec<u8> {
+        self.engine.lock().unwrap().take_outgoing()
+    }
+
+    pub fn take_events(&self) -> Vec<MqttEventFFI> {
+        let mut events = std::mem::take(&mut *self.events.lock().unwrap());
+        let engine_events = self.engine.lock().unwrap().take_events();
+        events.extend(engine_events.into_iter().map(map_event));
+        events
+    }
+
+    // Internal helper for C bridge
+    pub fn push_event_ffi(&self, event: MqttEventFFI) {
+        self.events.lock().unwrap().push(event);
+    }
+
+    pub fn publish(&self, topic: String, payload: Vec<u8>, qos: u8, priority: Option<u8>) -> i32 {
+        let mut builder = PublishCommand::builder()
+            .topic(topic)
+            .payload(payload)
+            .qos(qos);
+
+        if let Some(p) = priority {
+            builder = builder.priority(p);
+        }
+
+        let command = match builder.build() {
+            Ok(c) => c,
+            Err(_) => return -1,
+        };
+
+        match self.engine.lock().unwrap().publish(command) {
+            Ok(Some(pid)) => pid as i32,
+            Ok(None) => 0,
+            Err(_) => -1,
+        }
+    }
+
+    pub fn subscribe(&self, topic_filter: String, qos: u8) -> i32 {
+        let command = flowsdk::mqtt_client::commands::SubscribeCommand::single(topic_filter, qos);
+
+        match self.engine.lock().unwrap().subscribe(command) {
+            Ok(pid) => pid as i32,
+            Err(_) => -1,
+        }
+    }
+
+    pub fn unsubscribe(&self, topic_filter: String) -> i32 {
+        let command =
+            flowsdk::mqtt_client::commands::UnsubscribeCommand::from_topics(vec![topic_filter]);
+
+        match self.engine.lock().unwrap().unsubscribe(command) {
+            Ok(pid) => pid as i32,
+            Err(_) => -1,
+        }
+    }
+
+    pub fn disconnect(&self) {
+        self.engine.lock().unwrap().disconnect();
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.engine.lock().unwrap().is_connected()
+    }
+
+    pub fn get_version(&self) -> u8 {
+        self.engine.lock().unwrap().mqtt_version()
+    }
+
+    pub fn auth(&self, reason_code: u8) {
+        self.engine.lock().unwrap().auth(reason_code, Vec::new());
+    }
 }
 
-#[cfg(any(feature = "quic", feature = "tls"))]
+fn map_event(event: MqttEvent) -> MqttEventFFI {
+    match event {
+        MqttEvent::Connected(res) => MqttEventFFI::Connected(ConnectionResultFFI {
+            reason_code: res.reason_code,
+            session_present: res.session_present,
+        }),
+        MqttEvent::Disconnected(code) => MqttEventFFI::Disconnected { reason_code: code },
+        MqttEvent::MessageReceived(msg) => MqttEventFFI::MessageReceived(MqttMessageFFI {
+            topic: msg.topic_name,
+            payload: msg.payload,
+            qos: msg.qos,
+            retain: msg.retain,
+        }),
+        MqttEvent::Published(res) => MqttEventFFI::Published(PublishResultFFI {
+            packet_id: res.packet_id,
+            reason_code: res.reason_code,
+            qos: res.qos,
+        }),
+        MqttEvent::Subscribed(res) => MqttEventFFI::Subscribed(SubscribeResultFFI {
+            packet_id: res.packet_id,
+            reason_codes: res.reason_codes,
+        }),
+        MqttEvent::Unsubscribed(res) => MqttEventFFI::Unsubscribed(UnsubscribeResultFFI {
+            packet_id: res.packet_id,
+            reason_codes: res.reason_codes,
+        }),
+        MqttEvent::PingResponse(res) => MqttEventFFI::PingResponse {
+            success: res.success,
+        },
+        MqttEvent::Error(err) => MqttEventFFI::Error {
+            message: format!("{:?}", err),
+        },
+        MqttEvent::ReconnectNeeded => MqttEventFFI::ReconnectNeeded,
+        MqttEvent::ReconnectScheduled { attempt, delay } => MqttEventFFI::ReconnectScheduled {
+            attempt,
+            delay_ms: delay.as_millis() as u64,
+        },
+    }
+}
+
+#[derive(uniffi::Object)]
+pub struct TlsMqttEngineFFI {
+    engine: Mutex<TlsMqttEngine>,
+    start_time: Instant,
+    events: Mutex<Vec<MqttEventFFI>>,
+}
+
+#[uniffi::export]
+impl TlsMqttEngineFFI {
+    #[uniffi::constructor]
+    pub fn new(opts: MqttOptionsFFI, tls_opts: MqttTlsOptionsFFI, server_name: String) -> Self {
+        let options = MqttClientOptions::builder()
+            .client_id(opts.client_id)
+            .mqtt_version(opts.mqtt_version)
+            .clean_start(opts.clean_start)
+            .keep_alive(opts.keep_alive)
+            .reconnect_base_delay_ms(opts.reconnect_base_delay_ms)
+            .reconnect_max_delay_ms(opts.reconnect_max_delay_ms)
+            .max_reconnect_attempts(opts.max_reconnect_attempts)
+            .build();
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let crypto_builder = rustls::ClientConfig::builder();
+
+        let mut config = if tls_opts.insecure_skip_verify {
+            crypto_builder
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(InsecureServerCertVerifier))
+                .with_no_client_auth()
+        } else {
+            let mut root_store = rustls::RootCertStore::empty();
+            if let Some(ca_path) = tls_opts.ca_cert_file {
+                if let Ok(file) = std::fs::File::open(ca_path) {
+                    let mut reader = std::io::BufReader::new(file);
+                    let certs = rustls_pemfile::certs(&mut reader)
+                        .filter_map(|r| r.ok())
+                        .collect::<Vec<_>>();
+                    for cert in certs {
+                        root_store.add(cert).ok();
+                    }
+                }
+            } else {
+                for cert in rustls_native_certs::load_native_certs().unwrap_or_default() {
+                    root_store.add(cert).ok();
+                }
+            }
+
+            let mut client_auth = None;
+            if let (Some(cert_path), Some(key_path)) =
+                (tls_opts.client_cert_file, tls_opts.client_key_file)
+            {
+                if let (Ok(cert_file), Ok(key_file)) = (
+                    std::fs::File::open(cert_path),
+                    std::fs::File::open(key_path),
+                ) {
+                    let mut cert_reader = std::io::BufReader::new(cert_file);
+                    let mut key_reader = std::io::BufReader::new(key_file);
+                    let certs = rustls_pemfile::certs(&mut cert_reader)
+                        .filter_map(|r| r.ok())
+                        .collect::<Vec<_>>();
+                    let key = rustls_pemfile::private_key(&mut key_reader).ok().flatten();
+                    if !certs.is_empty() && key.is_some() {
+                        client_auth = Some((certs, key.unwrap()));
+                    }
+                }
+            }
+
+            let builder = crypto_builder.with_root_certificates(root_store);
+            if let Some((certs, key)) = client_auth {
+                builder.with_client_auth_cert(certs, key).unwrap()
+            } else {
+                builder.with_no_client_auth()
+            }
+        };
+
+        if !tls_opts.alpn_protocols.is_empty() {
+            config.alpn_protocols = tls_opts
+                .alpn_protocols
+                .into_iter()
+                .map(|s| s.into_bytes())
+                .collect();
+        } else {
+            config.alpn_protocols = vec![b"mqtt".to_vec()];
+        }
+
+        let engine = TlsMqttEngine::new(options, &server_name, Arc::new(config)).unwrap();
+        TlsMqttEngineFFI {
+            engine: Mutex::new(engine),
+            start_time: Instant::now(),
+            events: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn handle_socket_data(&self, data: Vec<u8>) {
+        self.engine.lock().unwrap().handle_socket_data(&data).ok();
+    }
+
+    pub fn take_socket_data(&self) -> Vec<u8> {
+        self.engine.lock().unwrap().take_socket_data()
+    }
+
+    pub fn handle_tick(&self, now_ms: u64) -> Vec<MqttEventFFI> {
+        let now = self.start_time + Duration::from_millis(now_ms);
+        let events = self.engine.lock().unwrap().handle_tick(now);
+        let mapped: Vec<_> = events.into_iter().map(map_event).collect();
+        self.events.lock().unwrap().extend(mapped.iter().cloned());
+        mapped
+    }
+
+    pub fn take_events(&self) -> Vec<MqttEventFFI> {
+        let mut events = std::mem::take(&mut *self.events.lock().unwrap());
+        let engine_events = self.engine.lock().unwrap().take_events();
+        events.extend(engine_events.into_iter().map(map_event));
+        events
+    }
+
+    pub fn connect(&self) {
+        self.engine.lock().unwrap().connect();
+    }
+
+    pub fn publish(&self, topic: String, payload: Vec<u8>, qos: u8) -> i32 {
+        let command = PublishCommand::builder()
+            .topic(topic)
+            .payload(payload)
+            .qos(qos)
+            .build()
+            .unwrap();
+        match self.engine.lock().unwrap().publish(command) {
+            Ok(Some(pid)) => pid as i32,
+            Ok(None) => 0,
+            Err(_) => -1,
+        }
+    }
+
+    pub fn subscribe(&self, topic_filter: String, qos: u8) -> i32 {
+        let command = flowsdk::mqtt_client::commands::SubscribeCommand::single(topic_filter, qos);
+        match self.engine.lock().unwrap().subscribe(command) {
+            Ok(pid) => pid as i32,
+            Err(_) => -1,
+        }
+    }
+
+    pub fn unsubscribe(&self, topic_filter: String) -> i32 {
+        let command =
+            flowsdk::mqtt_client::commands::UnsubscribeCommand::from_topics(vec![topic_filter]);
+        match self.engine.lock().unwrap().unsubscribe(command) {
+            Ok(pid) => pid as i32,
+            Err(_) => -1,
+        }
+    }
+
+    pub fn disconnect(&self) {
+        self.engine.lock().unwrap().disconnect();
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.engine.lock().unwrap().is_connected()
+    }
+}
+
 #[derive(Debug)]
 struct InsecureServerCertVerifier;
 
-#[cfg(any(feature = "quic", feature = "tls"))]
-impl ServerCertVerifier for InsecureServerCertVerifier {
+impl rustls::client::danger::ServerCertVerifier for InsecureServerCertVerifier {
     fn verify_server_cert(
         &self,
-        _end_entity: &CertificateDer<'_>,
-        _intermediates: &[CertificateDer<'_>],
-        _server_name: &ServerName<'_>,
+        _end_entity: &rustls::pki_types::CertificateDer<'_>,
+        _intermediates: &[rustls::pki_types::CertificateDer<'_>],
+        _server_name: &rustls::pki_types::ServerName<'_>,
         _ocsp_response: &[u8],
-        _now: UnixTime,
-    ) -> Result<ServerCertVerified, rustls::Error> {
-        Ok(ServerCertVerified::assertion())
+        _now: rustls::pki_types::UnixTime,
+    ) -> Result<rustls::client::danger::ServerCertVerified, rustls::Error> {
+        Ok(rustls::client::danger::ServerCertVerified::assertion())
     }
 
     fn verify_tls12_signature(
         &self,
         _message: &[u8],
-        _cert: &CertificateDer<'_>,
+        _cert: &rustls::pki_types::CertificateDer<'_>,
         _dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
@@ -412,7 +410,7 @@ impl ServerCertVerifier for InsecureServerCertVerifier {
     fn verify_tls13_signature(
         &self,
         _message: &[u8],
-        _cert: &CertificateDer<'_>,
+        _cert: &rustls::pki_types::CertificateDer<'_>,
         _dss: &rustls::DigitallySignedStruct,
     ) -> Result<rustls::client::danger::HandshakeSignatureValid, rustls::Error> {
         Ok(rustls::client::danger::HandshakeSignatureValid::assertion())
@@ -420,132 +418,68 @@ impl ServerCertVerifier for InsecureServerCertVerifier {
 
     fn supported_verify_schemes(&self) -> Vec<rustls::SignatureScheme> {
         vec![
+            rustls::SignatureScheme::RSA_PSS_SHA256,
             rustls::SignatureScheme::RSA_PKCS1_SHA256,
             rustls::SignatureScheme::ECDSA_NISTP256_SHA256,
-            rustls::SignatureScheme::RSA_PKCS1_SHA384,
-            rustls::SignatureScheme::ECDSA_NISTP384_SHA384,
-            rustls::SignatureScheme::RSA_PKCS1_SHA512,
-            rustls::SignatureScheme::ECDSA_NISTP521_SHA512,
-            rustls::SignatureScheme::RSA_PSS_SHA256,
-            rustls::SignatureScheme::RSA_PSS_SHA384,
-            rustls::SignatureScheme::RSA_PSS_SHA512,
-            rustls::SignatureScheme::ED25519,
         ]
     }
 }
 
-#[cfg(any(feature = "quic", feature = "tls"))]
-#[repr(C)]
-pub struct MqttTlsOptionsFFI {
-    pub insecure_skip_verify: u8,
-    pub alpn: *const c_char,
-    pub ca_cert_file: *const c_char,
-    pub client_cert_file: *const c_char,
-    pub client_key_file: *const c_char,
+#[derive(uniffi::Object)]
+pub struct QuicMqttEngineFFI {
+    engine: Mutex<QuicMqttEngine>,
+    start_time: Instant,
+    events: Mutex<Vec<MqttEventFFI>>,
 }
 
-#[cfg(feature = "quic")]
-#[repr(C)]
-pub struct MqttDatagramFFI {
-    pub remote_addr: *mut c_char,
-    pub data: *mut u8,
-    pub len: size_t,
-}
+#[uniffi::export]
+impl QuicMqttEngineFFI {
+    #[uniffi::constructor]
+    pub fn new(opts: MqttOptionsFFI) -> Self {
+        let options = MqttClientOptions::builder()
+            .client_id(opts.client_id)
+            .mqtt_version(opts.mqtt_version)
+            .clean_start(opts.clean_start)
+            .keep_alive(opts.keep_alive)
+            .reconnect_base_delay_ms(opts.reconnect_base_delay_ms)
+            .reconnect_max_delay_ms(opts.reconnect_max_delay_ms)
+            .max_reconnect_attempts(opts.max_reconnect_attempts)
+            .build();
 
-#[cfg(feature = "quic")]
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_new(
-    client_id: *const c_char,
-    mqtt_version: u8,
-) -> *mut QuicMqttEngineFFI {
-    let client_id = if client_id.is_null() {
-        "mqtt_quic_client".to_string()
-    } else {
-        unsafe {
-            CStr::from_ptr(client_id)
-                .to_str()
-                .unwrap_or("mqtt_quic_client")
-                .to_string()
-        }
-    };
-
-    let options = MqttClientOptions::builder()
-        .client_id(client_id)
-        .mqtt_version(mqtt_version)
-        .build();
-
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    match QuicMqttEngine::new(options) {
-        Ok(engine) => {
-            let wrapper = Box::new(QuicMqttEngineFFI {
-                engine,
-                start_time: Instant::now(),
-                events: Vec::new(),
-            });
-            Box::into_raw(wrapper)
-        }
-        Err(_) => std::ptr::null_mut(),
-    }
-}
-
-#[cfg(feature = "quic")]
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_free(ptr: *mut QuicMqttEngineFFI) {
-    if !ptr.is_null() {
-        unsafe {
-            let _ = Box::from_raw(ptr);
+        let engine = QuicMqttEngine::new(options).unwrap();
+        QuicMqttEngineFFI {
+            engine: Mutex::new(engine),
+            start_time: Instant::now(),
+            events: Mutex::new(Vec::new()),
         }
     }
-}
 
-#[cfg(feature = "quic")]
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_connect(
-    ptr: *mut QuicMqttEngineFFI,
-    server_addr: *const c_char,
-    server_name: *const c_char,
-    opts_ptr: *const MqttTlsOptionsFFI,
-) -> i32 {
-    if ptr.is_null() || server_addr.is_null() {
-        return -1;
-    }
+    pub fn connect(
+        &self,
+        server_addr: String,
+        server_name: String,
+        tls_opts: MqttTlsOptionsFFI,
+        now_ms: u64,
+    ) {
+        let addr: SocketAddr = server_addr.parse().unwrap();
+        let now = self.start_time + Duration::from_millis(now_ms);
 
-    let wrapper = unsafe { &mut *ptr };
-    let server_addr_str = unsafe { CStr::from_ptr(server_addr).to_str().unwrap_or("") };
-    let server_name_str = if server_name.is_null() {
-        // Fallback to address without port if possible
-        server_addr_str.split(':').next().unwrap_or(server_addr_str)
-    } else {
-        unsafe { CStr::from_ptr(server_name).to_str().unwrap_or("") }
-    };
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let crypto_builder = rustls::ClientConfig::builder();
 
-    let addr: SocketAddr = match server_addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return -1,
-    };
-
-    let crypto_builder = rustls::ClientConfig::builder();
-
-    if !opts_ptr.is_null() {
-        let opts = unsafe { &*opts_ptr };
-
-        let mut config = if opts.insecure_skip_verify != 0 {
+        let mut config = if tls_opts.insecure_skip_verify {
             crypto_builder
                 .dangerous()
                 .with_custom_certificate_verifier(Arc::new(InsecureServerCertVerifier))
                 .with_no_client_auth()
         } else {
-            // Handle CA certs
             let mut root_store = rustls::RootCertStore::empty();
-            if !opts.ca_cert_file.is_null() {
-                let ca_path = unsafe { CStr::from_ptr(opts.ca_cert_file).to_str().unwrap_or("") };
+            if let Some(ca_path) = tls_opts.ca_cert_file {
                 if let Ok(file) = std::fs::File::open(ca_path) {
                     let mut reader = std::io::BufReader::new(file);
-                    // Also load from file if provided
                     let certs = rustls_pemfile::certs(&mut reader)
-                        .collect::<Result<Vec<_>, _>>()
-                        .unwrap_or_default();
+                        .filter_map(|r| r.ok())
+                        .collect::<Vec<_>>();
                     for cert in certs {
                         root_store.add(cert).ok();
                     }
@@ -555,620 +489,1085 @@ pub unsafe extern "C" fn mqtt_quic_engine_connect(
                     root_store.add(cert).ok();
                 }
             }
-
-            // Handle client cert/key
-            let mut client_auth = None;
-            if !opts.client_cert_file.is_null() && !opts.client_key_file.is_null() {
-                let cert_path =
-                    unsafe { CStr::from_ptr(opts.client_cert_file).to_str().unwrap_or("") };
-                let key_path =
-                    unsafe { CStr::from_ptr(opts.client_key_file).to_str().unwrap_or("") };
-
-                if let (Ok(cert_file), Ok(key_file)) = (
-                    std::fs::File::open(cert_path),
-                    std::fs::File::open(key_path),
-                ) {
-                    let mut cert_reader = std::io::BufReader::new(cert_file);
-                    let mut key_reader = std::io::BufReader::new(key_file);
-
-                    let certs = rustls_pemfile::certs(&mut cert_reader)
-                        .collect::<Result<Vec<_>, _>>()
-                        .unwrap_or_default();
-                    let key = rustls_pemfile::private_key(&mut key_reader).ok().flatten();
-
-                    if !certs.is_empty() && key.is_some() {
-                        client_auth = Some((certs, key));
-                    }
-                }
-            }
-
-            let builder = crypto_builder.with_root_certificates(root_store);
-            if let Some((certs, key)) = client_auth {
-                builder
-                    // SAFETY: We verified key is Some at line 579
-                    .with_client_auth_cert(certs, key.expect("Missing private key"))
-                    .unwrap()
-            } else {
-                builder.with_no_client_auth()
-            }
+            crypto_builder
+                .with_root_certificates(root_store)
+                .with_no_client_auth()
         };
 
-        if !opts.alpn.is_null() {
-            let alpn = unsafe { CStr::from_ptr(opts.alpn).to_str().unwrap_or("mqtt") };
-            config.alpn_protocols = vec![alpn.as_bytes().to_vec()];
+        if !tls_opts.alpn_protocols.is_empty() {
+            config.alpn_protocols = tls_opts
+                .alpn_protocols
+                .into_iter()
+                .map(|s| s.into_bytes())
+                .collect();
         } else {
             config.alpn_protocols = vec![b"mqtt".to_vec()];
         }
 
-        if wrapper
-            .engine
-            .connect(addr, server_name_str, config, Instant::now())
-            .is_err()
-        {
-            return -1;
-        }
-    } else {
-        // Default config
-        let mut root_store = rustls::RootCertStore::empty();
-        for cert in rustls_native_certs::load_native_certs().unwrap_or_default() {
-            root_store.add(cert).ok();
-        }
-        let mut config = crypto_builder
-            .with_root_certificates(root_store)
-            .with_no_client_auth();
-        config.alpn_protocols = vec![b"mqtt".to_vec()];
+        self.engine
+            .lock()
+            .unwrap()
+            .connect(addr, &server_name, config, now)
+            .ok();
+    }
 
-        if wrapper
-            .engine
-            .connect(addr, server_name_str, config, Instant::now())
-            .is_err()
-        {
-            return -1;
+    pub fn handle_datagram(&self, data: Vec<u8>, remote_addr: String, now_ms: u64) {
+        let addr: SocketAddr = remote_addr.parse().unwrap();
+        let now = self.start_time + Duration::from_millis(now_ms);
+        self.engine.lock().unwrap().handle_datagram(data, addr, now);
+    }
+
+    pub fn take_outgoing_datagrams(&self) -> Vec<MqttDatagramFFI> {
+        let datagrams = self.engine.lock().unwrap().take_outgoing_datagrams();
+        datagrams
+            .into_iter()
+            .map(|(addr, data)| MqttDatagramFFI {
+                addr: addr.to_string(),
+                data,
+            })
+            .collect()
+    }
+
+    pub fn handle_tick(&self, now_ms: u64) -> Vec<MqttEventFFI> {
+        let now = self.start_time + Duration::from_millis(now_ms);
+        let mut engine = self.engine.lock().unwrap();
+        let events = engine.handle_tick(now);
+        let mapped: Vec<_> = events.into_iter().map(map_event).collect();
+        self.events.lock().unwrap().extend(mapped.iter().cloned());
+        mapped
+    }
+
+    pub fn take_events(&self) -> Vec<MqttEventFFI> {
+        let mut events = std::mem::take(&mut *self.events.lock().unwrap());
+        let engine_events = self.engine.lock().unwrap().take_events();
+        events.extend(engine_events.into_iter().map(map_event));
+        events
+    }
+
+    pub fn publish(&self, topic: String, payload: Vec<u8>, qos: u8) -> i32 {
+        let command = PublishCommand::builder()
+            .topic(topic)
+            .payload(payload)
+            .qos(qos)
+            .build()
+            .unwrap();
+        match self.engine.lock().unwrap().publish(command) {
+            Ok(Some(pid)) => pid as i32,
+            Ok(None) => 0,
+            Err(_) => -1,
         }
     }
 
-    0
+    pub fn subscribe(&self, topic_filter: String, qos: u8) -> i32 {
+        let command = flowsdk::mqtt_client::commands::SubscribeCommand::single(topic_filter, qos);
+        match self.engine.lock().unwrap().subscribe(command) {
+            Ok(pid) => pid as i32,
+            Err(_) => -1,
+        }
+    }
+
+    pub fn unsubscribe(&self, topic_filter: String) -> i32 {
+        let command =
+            flowsdk::mqtt_client::commands::UnsubscribeCommand::from_topics(vec![topic_filter]);
+        match self.engine.lock().unwrap().unsubscribe(command) {
+            Ok(pid) => pid as i32,
+            Err(_) => -1,
+        }
+    }
+
+    pub fn disconnect(&self) {
+        self.engine.lock().unwrap().disconnect();
+    }
+
+    pub fn is_connected(&self) -> bool {
+        self.engine.lock().unwrap().is_connected()
+    }
 }
 
-#[cfg(feature = "quic")]
+// --- C-Compatible FFI Layer ---
+// This layer provides a stable ABI for the C examples, mapping to the UniFFI objects.
+
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_handle_datagram(
-    ptr: *mut QuicMqttEngineFFI,
-    data: *const u8,
-    len: size_t,
-    remote_addr: *const c_char,
-) {
-    if ptr.is_null() || data.is_null() || remote_addr.is_null() {
-        return;
+pub extern "C" fn mqtt_engine_new(
+    client_id: *const c_char,
+    mqtt_version: u8,
+) -> *mut MqttEngineFFI {
+    let client_id = if client_id.is_null() {
+        None
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(client_id) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    };
+    Box::into_raw(Box::new(MqttEngineFFI::new(client_id, mqtt_version)))
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_engine_new_with_opts(opts: *const MqttOptionsC) -> *mut MqttEngineFFI {
+    if opts.is_null() {
+        return std::ptr::null_mut();
     }
-    let wrapper = unsafe { &mut *ptr };
-    let data = unsafe { std::slice::from_raw_parts(data, len) }.to_vec();
-    let remote_addr_str = unsafe { CStr::from_ptr(remote_addr).to_str().unwrap_or("") };
-    let addr: SocketAddr = match remote_addr_str.parse() {
-        Ok(a) => a,
-        Err(_) => return,
+    let r = unsafe { &*opts };
+    let client_id = if r.client_id.is_null() {
+        "mqtt_client".to_string()
+    } else {
+        unsafe { CStr::from_ptr(r.client_id) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let username = if r.username.is_null() {
+        None
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(r.username) }
+                .to_string_lossy()
+                .into_owned(),
+        )
+    };
+    let password = if r.password.is_null() {
+        None
+    } else {
+        Some(
+            unsafe { CStr::from_ptr(r.password) }
+                .to_string_lossy()
+                .into_owned(),
+        )
     };
 
-    wrapper.engine.handle_datagram(data, addr, Instant::now());
+    let new_opts = MqttOptionsFFI {
+        client_id,
+        mqtt_version: r.mqtt_version,
+        clean_start: r.clean_start,
+        keep_alive: r.keep_alive,
+        username,
+        password,
+        reconnect_base_delay_ms: r.reconnect_base_delay_ms,
+        reconnect_max_delay_ms: r.reconnect_max_delay_ms,
+        max_reconnect_attempts: r.max_reconnect_attempts,
+    };
+    Box::into_raw(Box::new(MqttEngineFFI::new_with_opts(new_opts)))
 }
 
-#[cfg(feature = "quic")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_handle_tick(ptr: *mut QuicMqttEngineFFI, now_ms: u64) {
-    if ptr.is_null() {
-        return;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let now = wrapper.start_time + Duration::from_millis(now_ms);
-    let events = wrapper.engine.handle_tick(now);
-    wrapper.events.extend(events);
-}
-
-#[cfg(feature = "quic")]
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_take_outgoing_datagrams(
-    ptr: *mut QuicMqttEngineFFI,
-    out_count: *mut size_t,
-) -> *mut MqttDatagramFFI {
-    if ptr.is_null() || out_count.is_null() {
-        return std::ptr::null_mut();
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let mut datagrams = wrapper.engine.take_outgoing_datagrams();
-
-    if datagrams.is_empty() {
-        unsafe { *out_count = 0 };
-        return std::ptr::null_mut();
-    }
-
-    let count = datagrams.len();
-    unsafe { *out_count = count };
-
-    let mut ffi_datagrams = Vec::with_capacity(count);
-    for (addr, data) in datagrams.drain(..) {
-        let addr_str = CString::new(addr.to_string()).unwrap();
-        let mut data_box = data.into_boxed_slice();
-        let data_ptr = data_box.as_mut_ptr();
-        let data_len = data_box.len();
-        std::mem::forget(data_box);
-
-        ffi_datagrams.push(MqttDatagramFFI {
-            remote_addr: addr_str.into_raw(),
-            data: data_ptr,
-            len: data_len,
-        });
-    }
-
-    let mut boxed_slice = ffi_datagrams.into_boxed_slice();
-    let res = boxed_slice.as_mut_ptr();
-    std::mem::forget(boxed_slice);
-    res
-}
-
-#[cfg(feature = "quic")]
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_free_datagrams(ptr: *mut MqttDatagramFFI, count: size_t) {
+pub extern "C" fn mqtt_engine_free(ptr: *mut MqttEngineFFI) {
     if !ptr.is_null() {
-        let datagrams = unsafe { std::slice::from_raw_parts_mut(ptr, count) };
-        for dg in datagrams {
-            if !dg.remote_addr.is_null() {
-                let _ = CString::from_raw(dg.remote_addr);
-            }
-            if !dg.data.is_null() {
-                let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(dg.data, dg.len));
-            }
+        unsafe {
+            drop(Box::from_raw(ptr));
         }
-        let _ = Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, count));
     }
 }
 
-#[cfg(feature = "quic")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_take_events(ptr: *mut QuicMqttEngineFFI) -> *mut c_char {
-    if ptr.is_null() {
-        return CString::new("[]").unwrap().into_raw();
+pub extern "C" fn mqtt_engine_connect(ptr: *mut MqttEngineFFI) {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        engine.connect();
     }
-    let wrapper = unsafe { &mut *ptr };
-    if wrapper.events.is_empty() {
-        // Still need to call engine.take_events in case it has some
-        let events = wrapper.engine.take_events();
-        wrapper.events.extend(events);
-    }
-
-    if wrapper.events.is_empty() {
-        return CString::new("[]").unwrap().into_raw();
-    }
-
-    let json = serde_json::to_string(&wrapper.events).unwrap_or_else(|_| "[]".to_string());
-    wrapper.events.clear();
-    let c_string = CString::new(json).unwrap_or_else(|_| CString::new("[]").unwrap());
-    c_string.into_raw()
 }
 
-#[cfg(feature = "quic")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_publish(
-    ptr: *mut QuicMqttEngineFFI,
+pub extern "C" fn mqtt_engine_handle_incoming(
+    ptr: *mut MqttEngineFFI,
+    data: *const u8,
+    len: usize,
+) {
+    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !data.is_null()) {
+        let buf = unsafe { std::slice::from_raw_parts(data, len) };
+        engine.handle_incoming(buf.to_vec());
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_engine_handle_tick(ptr: *mut MqttEngineFFI, now_ms: u64) {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        engine.handle_tick(now_ms);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_engine_next_tick_ms(ptr: *mut MqttEngineFFI) -> i64 {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        engine.next_tick_ms()
+    } else {
+        -1
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_engine_take_outgoing(
+    ptr: *mut MqttEngineFFI,
+    out_len: *mut usize,
+) -> *mut u8 {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        let bytes = engine.take_outgoing();
+        if bytes.is_empty() {
+            unsafe {
+                *out_len = 0;
+            }
+            return std::ptr::null_mut();
+        }
+        unsafe {
+            *out_len = bytes.len();
+        }
+        let mut b = bytes.into_boxed_slice();
+        let p = b.as_mut_ptr();
+        std::mem::forget(b);
+        p
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_engine_free_bytes(ptr: *mut u8, len: usize) {
+    if !ptr.is_null() {
+        unsafe {
+            drop(Box::from_raw(std::slice::from_raw_parts_mut(ptr, len)));
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_engine_publish(
+    ptr: *mut MqttEngineFFI,
     topic: *const c_char,
     payload: *const u8,
-    payload_len: size_t,
+    payload_len: usize,
     qos: u8,
 ) -> i32 {
-    if ptr.is_null() || topic.is_null() || payload.is_null() {
-        return -1;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let topic = unsafe { CStr::from_ptr(topic).to_str().unwrap_or("").to_string() };
-    let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) }.to_vec();
-
-    let command = match PublishCommand::builder()
-        .topic(topic)
-        .payload(payload)
-        .qos(qos)
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return -1,
-    };
-
-    match wrapper.engine.publish(command) {
-        Ok(Some(pid)) => pid as i32,
-        Ok(None) => 0,
-        Err(_) => -1,
+    if let (Some(engine), true, true) = (
+        unsafe { ptr.as_ref() },
+        !topic.is_null(),
+        !payload.is_null(),
+    ) {
+        let topic = unsafe { CStr::from_ptr(topic) }
+            .to_string_lossy()
+            .into_owned();
+        let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) }.to_vec();
+        engine.publish(topic, payload, qos, None)
+    } else {
+        -1
     }
 }
 
-#[cfg(feature = "quic")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_subscribe(
-    ptr: *mut QuicMqttEngineFFI,
+pub extern "C" fn mqtt_engine_subscribe(
+    ptr: *mut MqttEngineFFI,
     topic_filter: *const c_char,
     qos: u8,
 ) -> i32 {
-    if ptr.is_null() || topic_filter.is_null() {
-        return -1;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let topic_filter = unsafe {
-        CStr::from_ptr(topic_filter)
-            .to_str()
-            .unwrap_or("")
-            .to_string()
-    };
-    let command = flowsdk::mqtt_client::commands::SubscribeCommand::single(topic_filter, qos);
-
-    match wrapper.engine.subscribe(command) {
-        Ok(pid) => pid as i32,
-        Err(_) => -1,
+    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !topic_filter.is_null()) {
+        let topic = unsafe { CStr::from_ptr(topic_filter) }
+            .to_string_lossy()
+            .into_owned();
+        engine.subscribe(topic, qos)
+    } else {
+        -1
     }
 }
 
-#[cfg(feature = "quic")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_unsubscribe(
-    ptr: *mut QuicMqttEngineFFI,
+pub extern "C" fn mqtt_engine_unsubscribe(
+    ptr: *mut MqttEngineFFI,
     topic_filter: *const c_char,
 ) -> i32 {
-    if ptr.is_null() || topic_filter.is_null() {
-        return -1;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let topic_filter = unsafe {
-        CStr::from_ptr(topic_filter)
-            .to_str()
-            .unwrap_or("")
-            .to_string()
-    };
-    let command =
-        flowsdk::mqtt_client::commands::UnsubscribeCommand::from_topics(vec![topic_filter]);
-
-    match wrapper.engine.unsubscribe(command) {
-        Ok(pid) => pid as i32,
-        Err(_) => -1,
+    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !topic_filter.is_null()) {
+        let topic = unsafe { CStr::from_ptr(topic_filter) }
+            .to_string_lossy()
+            .into_owned();
+        engine.unsubscribe(topic)
+    } else {
+        -1
     }
 }
 
-#[cfg(feature = "quic")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_disconnect(ptr: *mut QuicMqttEngineFFI) {
-    if ptr.is_null() {
-        return;
+pub extern "C" fn mqtt_engine_disconnect(ptr: *mut MqttEngineFFI) {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        engine.disconnect();
     }
-    let wrapper = unsafe { &mut *ptr };
-    wrapper.engine.disconnect();
 }
 
-#[cfg(feature = "quic")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_is_connected(ptr: *mut QuicMqttEngineFFI) -> i32 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    if wrapper.engine.is_connected() {
-        1
+pub extern "C" fn mqtt_engine_is_connected(ptr: *mut MqttEngineFFI) -> c_int {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        if engine.is_connected() {
+            1
+        } else {
+            0
+        }
     } else {
         0
     }
 }
 
-#[cfg(feature = "tls")]
-pub struct TlsMqttEngineFFI {
-    engine: TlsMqttEngine,
-    start_time: Instant,
-    events: Vec<MqttEvent>,
+#[no_mangle]
+pub extern "C" fn mqtt_engine_get_version(ptr: *mut MqttEngineFFI) -> u8 {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        engine.get_version()
+    } else {
+        0
+    }
 }
 
-#[cfg(feature = "tls")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_new(
+pub extern "C" fn mqtt_engine_auth(ptr: *mut MqttEngineFFI, reason_code: u8) {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        engine.auth(reason_code);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_engine_handle_connection_lost(ptr: *mut MqttEngineFFI) {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        engine.handle_connection_lost();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_engine_free_string(ptr: *mut c_char) {
+    if !ptr.is_null() {
+        unsafe {
+            drop(CString::from_raw(ptr));
+        }
+    }
+}
+
+// TLS Engine C wrappers
+#[no_mangle]
+pub extern "C" fn mqtt_tls_engine_new(
     client_id: *const c_char,
     mqtt_version: u8,
     server_name: *const c_char,
-    opts_ptr: *const MqttTlsOptionsFFI, // Reuse same opts for CA/certs
+    tls_opts: *const MqttTlsOptionsC,
 ) -> *mut TlsMqttEngineFFI {
     let client_id = if client_id.is_null() {
-        "mqtt_tls_client".to_string()
+        "mqtt_client".to_string()
     } else {
-        unsafe {
-            CStr::from_ptr(client_id)
-                .to_str()
-                .unwrap_or("mqtt_tls_client")
-                .to_string()
+        unsafe { CStr::from_ptr(client_id) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let server_name = if server_name.is_null() {
+        "localhost".to_string()
+    } else {
+        unsafe { CStr::from_ptr(server_name) }
+            .to_string_lossy()
+            .into_owned()
+    };
+
+    let opts = MqttOptionsFFI {
+        client_id,
+        mqtt_version,
+        clean_start: true,
+        keep_alive: 60,
+        username: None,
+        password: None,
+        reconnect_base_delay_ms: 1000,
+        reconnect_max_delay_ms: 30000,
+        max_reconnect_attempts: 0,
+    };
+
+    let tls_opts_v = if tls_opts.is_null() {
+        MqttTlsOptionsFFI {
+            ca_cert_file: None,
+            client_cert_file: None,
+            client_key_file: None,
+            insecure_skip_verify: false,
+            alpn_protocols: vec!["mqtt".to_string()],
         }
-    };
-
-    let server_name_str = if server_name.is_null() {
-        return std::ptr::null_mut();
     } else {
-        unsafe { CStr::from_ptr(server_name).to_str().unwrap_or("") }
-    };
-
-    let options = MqttClientOptions::builder()
-        .client_id(client_id)
-        .mqtt_version(mqtt_version)
-        .build();
-
-    let _ = rustls::crypto::ring::default_provider().install_default();
-
-    let crypto_builder = rustls::ClientConfig::builder();
-
-    let mut config = if !opts_ptr.is_null() {
-        let opts = unsafe { &*opts_ptr };
-        if opts.insecure_skip_verify != 0 {
-            crypto_builder
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(InsecureServerCertVerifier))
-                .with_no_client_auth()
+        let r = unsafe { &*tls_opts };
+        let ca_cert_file = if r.ca_cert_file.is_null() {
+            None
         } else {
-            let mut root_store = rustls::RootCertStore::empty();
-            if !opts.ca_cert_file.is_null() {
-                let ca_path = unsafe { CStr::from_ptr(opts.ca_cert_file).to_str().unwrap_or("") };
-                if let Ok(file) = std::fs::File::open(ca_path) {
-                    let mut reader = std::io::BufReader::new(file);
-                    let certs = rustls_pemfile::certs(&mut reader)
-                        .filter_map(|r| r.ok())
-                        .collect::<Vec<_>>();
-                    for cert in certs {
-                        root_store.add(cert).ok();
-                    }
-                }
-            } else {
-                for cert in rustls_native_certs::load_native_certs().unwrap_or_default() {
-                    root_store.add(cert).ok();
-                }
-            }
-
-            // Handle client cert/key
-            let mut client_auth = None;
-            if !opts.client_cert_file.is_null() && !opts.client_key_file.is_null() {
-                let cert_path =
-                    unsafe { CStr::from_ptr(opts.client_cert_file).to_str().unwrap_or("") };
-                let key_path =
-                    unsafe { CStr::from_ptr(opts.client_key_file).to_str().unwrap_or("") };
-
-                if let (Ok(cert_file), Ok(key_file)) = (
-                    std::fs::File::open(cert_path),
-                    std::fs::File::open(key_path),
-                ) {
-                    let mut cert_reader = std::io::BufReader::new(cert_file);
-                    let mut key_reader = std::io::BufReader::new(key_file);
-
-                    let certs = rustls_pemfile::certs(&mut cert_reader)
-                        .filter_map(|r| r.ok())
-                        .collect::<Vec<_>>();
-                    let key = rustls_pemfile::private_key(&mut key_reader).ok().flatten();
-
-                    if !certs.is_empty() && key.is_some() {
-                        client_auth = Some((certs, key));
-                    }
-                }
-            }
-
-            let builder = crypto_builder.with_root_certificates(root_store);
-            if let Some((certs, key)) = client_auth {
-                builder
-                    .with_client_auth_cert(certs, key.expect("Missing private key"))
-                    .unwrap()
-            } else {
-                builder.with_no_client_auth()
-            }
+            Some(
+                unsafe { CStr::from_ptr(r.ca_cert_file) }
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        };
+        let client_cert_file = if r.client_cert_file.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { CStr::from_ptr(r.client_cert_file) }
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        };
+        let client_key_file = if r.client_key_file.is_null() {
+            None
+        } else {
+            Some(
+                unsafe { CStr::from_ptr(r.client_key_file) }
+                    .to_string_lossy()
+                    .into_owned(),
+            )
+        };
+        MqttTlsOptionsFFI {
+            ca_cert_file,
+            client_cert_file,
+            client_key_file,
+            insecure_skip_verify: r.insecure_skip_verify != 0,
+            alpn_protocols: vec!["mqtt".to_string()],
         }
-    } else {
-        let mut root_store = rustls::RootCertStore::empty();
-        for cert in rustls_native_certs::load_native_certs().unwrap_or_default() {
-            root_store.add(cert).ok();
-        }
-        crypto_builder
-            .with_root_certificates(root_store)
-            .with_no_client_auth()
     };
-    config.alpn_protocols = vec![b"mqtt".to_vec()];
 
-    match TlsMqttEngine::new(options, server_name_str, Arc::new(config)) {
-        Ok(engine) => {
-            let wrapper = Box::new(TlsMqttEngineFFI {
-                engine,
-                start_time: Instant::now(),
-                events: Vec::new(),
-            });
-            Box::into_raw(wrapper)
-        }
-        Err(_) => std::ptr::null_mut(),
-    }
+    Box::into_raw(Box::new(TlsMqttEngineFFI::new(
+        opts,
+        tls_opts_v,
+        server_name,
+    )))
 }
 
-#[cfg(feature = "tls")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_free(ptr: *mut TlsMqttEngineFFI) {
+pub extern "C" fn mqtt_tls_engine_free(ptr: *mut TlsMqttEngineFFI) {
     if !ptr.is_null() {
         unsafe {
-            let _ = Box::from_raw(ptr);
+            drop(Box::from_raw(ptr));
         }
     }
 }
 
-#[cfg(feature = "tls")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_connect(ptr: *mut TlsMqttEngineFFI) {
-    if ptr.is_null() {
-        return;
+pub extern "C" fn mqtt_tls_engine_connect(ptr: *mut TlsMqttEngineFFI) {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        engine.connect();
     }
-    let wrapper = unsafe { &mut *ptr };
-    wrapper.engine.connect();
 }
 
-#[cfg(feature = "tls")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_handle_socket_data(
+pub extern "C" fn mqtt_tls_engine_handle_socket_data(
     ptr: *mut TlsMqttEngineFFI,
     data: *const u8,
-    len: size_t,
-) -> i32 {
-    if ptr.is_null() || data.is_null() {
-        return -1;
+    len: usize,
+) {
+    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !data.is_null()) {
+        let buf = unsafe { std::slice::from_raw_parts(data, len) };
+        engine.handle_socket_data(buf.to_vec());
     }
-    let wrapper = unsafe { &mut *ptr };
-    let data_slice = unsafe { std::slice::from_raw_parts(data, len) };
-    if wrapper.engine.handle_socket_data(data_slice).is_err() {
-        return -1;
-    }
-    0
 }
 
-#[cfg(feature = "tls")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_take_socket_data(
+pub extern "C" fn mqtt_tls_engine_take_socket_data(
     ptr: *mut TlsMqttEngineFFI,
-    out_len: *mut size_t,
+    out_len: *mut usize,
 ) -> *mut u8 {
-    if ptr.is_null() || out_len.is_null() {
-        return std::ptr::null_mut();
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        let bytes = engine.take_socket_data();
+        if bytes.is_empty() {
+            unsafe {
+                *out_len = 0;
+            }
+            return std::ptr::null_mut();
+        }
+        unsafe {
+            *out_len = bytes.len();
+        }
+        let mut b = bytes.into_boxed_slice();
+        let p = b.as_mut_ptr();
+        std::mem::forget(b);
+        p
+    } else {
+        std::ptr::null_mut()
     }
-    let wrapper = unsafe { &mut *ptr };
-    let bytes = wrapper.engine.take_socket_data();
-    if bytes.is_empty() {
-        unsafe { *out_len = 0 };
-        return std::ptr::null_mut();
-    }
-    unsafe { *out_len = bytes.len() };
-    let mut boxed_slice = bytes.into_boxed_slice();
-    let res = boxed_slice.as_mut_ptr();
-    std::mem::forget(boxed_slice);
-    res
 }
 
-#[cfg(feature = "tls")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_handle_tick(ptr: *mut TlsMqttEngineFFI, now_ms: u64) {
-    if ptr.is_null() {
-        return;
+pub extern "C" fn mqtt_tls_engine_handle_tick(ptr: *mut TlsMqttEngineFFI, now_ms: u64) {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        engine.handle_tick(now_ms);
     }
-    let wrapper = unsafe { &mut *ptr };
-    let now = wrapper.start_time + Duration::from_millis(now_ms);
-    let events = wrapper.engine.handle_tick(now);
-    wrapper.events.extend(events);
 }
 
-#[cfg(feature = "tls")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_take_events(ptr: *mut TlsMqttEngineFFI) -> *mut c_char {
-    if ptr.is_null() {
-        return CString::new("[]").unwrap().into_raw();
-    }
-    let wrapper = unsafe { &mut *ptr };
-    if wrapper.events.is_empty() {
-        let events = wrapper.engine.take_events();
-        wrapper.events.extend(events);
-    }
-    if wrapper.events.is_empty() {
-        return CString::new("[]").unwrap().into_raw();
-    }
-    let json = serde_json::to_string(&wrapper.events).unwrap_or_else(|_| "[]".to_string());
-    wrapper.events.clear();
-    let c_string = CString::new(json).unwrap_or_else(|_| CString::new("[]").unwrap());
-    c_string.into_raw()
-}
-
-#[cfg(feature = "tls")]
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_publish(
+pub extern "C" fn mqtt_tls_engine_publish(
     ptr: *mut TlsMqttEngineFFI,
     topic: *const c_char,
     payload: *const u8,
-    payload_len: size_t,
+    payload_len: usize,
     qos: u8,
 ) -> i32 {
-    if ptr.is_null() || topic.is_null() || payload.is_null() {
-        return -1;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let topic = unsafe { CStr::from_ptr(topic).to_str().unwrap_or("").to_string() };
-    let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) }.to_vec();
-    let command = match PublishCommand::builder()
-        .topic(topic)
-        .payload(payload)
-        .qos(qos)
-        .build()
-    {
-        Ok(c) => c,
-        Err(_) => return -1,
-    };
-    match wrapper.engine.publish(command) {
-        Ok(Some(pid)) => pid as i32,
-        Ok(None) => 0,
-        Err(_) => -1,
+    if let (Some(engine), true, true) = (
+        unsafe { ptr.as_ref() },
+        !topic.is_null(),
+        !payload.is_null(),
+    ) {
+        let topic = unsafe { CStr::from_ptr(topic) }
+            .to_string_lossy()
+            .into_owned();
+        let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) }.to_vec();
+        engine.publish(topic, payload, qos)
+    } else {
+        -1
     }
 }
 
-#[cfg(feature = "tls")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_subscribe(
+pub extern "C" fn mqtt_tls_engine_subscribe(
     ptr: *mut TlsMqttEngineFFI,
     topic_filter: *const c_char,
     qos: u8,
 ) -> i32 {
-    if ptr.is_null() || topic_filter.is_null() {
-        return -1;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let topic_filter = unsafe {
-        CStr::from_ptr(topic_filter)
-            .to_str()
-            .unwrap_or("")
-            .to_string()
-    };
-    let command = flowsdk::mqtt_client::commands::SubscribeCommand::single(topic_filter, qos);
-    match wrapper.engine.subscribe(command) {
-        Ok(pid) => pid as i32,
-        Err(_) => -1,
+    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !topic_filter.is_null()) {
+        let topic = unsafe { CStr::from_ptr(topic_filter) }
+            .to_string_lossy()
+            .into_owned();
+        engine.subscribe(topic, qos)
+    } else {
+        -1
     }
 }
 
-#[cfg(feature = "tls")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_unsubscribe(
+pub extern "C" fn mqtt_tls_engine_unsubscribe(
     ptr: *mut TlsMqttEngineFFI,
     topic_filter: *const c_char,
 ) -> i32 {
-    if ptr.is_null() || topic_filter.is_null() {
-        return -1;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    let topic_filter = unsafe {
-        CStr::from_ptr(topic_filter)
-            .to_str()
-            .unwrap_or("")
-            .to_string()
-    };
-    let command =
-        flowsdk::mqtt_client::commands::UnsubscribeCommand::from_topics(vec![topic_filter]);
-    match wrapper.engine.unsubscribe(command) {
-        Ok(pid) => pid as i32,
-        Err(_) => -1,
+    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !topic_filter.is_null()) {
+        let topic = unsafe { CStr::from_ptr(topic_filter) }
+            .to_string_lossy()
+            .into_owned();
+        engine.unsubscribe(topic)
+    } else {
+        -1
     }
 }
 
-#[cfg(feature = "tls")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_disconnect(ptr: *mut TlsMqttEngineFFI) {
-    if ptr.is_null() {
-        return;
+pub extern "C" fn mqtt_tls_engine_disconnect(ptr: *mut TlsMqttEngineFFI) {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        engine.disconnect();
     }
-    let wrapper = unsafe { &mut *ptr };
-    wrapper.engine.disconnect();
 }
 
-#[cfg(feature = "tls")]
 #[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_is_connected(ptr: *mut TlsMqttEngineFFI) -> i32 {
-    if ptr.is_null() {
-        return 0;
-    }
-    let wrapper = unsafe { &mut *ptr };
-    if wrapper.engine.is_connected() {
-        1
+pub extern "C" fn mqtt_tls_engine_is_connected(ptr: *mut TlsMqttEngineFFI) -> i32 {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        if engine.is_connected() {
+            1
+        } else {
+            0
+        }
     } else {
         0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_engine_take_events(ptr: *mut MqttEngineFFI) -> *mut c_char {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        let events = engine.take_events();
+        let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
+        CString::new(json).unwrap().into_raw()
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_tls_engine_take_events(ptr: *mut TlsMqttEngineFFI) -> *mut c_char {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        let events = engine.take_events();
+        let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
+        CString::new(json).unwrap().into_raw()
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+// QUIC Engine C wrappers
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_new(
+    client_id: *const c_char,
+    mqtt_version: u8,
+) -> *mut QuicMqttEngineFFI {
+    let client_id = if client_id.is_null() {
+        "mqtt_client".to_string()
+    } else {
+        unsafe { CStr::from_ptr(client_id) }
+            .to_string_lossy()
+            .into_owned()
+    };
+    let opts = MqttOptionsFFI {
+        client_id,
+        mqtt_version,
+        clean_start: true,
+        keep_alive: 60,
+        username: None,
+        password: None,
+        reconnect_base_delay_ms: 1000,
+        reconnect_max_delay_ms: 30000,
+        max_reconnect_attempts: 0,
+    };
+    Box::into_raw(Box::new(QuicMqttEngineFFI::new(opts)))
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_free(ptr: *mut QuicMqttEngineFFI) {
+    if !ptr.is_null() {
+        unsafe {
+            drop(Box::from_raw(ptr));
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_connect(
+    ptr: *mut QuicMqttEngineFFI,
+    server_addr: *const c_char,
+    server_name: *const c_char,
+    tls_opts: *const MqttTlsOptionsC,
+) -> i32 {
+    if let (Some(engine), true, true) = (
+        unsafe { ptr.as_ref() },
+        !server_addr.is_null(),
+        !server_name.is_null(),
+    ) {
+        let server_addr = unsafe { CStr::from_ptr(server_addr) }
+            .to_string_lossy()
+            .into_owned();
+        let server_name = unsafe { CStr::from_ptr(server_name) }
+            .to_string_lossy()
+            .into_owned();
+
+        let tls_opts_v = if tls_opts.is_null() {
+            MqttTlsOptionsFFI {
+                ca_cert_file: None,
+                client_cert_file: None,
+                client_key_file: None,
+                insecure_skip_verify: false,
+                alpn_protocols: vec!["mqtt".to_string()],
+            }
+        } else {
+            let r = unsafe { &*tls_opts };
+            let ca_cert_file = if r.ca_cert_file.is_null() {
+                None
+            } else {
+                Some(
+                    unsafe { CStr::from_ptr(r.ca_cert_file) }
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            };
+            let client_cert_file = if r.client_cert_file.is_null() {
+                None
+            } else {
+                Some(
+                    unsafe { CStr::from_ptr(r.client_cert_file) }
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            };
+            let client_key_file = if r.client_key_file.is_null() {
+                None
+            } else {
+                Some(
+                    unsafe { CStr::from_ptr(r.client_key_file) }
+                        .to_string_lossy()
+                        .into_owned(),
+                )
+            };
+            MqttTlsOptionsFFI {
+                ca_cert_file,
+                client_cert_file,
+                client_key_file,
+                insecure_skip_verify: r.insecure_skip_verify != 0,
+                alpn_protocols: vec!["mqtt".to_string()],
+            }
+        };
+
+        engine.connect(server_addr, server_name, tls_opts_v, 0);
+        0
+    } else {
+        -1
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_handle_datagram(
+    ptr: *mut QuicMqttEngineFFI,
+    data: *const u8,
+    len: usize,
+    remote_addr: *const c_char,
+) {
+    if let (Some(engine), true, true) = (
+        unsafe { ptr.as_ref() },
+        !data.is_null(),
+        !remote_addr.is_null(),
+    ) {
+        let buf = unsafe { std::slice::from_raw_parts(data, len) };
+        let remote_addr = unsafe { CStr::from_ptr(remote_addr) }
+            .to_string_lossy()
+            .into_owned();
+        engine.handle_datagram(buf.to_vec(), remote_addr, 0);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_take_outgoing_datagrams(
+    ptr: *mut QuicMqttEngineFFI,
+    out_count: *mut usize,
+) -> *mut MqttDatagramC {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        let dgs = engine.take_outgoing_datagrams();
+        if dgs.is_empty() {
+            unsafe {
+                *out_count = 0;
+            }
+            return std::ptr::null_mut();
+        }
+
+        let mut result = Vec::with_capacity(dgs.len());
+        for dg in dgs {
+            let addr = CString::new(dg.addr).unwrap().into_raw();
+            let data_len = dg.data.len();
+            let mut b = dg.data.into_boxed_slice();
+            let data = b.as_mut_ptr();
+            std::mem::forget(b);
+            result.push(MqttDatagramC {
+                addr,
+                data,
+                data_len,
+            });
+        }
+
+        unsafe {
+            *out_count = result.len();
+        }
+        let mut b = result.into_boxed_slice();
+        let p = b.as_mut_ptr();
+        std::mem::forget(b);
+        p
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_free_datagrams(ptr: *mut MqttDatagramC, count: usize) {
+    if !ptr.is_null() {
+        let slice = unsafe { std::slice::from_raw_parts_mut(ptr, count) };
+        for dg in &mut *slice {
+            unsafe {
+                if !dg.addr.is_null() {
+                    drop(CString::from_raw(dg.addr));
+                }
+                if !dg.data.is_null() {
+                    drop(Box::from_raw(std::slice::from_raw_parts_mut(
+                        dg.data,
+                        dg.data_len,
+                    )));
+                }
+            }
+        }
+        unsafe {
+            drop(Box::from_raw(slice));
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_handle_tick(ptr: *mut QuicMqttEngineFFI, now_ms: u64) {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        engine.handle_tick(now_ms);
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_take_events(ptr: *mut QuicMqttEngineFFI) -> *mut c_char {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        let events = engine.take_events();
+        let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
+        CString::new(json).unwrap().into_raw()
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_publish(
+    ptr: *mut QuicMqttEngineFFI,
+    topic: *const c_char,
+    payload: *const u8,
+    payload_len: usize,
+    qos: u8,
+) -> i32 {
+    if let (Some(engine), true, true) = (
+        unsafe { ptr.as_ref() },
+        !topic.is_null(),
+        !payload.is_null(),
+    ) {
+        let topic = unsafe { CStr::from_ptr(topic) }
+            .to_string_lossy()
+            .into_owned();
+        let payload = unsafe { std::slice::from_raw_parts(payload, payload_len) }.to_vec();
+        engine.publish(topic, payload, qos)
+    } else {
+        -1
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_subscribe(
+    ptr: *mut QuicMqttEngineFFI,
+    topic_filter: *const c_char,
+    qos: u8,
+) -> i32 {
+    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !topic_filter.is_null()) {
+        let topic = unsafe { CStr::from_ptr(topic_filter) }
+            .to_string_lossy()
+            .into_owned();
+        engine.subscribe(topic, qos)
+    } else {
+        -1
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_unsubscribe(
+    ptr: *mut QuicMqttEngineFFI,
+    topic_filter: *const c_char,
+) -> i32 {
+    if let (Some(engine), true) = (unsafe { ptr.as_ref() }, !topic_filter.is_null()) {
+        let topic = unsafe { CStr::from_ptr(topic_filter) }
+            .to_string_lossy()
+            .into_owned();
+        engine.unsubscribe(topic)
+    } else {
+        -1
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_disconnect(ptr: *mut QuicMqttEngineFFI) {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        engine.disconnect();
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_is_connected(ptr: *mut QuicMqttEngineFFI) -> i32 {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        if engine.is_connected() {
+            1
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+#[repr(C)]
+pub struct MqttOptionsC {
+    pub client_id: *const c_char,
+    pub mqtt_version: u8,
+    pub clean_start: bool,
+    pub keep_alive: u16,
+    pub username: *const c_char,
+    pub password: *const c_char,
+    pub reconnect_base_delay_ms: u64,
+    pub reconnect_max_delay_ms: u64,
+    pub max_reconnect_attempts: u32,
+}
+
+#[repr(C)]
+pub struct MqttTlsOptionsC {
+    pub ca_cert_file: *const c_char,
+    pub client_cert_file: *const c_char,
+    pub client_key_file: *const c_char,
+    pub insecure_skip_verify: u8,
+}
+
+#[repr(C)]
+pub struct MqttDatagramC {
+    pub addr: *mut c_char,
+    pub data: *mut u8,
+    pub data_len: usize,
+}
+
+// Event Inspection API for C (Native Structs)
+
+// Actually, let's just use a dedicated "C Event List" object to manage the lifetime.
+#[derive(uniffi::Object)]
+pub struct MqttEventListFFI {
+    events: Vec<MqttEventFFI>,
+}
+
+#[uniffi::export]
+impl MqttEventListFFI {
+    pub fn len(&self) -> u32 {
+        self.events.len() as u32
+    }
+    pub fn get(&self, index: u32) -> Option<MqttEventFFI> {
+        self.events.get(index as usize).cloned()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_engine_take_events_list(ptr: *mut MqttEngineFFI) -> *mut MqttEventListFFI {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        let events = engine.take_events();
+        Box::into_raw(Box::new(MqttEventListFFI { events }))
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_event_list_free(ptr: *mut MqttEventListFFI) {
+    if !ptr.is_null() {
+        unsafe {
+            drop(Box::from_raw(ptr));
+        }
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_event_list_len(ptr: *const MqttEventListFFI) -> usize {
+    if let Some(list) = unsafe { ptr.as_ref() } {
+        list.len() as usize
+    } else {
+        0
+    }
+}
+
+// I'll provide a way to get event details as raw types
+#[no_mangle]
+pub extern "C" fn mqtt_event_list_get_tag(ptr: *const MqttEventListFFI, index: usize) -> u8 {
+    if let Some(list) = unsafe { ptr.as_ref() } {
+        if let Some(event) = list.events.get(index) {
+            match event {
+                MqttEventFFI::Connected(_) => 1,
+                MqttEventFFI::Disconnected { .. } => 2,
+                MqttEventFFI::MessageReceived(_) => 3,
+                MqttEventFFI::Published(_) => 4,
+                MqttEventFFI::Subscribed(_) => 5,
+                MqttEventFFI::Unsubscribed(_) => 6,
+                MqttEventFFI::PingResponse { .. } => 7,
+                MqttEventFFI::Error { .. } => 8,
+                MqttEventFFI::ReconnectNeeded => 9,
+                MqttEventFFI::ReconnectScheduled { .. } => 10,
+            }
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_event_list_get_connected_rc(
+    ptr: *const MqttEventListFFI,
+    index: usize,
+) -> u8 {
+    if let Some(list) = unsafe { ptr.as_ref() } {
+        if let Some(MqttEventFFI::Connected(res)) = list.events.get(index) {
+            res.reason_code
+        } else {
+            0
+        }
+    } else {
+        0
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_event_list_get_message_topic(
+    ptr: *const MqttEventListFFI,
+    index: usize,
+) -> *mut c_char {
+    if let Some(list) = unsafe { ptr.as_ref() } {
+        if let Some(MqttEventFFI::MessageReceived(msg)) = list.events.get(index) {
+            return CString::new(msg.topic.clone()).unwrap().into_raw();
+        }
+    }
+    std::ptr::null_mut()
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_event_list_get_message_payload(
+    ptr: *const MqttEventListFFI,
+    index: usize,
+    out_len: *mut usize,
+) -> *mut u8 {
+    if let Some(list) = unsafe { ptr.as_ref() } {
+        if let Some(MqttEventFFI::MessageReceived(msg)) = list.events.get(index) {
+            unsafe {
+                *out_len = msg.payload.len();
+            }
+            let mut b = msg.payload.clone().into_boxed_slice();
+            let p = b.as_mut_ptr();
+            std::mem::forget(b);
+            return p;
+        }
+    }
+    std::ptr::null_mut()
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_event_list_get_published_pid(
+    ptr: *const MqttEventListFFI,
+    index: usize,
+) -> i32 {
+    if let Some(list) = unsafe { ptr.as_ref() } {
+        if let Some(MqttEventFFI::Published(res)) = list.events.get(index) {
+            return res.packet_id.map(|id| id as i32).unwrap_or(0);
+        }
+    }
+    -1
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_event_list_get_subscribed_pid(
+    ptr: *const MqttEventListFFI,
+    index: usize,
+) -> i32 {
+    if let Some(list) = unsafe { ptr.as_ref() } {
+        if let Some(MqttEventFFI::Subscribed(res)) = list.events.get(index) {
+            return res.packet_id as i32;
+        }
+    }
+    -1
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_event_list_get_error_message(
+    ptr: *const MqttEventListFFI,
+    index: usize,
+) -> *mut c_char {
+    if let Some(list) = unsafe { ptr.as_ref() } {
+        if let Some(MqttEventFFI::Error { message }) = list.events.get(index) {
+            return CString::new(message.clone()).unwrap().into_raw();
+        }
+    }
+    std::ptr::null_mut()
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_quic_engine_take_events_list(
+    ptr: *mut QuicMqttEngineFFI,
+) -> *mut MqttEventListFFI {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        let events = engine.take_events();
+        Box::into_raw(Box::new(MqttEventListFFI { events }))
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn mqtt_tls_engine_take_events_list(
+    ptr: *mut TlsMqttEngineFFI,
+) -> *mut MqttEventListFFI {
+    if let Some(engine) = unsafe { ptr.as_ref() } {
+        let events = engine.take_events();
+        Box::into_raw(Box::new(MqttEventListFFI { events }))
+    } else {
+        std::ptr::null_mut()
     }
 }
