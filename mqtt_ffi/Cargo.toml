@@ -10,13 +10,16 @@ crate-type = ["cdylib", "staticlib", "rlib"]
 flowsdk = { path = ".." }
 libc = "0.2"
 serde = { version = "1.0", features = ["derive"] }
+uniffi = { version = "0.28", features = ["cli"] }
+uniffi_macros = "0.28"
 serde_json = "1.0"
-rustls = { version = "0.23", optional = true, features = ["ring"] }
+rustls = { version = "0.23", optional = true }
+rustls-pemfile = { version = "2.1", optional = true }
 rustls-native-certs = { version = "0.7", optional = true }
-rustls-pemfile = { version = "2.0", optional = true }
+quinn-proto = { version = "0.11", optional = true }
 rustls-pki-types = { version = "1", optional = true }
 
 [features]
-default = []
-quic = ["tls", "flowsdk/quic"]
+default = ["tls", "quic"]
+quic = ["tls", "flowsdk/quic", "dep:quinn-proto"]
 tls = ["flowsdk/rustls-tls", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pemfile", "dep:rustls-pki-types"]
