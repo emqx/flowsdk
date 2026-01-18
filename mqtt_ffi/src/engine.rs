@@ -740,7 +740,7 @@ pub unsafe extern "C" fn mqtt_engine_take_outgoing(
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_engine_free_bytes(ptr: *mut u8, len: usize) {
     if !ptr.is_null() {
-        drop(Box::from_raw(std::slice::from_raw_parts_mut(ptr, len)));
+        drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(ptr, len)));
     }
 }
 
@@ -1321,7 +1321,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_free_datagrams(ptr: *mut MqttDatagramC
                 drop(CString::from_raw(dg.addr));
             }
             if !dg.data.is_null() {
-                drop(Box::from_raw(std::slice::from_raw_parts_mut(
+                drop(Box::from_raw(std::ptr::slice_from_raw_parts_mut(
                     dg.data,
                     dg.data_len,
                 )));
