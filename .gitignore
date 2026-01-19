@@ -2,7 +2,7 @@
 
 # place MQTT specs
 docs/source
-*cov.info
+lcov*.info
 Cargo.lock
 
 *.profraw
