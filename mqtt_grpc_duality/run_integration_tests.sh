@@ -15,6 +15,10 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
+if [[ $CARGO_LLVM_COV==1 ]]; then
+    echo "running with coverage test"
+fi
+
 # --- Configuration ---
 S_PROXY_GRPC_PORT=50055
 R_PROXY_MQTT_PORT=1884
@@ -88,8 +92,12 @@ fi
 
 # --- Step 1: Build Proxies ---
 echo "--- Building proxy binaries ---"
-cargo build --bin s-proxy
-cargo build --bin r-proxy
+
+# only build if not running with coverage
+if [[ "${CARGO_LLVM_COV}" != "1" ]]; then
+    cargo build --bin s-proxy
+    cargo build --bin r-proxy
+fi
 
 # --- Step 2: Start Proxies ---
 if [ -n "$DEBUG" ]; then
