@@ -8,6 +8,7 @@
 - [x] Protocol testing infrastructure (84% coverage achievable)
 - [x] TLS/SSL support
 - [x] QUIC support (single stream)
+- [x] C FFI Layer (Standard, TLS, QUIC) with native Event API
 
 # In Progress 🚧
 - [ ] Authentication method support

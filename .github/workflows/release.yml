@@ -3,10 +3,7 @@ name: Release
 on:
   push:
     tags:
-      - 'v*.*.*'
-
-env:
-  CARGO_TERM_COLOR: always
+      - 'v*'
 
 jobs:
   create-release:
@@ -32,21 +29,65 @@ jobs:
         body: |
           ## FlowSDK ${{ steps.get_version.outputs.version }}
           
-          ### Features
-          - MQTT v5.0 protocol implementation
-          - gRPC bidirectional streaming support
-          - High-performance proxy applications
           
-          ### Downloads
-          Download the appropriate binary for your platform below.
-          
-          ### Changelog
-          See the full changelog at [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md)
-        draft: false
+        draft: true
         prerelease: ${{ contains(steps.get_version.outputs.version, '-') }}
 
+  publish-crates:
+    name: Publish to Crates.io
+    needs: create-release
+    runs-on: ubuntu-latest
+    if: "!contains(needs.create-release.outputs.version, '-')"  # Only for stable releases? Or remove if you want pre-releases too.
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install protoc
+        uses: arduino/setup-protoc@v3
+        with:
+          version: '25.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Verify Tag matches Cargo.toml
+        run: |
+          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          CORE_VERSION=$(grep "^version" Cargo.toml | head -n 1 | cut -d '"' -f 2)
+          FFI_VERSION=$(grep "^version" flowsdk_ffi/Cargo.toml | head -n 1 | cut -d '"' -f 2)
+          
+          echo "Tag: $TAG_VERSION"
+          echo "Core: $CORE_VERSION"
+          echo "FFI:  $FFI_VERSION"
+
+          if [ "$TAG_VERSION" != "$CORE_VERSION" ]; then
+            echo "Error: Tag ($TAG_VERSION) mismatch with Core ($CORE_VERSION)"
+            exit 1
+          fi
+          
+          if [ "$TAG_VERSION" != "$FFI_VERSION" ]; then
+            echo "Error: Tag ($TAG_VERSION) mismatch with FFI ($FFI_VERSION)"
+            exit 1
+          fi
+          
+          echo "✅ Versions match confirmed!"
+
+      - name: Setup Cargo Login
+        run: cargo login ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish flowsdk (Core)
+        run: cargo publish -p flowsdk
+
+      - name: Wait for Index Propagation
+        run: sleep 40
+
+      - name: Publish flowsdk_ffi (Bindings)
+        run: cargo publish -p flowsdk_ffi
+
   build-and-upload:
-    name: Build and Upload Release Assets
+    name: Build binaries
     needs: create-release
     runs-on: ${{ matrix.os }}
     
@@ -152,65 +193,4 @@ jobs:
         asset_name: flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.zip
         asset_content_type: application/zip
 
-  publish-crate:
-    name: Publish to crates.io
-    needs: create-release
-    runs-on: ubuntu-latest
-    if: "!contains(needs.create-release.outputs.version, '-')"  # Only for stable releases
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
-
-    - name: Install protoc
-      uses: arduino/setup-protoc@v3
-      with:
-        version: '25.x'
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Publish flowsdk to crates.io
-      run: cargo publish --token ${{ secrets.CRATES_IO_TOKEN }}
-      continue-on-error: true  # In case it's already published
-
-  create-docker-images:
-    name: Create Docker Images
-    needs: create-release
-    runs-on: ubuntu-latest
-    
-    steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v3
-
-    - name: Log in to Docker Hub
-      uses: docker/login-action@v3
-      with:
-        username: ${{ secrets.DOCKER_USERNAME }}
-        password: ${{ secrets.DOCKER_PASSWORD }}
-
-    - name: Build and push r-proxy image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: mqtt_grpc_duality/Dockerfile.r-proxy
-        push: true
-        tags: |
-          ${{ secrets.DOCKER_USERNAME }}/flowsdk-r-proxy:latest
-          ${{ secrets.DOCKER_USERNAME }}/flowsdk-r-proxy:${{ needs.create-release.outputs.version }}
-        platforms: linux/amd64,linux/arm64
-
-    - name: Build and push s-proxy image
-      uses: docker/build-push-action@v5
-      with:
-        context: .
-        file: mqtt_grpc_duality/Dockerfile.s-proxy
-        push: true
-        tags: |
-          ${{ secrets.DOCKER_USERNAME }}/flowsdk-s-proxy:latest
-          ${{ secrets.DOCKER_USERNAME }}/flowsdk-s-proxy:${{ needs.create-release.outputs.version }}
-        platforms: linux/amd64,linux/arm64
+  
