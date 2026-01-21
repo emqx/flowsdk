@@ -17,7 +17,7 @@ cargo +stable llvm-cov report --lcov --output-path lcov.info
 # Build instrumented library
 cargo +stable llvm-cov clean --workspace
 export RUSTFLAGS="-C instrument-coverage"
-cargo build -p mqtt_ffi --all-features
+cargo build -p flowsdk_ffi --all-features
 make -C examples/c_ffi_example clean
 make -C examples/c_ffi_example
 # Run C examples with profile file output
@@ -63,7 +63,7 @@ if [[ "$OSTYPE" == "darwin"* ]]; then
     LIB_EXT="dylib"
 fi
 
-llvm-cov export -format=lcov --instr-profile target/llvm-cov-target/cargo-llvm-cov2.profdata -object target/debug/deps/libmqtt_ffi.${LIB_EXT} > lcov2.info
+llvm-cov export -format=lcov --instr-profile target/llvm-cov-target/cargo-llvm-cov2.profdata -object target/debug/deps/libflowsdk_ffi.${LIB_EXT} > lcov2.info
 
 # 4. Collect coverage from integration tests (Proxy binaries)
 set -a

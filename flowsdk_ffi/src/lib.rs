@@ -2,4 +2,4 @@
 
 pub mod engine;
 
-uniffi::setup_scaffolding!("mqtt_ffi");
+uniffi::setup_scaffolding!("flowsdk_ffi");
