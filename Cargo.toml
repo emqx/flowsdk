@@ -2,6 +2,12 @@
 name = "flowsdk"
 version = "0.3.1"
 edition = "2021"
+description = "Safety-first, realistic, behavior-predictable messaging SDK for MQTT and more."
+license = "MPL-2.0"
+repository = "https://github.com/emqx/flowsdk"
+documentation = "https://docs.rs/flowsdk"
+keywords = ["mqtt", "async", "tokio", "network", "mqtt_over_quic"]
+categories = ["network-programming", "asynchronous", "communication"]
 
 [workspace]
 members = [".", "mqtt_grpc_duality", "flowsdk_ffi"]
