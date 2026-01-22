@@ -8,11 +8,11 @@
 
 It allows you to build **messaging-based micro-middleware** that runs within your application, communicating efficiently with other apps locally or remotely using protocols like MQTT (v5.0) and gRPC.
 
-> **Philosophy**: Messaging has costs and networks are unreliable. FlowSDK intentionally surfaces these constraints—errors, latencies, and resource limits—enabling you to build resilient systems that handle failure gracefully rather than hiding it.
+> **Philosophy**: Messaging has costs and networks can be unreliable. FlowSDK is honest about constraints like latency and resource limits, enabling you to build resilient systems that handle failures gracefully rather than hiding them.
 
 ---
 
-## 🚀 Key Features
+## Key Features
 
 *   **Robust MQTT v5.0 Client**: Full support for MQTT v5.0 features (shared subscriptions, request/response, properties).
 *   **Async & Sync Dual API**: Built on `tokio` for high-performance async I/O, with convenience wrappers for synchronous-style operations.
@@ -26,7 +26,7 @@ It allows you to build **messaging-based micro-middleware** that runs within you
 
 ---
 
-## 📦 Project Structure
+## Project Structure
 
 This workspace consists of three main components:
 
@@ -38,7 +38,7 @@ This workspace consists of three main components:
 
 ---
 
-## ⚡ Quick Start
+## Quick Start
 
 ### 1. Installation
 
@@ -90,23 +90,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
 ---
 
-## 📖 Documentation Index
+## Documentation Index
 
 Detailed documentation is available in the [`docs/`](docs/) directory.
 
 | Document | Description |
 | :--- | :--- |
-| **[Client API Guide](docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md)** | **Start Here**. Complete reference for the `TokioAsyncMqttClient` API. |
-| **[Async Client Architecture](docs/ASYNC_CLIENT.md)** | Deep dive into the event-driven design and callback system. |
-| **[Builder Pattern](docs/BUILDER_PATTERN.md)** | Guide to using the configuration builders for options and commands. |
-| **[MQTT Session](docs/MQTT_SESSION.md)** | Explanation of session state, inflight buffers, and persistence. |
-| **[Protocol Compliance](docs/PROTOCOL_COMPLIANCE.md)** | Details on MQTT v5.0 compliance, validation, and strict mode. |
-| **[Testing & Fuzzing](docs/TEST.md)** | How to run the test suite, fuzzers, and compliance tests. |
-| **[Development](docs/DEV.md)** | Guide for contributors: build setup, workflow, and CI. |
+| [Client API Guide](docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md) | **Start Here**. Complete reference for the `TokioAsyncMqttClient` API. |
+| [Async Client Architecture](docs/ASYNC_CLIENT.md) | Deep dive into the event-driven design and callback system. |
+| [Builder Pattern](docs/BUILDER_PATTERN.md) | Guide to using the configuration builders for options and commands. |
+| [MQTT Session](docs/MQTT_SESSION.md) | Explanation of session state, inflight buffers, and persistence. |
+| [Protocol Compliance](docs/PROTOCOL_COMPLIANCE.md) | Details on MQTT v5.0 compliance, validation, and strict mode. |
+| [Testing & Fuzzing](docs/TEST.md) | How to run the test suite, fuzzers, and compliance tests. |
+| [Development](docs/DEV.md) | Guide for contributors: build setup, workflow, and CI. |
 
 ---
 
-## 💡 Examples
+## Examples
 
 Check the [`examples/`](examples/) directory for runnable code.
 
@@ -123,10 +123,10 @@ cargo run --example tokio_async_mqtt_client_example
 
 ---
 
-## 🤝 Contributing
+## Contributing
 
 We welcome contributions! Please see [CONTRIBUTING.md](docs/CONTRIBUTING.md) for guidelines.
 
-## 📄 License
+## License
 
 This project is licensed under the [MPL 2.0 License](LICENSE).
