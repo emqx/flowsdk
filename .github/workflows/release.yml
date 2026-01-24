@@ -90,16 +90,17 @@ jobs:
           
           echo "✅ Versions match confirmed!"
 
-      - name: Setup Cargo Login
-        run: cargo login ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
       - name: Publish flowsdk (Core)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p flowsdk
 
       - name: Wait for Index Propagation
         run: sleep 40
 
       - name: Publish flowsdk_ffi (Bindings)
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p flowsdk_ffi
 
   build-and-upload:
@@ -212,5 +213,3 @@ jobs:
         asset_path: ./flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.zip
         asset_name: flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.zip
         asset_content_type: application/zip
-
-  
