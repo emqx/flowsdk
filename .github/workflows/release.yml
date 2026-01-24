@@ -4,14 +4,14 @@ permissions:
 
 on:
   workflow_dispatch:
-  inputs:
-    ref:
-      description: 'Ref to release'
-      required: false
-      default: ''
-    ref_name:
-      description: 'Tag to (re)release'
-      required: false
+    inputs:
+      ref:
+        description: 'Ref to release'
+        required: false
+        default: ''
+      ref_name:
+        description: 'Tag to (re)release'
+        required: false
 
   push:
     tags:
