@@ -7,7 +7,7 @@ license = "MPL-2.0"
 repository = "https://github.com/emqx/flowsdk"
 documentation = "https://docs.rs/flowsdk"
 keywords = ["mqtt", "async", "tokio", "network", "mqtt_over_quic"]
-categories = ["network-programming", "asynchronous", "communication"]
+categories = ["network-programming", "asynchronous"]
 
 [workspace]
 members = [".", "mqtt_grpc_duality", "flowsdk_ffi"]
