@@ -3,6 +3,16 @@ permissions:
   contents: read
 
 on:
+  workflow_dispatch:
+  inputs:
+    ref:
+      description: 'Ref to release'
+      required: false
+      default: ''
+    ref_name:
+      description: 'Tag to (re)release'
+      required: false
+
   push:
     tags:
       - 'v*'
@@ -46,6 +56,8 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -119,6 +131,8 @@ jobs:
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.inputs.ref }}
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
