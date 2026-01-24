@@ -1,6 +1,6 @@
 [package]
 name = "flowsdk"
-version = "0.3.1"
+version = "0.4.0"
 edition = "2021"
 description = "Safety-first, realistic, behavior-predictable messaging SDK for MQTT and more."
 license = "MPL-2.0"
