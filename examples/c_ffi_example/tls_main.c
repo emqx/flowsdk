@@ -21,6 +21,7 @@ typedef struct {
   const char *ca_cert_file;
   const char *client_cert_file;
   const char *client_key_file;
+  const char *alpn;
   uint8_t insecure_skip_verify;
 } MqttTlsOptionsC;
 
