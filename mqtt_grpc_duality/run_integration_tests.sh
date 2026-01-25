@@ -15,7 +15,7 @@
 # Exit immediately if a command exits with a non-zero status.
 set -e
 
-if [[ $CARGO_LLVM_COV==1 ]]; then
+if [[ "$CARGO_LLVM_COV" == "1" ]]; then
     echo "running with coverage test"
 fi
 
@@ -65,10 +65,12 @@ cleanup() {
     if [ -n "$R_PROXY_PID" ]; then
         echo "Stopping r-proxy (PID: $R_PROXY_PID)..."
         kill "$R_PROXY_PID" 2>/dev/null || true
+        wait "$R_PROXY_PID" 2>/dev/null || true
     fi
     if [ -n "$S_PROXY_PID" ]; then
         echo "Stopping s-proxy (PID: $S_PROXY_PID)..."
         kill "$S_PROXY_PID" 2>/dev/null || true
+        wait "$S_PROXY_PID" 2>/dev/null || true
     fi
     if [ -n "$BROKER_PID" ]; then
         echo "Stopping Mosquitto broker (PID: $BROKER_PID)..."

@@ -4,6 +4,7 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use std::{env, net::SocketAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Status};
 use tracing::{debug, error, info};
@@ -367,7 +368,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Server::builder()
         .add_service(MqttRelayServiceServer::new(relay))
-        .serve(grpc_addr)
+        .serve_with_shutdown(grpc_addr, async {
+            let mut sigterm = signal(SignalKind::terminate()).unwrap();
+            let mut sigint = signal(SignalKind::interrupt()).unwrap();
+            tokio::select! {
+                _ = sigterm.recv() => info!("Received SIGTERM"),
+                _ = sigint.recv() => info!("Received SIGINT"),
+                _ = tokio::signal::ctrl_c() => info!("Received Ctrl-C"),
+            }
+            info!("Shutting down s-proxy gRPC server...");
+        })
         .await?;
 
     Ok(())
