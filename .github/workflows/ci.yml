@@ -157,7 +157,9 @@ jobs:
       run: cargo install cargo-llvm-cov
 
     - name: Generate coverage report
-      run: ./scripts/generate_coverage.sh
+      run: |
+        ./scripts/generate_coverage.sh
+        ./scripts/generate_coverage_integration.sh
 
     - name: Upload coverage artifacts
       uses: actions/upload-artifact@v4

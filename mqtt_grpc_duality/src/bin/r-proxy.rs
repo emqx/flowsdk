@@ -16,6 +16,7 @@ use mqtt_grpc_proxy::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::signal::unix::{signal, SignalKind};
 use tokio::spawn;
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
@@ -75,22 +76,43 @@ async fn run_proxy(
         grpc_client, // Share this client across all MQTT connections
     });
 
+    let mut sigterm = signal(SignalKind::terminate())?;
+    let mut sigint = signal(SignalKind::interrupt())?;
+
     loop {
-        info!("Accepting connection...");
-        let (incoming_stream, addr) = listener.accept().await?;
-        let state = proxy_state.clone();
-        info!("Accepted connection from {}", addr);
-        spawn(async move {
-            match handle_new_incoming_tcp(incoming_stream, state).await {
-                Ok(_) => {
-                    info!("Client connection handled successfully");
-                }
-                Err(e) => {
-                    error!("Error handling client connection: {}", e);
+        tokio::select! {
+            _ = sigterm.recv() => {
+                info!("Received SIGTERM, shutting down r-proxy");
+                break;
+            }
+            _ = sigint.recv() => {
+                info!("Received SIGINT, shutting down r-proxy");
+                break;
+            }
+            res = listener.accept() => {
+                match res {
+                    Ok((incoming_stream, addr)) => {
+                        let state = proxy_state.clone();
+                        info!("Accepted connection from {}", addr);
+                        spawn(async move {
+                            match handle_new_incoming_tcp(incoming_stream, state).await {
+                                Ok(_) => {
+                                    info!("Client connection handled successfully");
+                                }
+                                Err(e) => {
+                                    error!("Error handling client connection: {}", e);
+                                }
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        error!("Error accepting connection: {}", e);
+                    }
                 }
             }
-        });
+        }
     }
+    Ok(())
 }
 
 /// Setup a new gRPC bidirectional stream using the shared channel

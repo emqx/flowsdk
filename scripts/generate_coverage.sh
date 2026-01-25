@@ -65,17 +65,3 @@ fi
 
 llvm-cov export -format=lcov --instr-profile target/llvm-cov-target/cargo-llvm-cov2.profdata -object target/debug/deps/libflowsdk_ffi.${LIB_EXT} > lcov2.info
 
-# 4. Collect coverage from integration tests (Proxy binaries)
-set -a
-source <(cargo llvm-cov show-env --export-prefix)
-set +a
-cargo +stable llvm-cov clean --workspace
-cargo build --workspace --bins --all-features --all
-
-# Set profile output for integration tests
-export LLVM_PROFILE_FILE="target/llvm-cov-target/integration-%p-%m.profraw"
-cd mqtt_grpc_duality && ./run_integration_tests.sh Test.test_basic && cd ..
-"$PROFDATA_TOOL" merge -sparse target/llvm-cov-target/*.profraw -o target/llvm-cov-target/integration-llvm-cov2.profdata
-llvm-cov export -format=lcov --instr-profile target/llvm-cov-target/integration-llvm-cov2.profdata -object target/debug/r-proxy target/debug/s-proxy > lcov3.info
-
-echo "Coverage report generated at lcov.info, lcov2.info and lcov3.info"
