@@ -311,10 +311,10 @@
 <a href=#311 id=311 data-nosnippet>311</a>    }
 <a href=#312 id=312 data-nosnippet>312</a>
 <a href=#313 id=313 data-nosnippet>313</a>    <span class="attr">#[tokio::test]
-<a href=#314 id=314 data-nosnippet>314</a>    #[ignore] </span><span class="comment">// Requires network access
+<a href=#314 id=314 data-nosnippet>314</a>    #[ignore] </span><span class="comment">// Requires external service
 <a href=#315 id=315 data-nosnippet>315</a>    </span><span class="kw">async fn </span>test_tls_transport_connect() {
 <a href=#316 id=316 data-nosnippet>316</a>        <span class="comment">// Test connecting to a public MQTT TLS broker
-<a href=#317 id=317 data-nosnippet>317</a>        </span><span class="kw">let </span>result = TlsTransport::connect(<span class="string">"mqtt.eclipseprojects.io:8883"</span>).<span class="kw">await</span>;
+<a href=#317 id=317 data-nosnippet>317</a>        </span><span class="kw">let </span>result = TlsTransport::connect(<span class="string">"broker.emqx.io:8883"</span>).<span class="kw">await</span>;
 <a href=#318 id=318 data-nosnippet>318</a>
 <a href=#319 id=319 data-nosnippet>319</a>        <span class="kw">if let </span><span class="prelude-val">Ok</span>(<span class="kw-2">mut </span>transport) = result {
 <a href=#320 id=320 data-nosnippet>320</a>            <span class="comment">// Verify peer address

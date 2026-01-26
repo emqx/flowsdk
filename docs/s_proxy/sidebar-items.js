@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["BrokerControlMessage"],"fn":["find_client_by_session","main","mqtt_client_loop_simple","mqtt_connect_to_broker"],"struct":["MyRelay"],"type":["ConnectionInfo"]};
+window.SIDEBAR_ITEMS = {"enum":["BrokerControlMessage"],"fn":["find_client_by_session","main","mqtt_client_loop_simple","mqtt_connect_to_broker","signal_shutdown"],"struct":["MyRelay"],"type":["ConnectionInfo"]};

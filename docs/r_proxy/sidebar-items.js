@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["handle_new_incoming_tcp","main","run_proxy","setup_grpc_streaming","start_streaming_loop","wait_for_mqtt_connect"],"struct":["RProxyState","StreamingClientConnection"]};
+window.SIDEBAR_ITEMS = {"fn":["handle_new_incoming_tcp","main","run_proxy","setup_grpc_streaming","signal_shutdown","start_streaming_loop","wait_for_mqtt_connect","wait_for_shutdown_signal"],"struct":["RProxyState","StreamingClientConnection"]};
