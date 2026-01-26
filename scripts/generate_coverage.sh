@@ -10,6 +10,7 @@ mkdir -p target/llvm-cov-target
 
 # 1. Collect coverage from Rust tests and examples
 cargo +stable llvm-cov --workspace --no-report --tests
+cargo +stable llvm-cov --workspace --no-report --tests -- --ignored
 cargo +stable llvm-cov --workspace --no-report --examples --all-features
 cargo +stable llvm-cov report --lcov --output-path lcov.info
 
