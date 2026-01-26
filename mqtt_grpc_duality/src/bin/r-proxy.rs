@@ -16,6 +16,7 @@ use mqtt_grpc_proxy::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::tcp::{OwnedReadHalf, OwnedWriteHalf};
 use tokio::net::{TcpListener, TcpStream};
+#[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 use tokio::spawn;
 use tokio::sync::mpsc;
@@ -76,17 +77,17 @@ async fn run_proxy(
         grpc_client, // Share this client across all MQTT connections
     });
 
-    let mut sigterm = signal(SignalKind::terminate())?;
-    let mut sigint = signal(SignalKind::interrupt())?;
+    wait_for_shutdown_signal(proxy_state, listener).await
+}
 
+async fn wait_for_shutdown_signal(
+    proxy_state: Arc<RProxyState>,
+    listener: TcpListener,
+) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     loop {
         tokio::select! {
-            _ = sigterm.recv() => {
-                info!("Received SIGTERM, shutting down r-proxy");
-                break;
-            }
-            _ = sigint.recv() => {
-                info!("Received SIGINT, shutting down r-proxy");
+            _ = signal_shutdown() => {
+                info!("Shutdown signal received, shutting down r-proxy");
                 break;
             }
             res = listener.accept() => {
@@ -113,6 +114,27 @@ async fn run_proxy(
         }
     }
     Ok(())
+}
+
+async fn signal_shutdown() {
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("Failed to create SIGTERM listener");
+        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to create SIGINT listener");
+        tokio::select! {
+            _ = sigterm.recv() => info!("Received SIGTERM"),
+            _ = sigint.recv() => info!("Received SIGINT"),
+            _ = tokio::signal::ctrl_c() => info!("Received Ctrl-C"),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for Ctrl-C");
+        info!("Received Ctrl-C");
+    }
 }
 
 /// Setup a new gRPC bidirectional stream using the shared channel

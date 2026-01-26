@@ -4,6 +4,7 @@ use dashmap::DashMap;
 use std::sync::Arc;
 use std::{env, net::SocketAddr};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
+#[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 use tokio_util::sync::CancellationToken;
 use tonic::{transport::Server, Request, Response, Status};
@@ -368,17 +369,31 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     Server::builder()
         .add_service(MqttRelayServiceServer::new(relay))
-        .serve_with_shutdown(grpc_addr, async {
-            let mut sigterm = signal(SignalKind::terminate()).unwrap();
-            let mut sigint = signal(SignalKind::interrupt()).unwrap();
-            tokio::select! {
-                _ = sigterm.recv() => info!("Received SIGTERM"),
-                _ = sigint.recv() => info!("Received SIGINT"),
-                _ = tokio::signal::ctrl_c() => info!("Received Ctrl-C"),
-            }
-            info!("Shutting down s-proxy gRPC server...");
-        })
+        .serve_with_shutdown(grpc_addr, signal_shutdown())
         .await?;
 
     Ok(())
+}
+
+async fn signal_shutdown() {
+    #[cfg(unix)]
+    {
+        let mut sigterm =
+            signal(SignalKind::terminate()).expect("Failed to create SIGTERM listener");
+        let mut sigint = signal(SignalKind::interrupt()).expect("Failed to create SIGINT listener");
+
+        tokio::select! {
+            _ = sigterm.recv() => info!("Received SIGTERM"),
+            _ = sigint.recv() => info!("Received SIGINT"),
+            _ = tokio::signal::ctrl_c() => info!("Received Ctrl-C"),
+        }
+    }
+    #[cfg(not(unix))]
+    {
+        tokio::signal::ctrl_c()
+            .await
+            .expect("Failed to listen for Ctrl-C");
+        info!("Received Ctrl-C");
+    }
+    info!("Shutting down s-proxy gRPC server...");
 }
