@@ -11,7 +11,7 @@ async fn test_transport_abstraction_with_echo_server() {
     // It would connect to an echo server and verify read/write operations
 
     // For now, we just verify the type can be used through the trait
-    let result = TcpTransport::connect("broker.emqx.com:1883").await;
+    let result = TcpTransport::connect("broker.emqx.io:1883").await;
     assert!(result.is_ok(), "Should connect through Transport trait");
 
     if let Ok(transport) = result {

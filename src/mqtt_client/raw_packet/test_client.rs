@@ -313,16 +313,35 @@ mod tests {
     #[tokio::test]
     #[ignore] // Requires running MQTT broker
     async fn test_raw_client_connect() {
-        let result = RawTestClient::connect("localhost:1883").await;
+        let result = RawTestClient::connect("broker.emqx.io:1883").await;
         assert!(result.is_ok());
     }
 
     #[tokio::test]
     #[ignore] // Requires running MQTT broker
     async fn test_raw_client_send_receive() {
-        let mut client = RawTestClient::connect("localhost:1883").await.unwrap();
+        use crate::mqtt_serde::control_packet::MqttPacket;
+        use crate::mqtt_serde::mqttv3::connectv3::MqttConnect as MqttConnect3;
 
-        // Send PINGREQ
+        let mut client = RawTestClient::connect("broker.emqx.io:1883").await.unwrap();
+
+        // Create a proper MQTT v3.1.1 CONNECT packet using the library
+        let connect = MqttConnect3::new(
+            "raw_test_client".to_string(),
+            60,   // keep_alive
+            true, // clean_session
+        );
+        let connect_bytes = MqttPacket::Connect3(connect).to_bytes().unwrap();
+
+        // Send CONNECT
+        client.send_raw(connect_bytes).await.unwrap();
+
+        // Receive CONNACK
+        let connack = client.receive_raw(8192, 5000).await.unwrap();
+        assert!(connack.len() >= 4); // CONNACK is at least 4 bytes
+        assert_eq!(connack[0] & 0xF0, 0x20); // CONNACK packet type
+
+        // Now send PINGREQ
         client.send_raw(vec![0xC0, 0x00]).await.unwrap();
 
         // Receive PINGRESP

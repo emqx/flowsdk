@@ -107,7 +107,7 @@ mod tests {
     #[ignore] // Requires external service
     async fn test_tcp_transport_connect() {
         // Test connecting to a public MQTT broker (non-TLS)
-        let result = TcpTransport::connect("broker.emqx.com:1883").await;
+        let result = TcpTransport::connect("broker.emqx.io:1883").await;
         assert!(result.is_ok(), "Should connect to public broker");
 
         if let Ok(mut transport) = result {

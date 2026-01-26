@@ -311,10 +311,10 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore] // Requires network access
+    #[ignore] // Requires external service
     async fn test_tls_transport_connect() {
         // Test connecting to a public MQTT TLS broker
-        let result = TlsTransport::connect("mqtt.eclipseprojects.io:8883").await;
+        let result = TlsTransport::connect("broker.emqx.io:8883").await;
 
         if let Ok(mut transport) = result {
             // Verify peer address
