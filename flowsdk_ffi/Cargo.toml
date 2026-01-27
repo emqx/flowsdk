@@ -1,6 +1,6 @@
 [package]
 name = "flowsdk_ffi"
-version = "0.4.1"
+version = "0.4.2"
 edition = "2021"
 description = "FFI bindings for FlowSDK, allowing multi-language integration."
 license = "MPL-2.0"
