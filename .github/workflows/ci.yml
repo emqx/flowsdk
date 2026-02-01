@@ -134,6 +134,24 @@ jobs:
     - name: Run security audit
       run: cargo audit
 
+  python-bindings:
+    name: Python Bindings
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.10'
+
+    - name: Build and Test Bindings
+      run: ./scripts/build_python_bindings.sh --test
+
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest
