@@ -31,13 +31,18 @@ Demonstrates the complete FlowMqttClient API with proper error handling and mess
 PYTHONPATH=../package python3 async_quic_client_example.py
 ```
 
-Shows how to use MQTT over QUIC protocol, which provides:
+Shows how to use MQTT over QUIC protocol with the unified `FlowMqttClient`. QUIC provides:
 - Built-in encryption (TLS 1.3)
 - Connection migration
 - Lower latency than TCP
 - No head-of-line blocking
 
-**Requirements**: QUIC-enabled MQTT broker (e.g., EMQX 5.0+ with QUIC listener)
+**Requirements**: QUIC-enabled MQTT broker (e.g., EMQX 5.0+ with QUIC listener on port 14567)
+
+**Key features**:
+- Set `transport=TransportType.QUIC` in FlowMqttClient constructor
+- Use `insecure_skip_verify=True` for testing (production should use proper TLS certs)
+- Pass `server_name` parameter to `connect()` for TLS SNI
 
 ## Low-Level Examples
 
@@ -102,6 +107,35 @@ Your Code → MqttEngineFfi → Manual I/O → Network
 - Full control over networking
 - Custom transport implementation
 - Integration with existing event loops
+
+## Transport Selection
+
+FlowSDK supports multiple transport protocols via the unified `FlowMqttClient`:
+
+### TCP (Default)
+```python
+from flowsdk import FlowMqttClient, TransportType
+
+client = FlowMqttClient("my_client", transport=TransportType.TCP)
+await client.connect("broker.emqx.io", 1883)
+```
+**Use when**: Standard MQTT deployments, maximum compatibility
+
+### QUIC
+```python
+client = FlowMqttClient(
+    "my_client",
+    transport=TransportType.QUIC,
+    insecure_skip_verify=True  # For testing only
+)
+await client.connect("broker.emqx.io", 14567, server_name="broker.emqx.io")
+```
+**Use when**: Low latency needed, mobile clients (connection migration), UDP-based networks
+
+**Note**: 
+- QUIC requires server_name for TLS SNI
+- Use proper TLS certificates in production
+- Not all brokers support QUIC (EMQX 5.0+ does)
 
 ## MQTT Broker Setup
 
