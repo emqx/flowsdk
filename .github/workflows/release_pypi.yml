@@ -26,7 +26,7 @@ jobs:
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.16.5
         with:
-          package-dir: python
+          package-dir: python/package
         env:
           CIBW_BEFORE_BUILD: "pip install setuptools wheel"
           # Linux specific: ensure library is copied correctly if needed
