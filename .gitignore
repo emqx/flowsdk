@@ -8,8 +8,15 @@ Cargo.lock
 *.profraw
 *.profdata
 
+
+# FFI generated code
+python/package/flowsdk/flowsdk_ffi.py
+python/package/flowsdk/libflowsdk_ffi.dylib
+
 # Python Examples (generated files)
 python/examples/flowsdk_ffi.py
 python/examples/*.dylib
 python/examples/*.so
 python/examples/*.dll
+
+python/**/*.pyc

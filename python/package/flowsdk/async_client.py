@@ -6,13 +6,17 @@ library, providing async/await support for MQTT operations. It implements a
 custom Protocol for handling the network layer and manages the timing and
 pumping of the MQTT engine.
 
-Classes:
-    FlowMqttProtocol: asyncio.Protocol implementation that manages the network
-                      layer and handles engine ticks and data pumping.
-    FlowMqttClient: High-level async MQTT client providing connect, subscribe,
-                    publish, and disconnect operations.
+Supports multiple transports:
+    - TCP: Standard MQTT over TCP (default)
+    - QUIC: MQTT over QUIC protocol (UDP-based, built-in encryption)
 
-Example:
+Classes:
+    TransportType: Enum for selecting MQTT transport protocol
+    FlowMqttProtocol: asyncio.Protocol implementation for TCP transport
+    FlowMqttDatagramProtocol: asyncio.DatagramProtocol for QUIC transport
+    FlowMqttClient: High-level async MQTT client supporting multiple transports
+
+Example (TCP):
     >>> import asyncio
     >>> from flowsdk import FlowMqttClient
     >>> 
@@ -24,16 +28,37 @@ Example:
     ...     await client.disconnect()
     >>> 
     >>> asyncio.run(example())
+
+Example (QUIC):
+    >>> import asyncio
+    >>> from flowsdk import FlowMqttClient, TransportType
+    >>> 
+    >>> async def example():
+    ...     client = FlowMqttClient("my_client_id", transport=TransportType.QUIC)
+    ...     await client.connect("broker.emqx.io", 14567, server_name="broker.emqx.io")
+    ...     await client.subscribe("test/topic", 1)
+    ...     await client.publish("test/topic", b"Hello", 1)
+    ...     await client.disconnect()
+    >>> 
+    >>> asyncio.run(example())
 """
 
 import asyncio
+import socket
 import time
-from typing import Optional, Dict, Callable, Any
+from enum import Enum
+from typing import Optional, Dict, Callable, Any, List, Union
 
 try:
     from . import flowsdk_ffi
 except ImportError:
     import flowsdk_ffi
+
+
+class TransportType(Enum):
+    """MQTT transport protocol types."""
+    TCP = "tcp"
+    QUIC = "quic"
 
 
 class FlowMqttProtocol(asyncio.Protocol):
@@ -125,15 +150,119 @@ class FlowMqttProtocol(asyncio.Protocol):
             self.on_event_cb(ev)
 
 
+class FlowMqttDatagramProtocol(asyncio.DatagramProtocol):
+    """
+    asyncio DatagramProtocol implementation for QUIC MQTT engine.
+    
+    This class handles UDP datagram transport for QUIC, managing engine ticks
+    and pumping data between the network transport and the MQTT engine.
+    
+    Args:
+        engine: The QUIC MQTT engine instance from flowsdk_ffi
+        loop: The asyncio event loop
+        on_event_cb: Callback function to handle MQTT events
+    """
+    
+    def __init__(self, engine, loop: asyncio.AbstractEventLoop, on_event_cb: Callable):
+        self.engine = engine
+        self.loop = loop
+        self.transport: Optional[asyncio.DatagramTransport] = None
+        self.on_event_cb = on_event_cb
+        self.start_time = time.monotonic()
+        self._tick_handle: Optional[asyncio.TimerHandle] = None
+        self.closed = False
+        self.remote_addr = None
+
+    def connection_made(self, transport: asyncio.DatagramTransport):
+        """Called when UDP socket is ready."""
+        self.transport = transport
+        # Get the remote address from the transport
+        try:
+            self.remote_addr = transport.get_extra_info('peername')
+        except Exception:
+            pass
+        
+        # Don't call engine.connect() here - QUIC requires parameters
+        # Connection will be initiated from FlowMqttClient.connect()
+        
+        # Start the tick loop immediately
+        self._schedule_tick(0)
+
+    def datagram_received(self, data: bytes, addr):
+        """Called when a datagram is received."""
+        # Feed datagram to QUIC engine
+        self.remote_addr = addr
+        now_ms = int((time.monotonic() - self.start_time) * 1000)
+        addr_str = f"{addr[0]}:{addr[1]}"
+        self.engine.handle_datagram(data, addr_str, now_ms)
+        # Trigger an immediate pump to process responses
+        self._pump()
+
+    def error_received(self, exc: Exception):
+        """Called when an error is received."""
+        pass  # UDP errors are generally non-fatal
+
+    def connection_lost(self, exc: Optional[Exception]):
+        """Called when the connection is closed."""
+        self.closed = True
+        if self._tick_handle:
+            self._tick_handle.cancel()
+
+    def _schedule_tick(self, delay_sec: float):
+        """Schedule the next engine tick."""
+        if self.closed:
+            return
+        
+        if self._tick_handle:
+            self._tick_handle.cancel()
+            
+        self._tick_handle = self.loop.call_later(delay_sec, self._on_timer)
+
+    def _on_timer(self):
+        """Handle scheduled engine tick."""
+        if self.closed:
+            return
+        
+        # Run protocol tick
+        now_ms = int((time.monotonic() - self.start_time) * 1000)
+        events = self.engine.handle_tick(now_ms)
+        
+        # Process tick events (QUIC returns events directly from handle_tick)
+        for ev in events:
+            self.on_event_cb(ev)
+        
+        self._pump()
+        
+        # Fixed 10ms interval for QUIC responsiveness
+        delay = 0.01
+        self._schedule_tick(delay)
+
+    def _pump(self):
+        """Pump data between engine and network."""
+        # 1. Send outgoing datagrams
+        datagrams = self.engine.take_outgoing_datagrams()
+        if datagrams and self.transport and self.remote_addr:
+            for datagram in datagrams:
+                # Extract bytes from MqttDatagramFfi
+                self.transport.sendto(datagram.data, self.remote_addr)
+        
+        # 2. Process events
+        events = self.engine.take_events()
+        for ev in events:
+            self.on_event_cb(ev)
+
+
+
 class FlowMqttClient:
     """
-    High-level async MQTT client.
+    High-level async MQTT client supporting multiple transports (TCP, QUIC).
     
     This client provides a simple async/await API for MQTT operations,
     handling connection management, subscriptions, and publishing.
     
     Args:
         client_id: MQTT client identifier
+        transport: Transport type (TransportType.TCP or TransportType.QUIC, default: TCP)
         mqtt_version: MQTT protocol version (3 or 5, default: 5)
         clean_start: Whether to start a clean session (default: True)
         keep_alive: Keep-alive interval in seconds (default: 30)
@@ -143,20 +272,30 @@ class FlowMqttClient:
         reconnect_max_delay_ms: Maximum delay for reconnection (default: 30000)
         max_reconnect_attempts: Maximum reconnection attempts, 0 for infinite (default: 0)
         on_message: Optional callback for received messages: fn(topic: str, payload: bytes, qos: int)
+        ca_cert_file: Path to CA certificate file for QUIC TLS (QUIC only)
+        insecure_skip_verify: Skip TLS verification for QUIC (QUIC only, default: False)
+        alpn_protocols: ALPN protocols for QUIC (QUIC only, default: ["mqtt"])
     
-    Example:
-        >>> async def example():
-        ...     client = FlowMqttClient("my_client", on_message=lambda t, p, q: print(f"{t}: {p}"))
+    Examples:
+        TCP:
+        >>> async def tcp_example():
+        ...     client = FlowMqttClient("my_client", transport=TransportType.TCP)
         ...     await client.connect("broker.emqx.io", 1883)
-        ...     await client.subscribe("test/topic", 1)
         ...     await client.publish("test/topic", b"Hello", 1)
-        ...     await asyncio.sleep(1)  # Wait for message
+        ...     await client.disconnect()
+        
+        QUIC:
+        >>> async def quic_example():
+        ...     client = FlowMqttClient("my_client", transport=TransportType.QUIC, insecure_skip_verify=True)
+        ...     await client.connect("broker.emqx.io", 14567, server_name="broker.emqx.io")
+        ...     await client.publish("test/topic", b"Hello", 1)
         ...     await client.disconnect()
     """
     
     def __init__(
         self,
         client_id: str,
+        transport: TransportType = TransportType.TCP,
         mqtt_version: int = 5,
         clean_start: bool = True,
         keep_alive: int = 30,
@@ -165,8 +304,12 @@ class FlowMqttClient:
         reconnect_base_delay_ms: int = 1000,
         reconnect_max_delay_ms: int = 30000,
         max_reconnect_attempts: int = 0,
-        on_message: Optional[Callable[[str, bytes, int], None]] = None
+        on_message: Optional[Callable[[str, bytes, int], None]] = None,
+        ca_cert_file: Optional[str] = None,
+        insecure_skip_verify: bool = False,
+        alpn_protocols: Optional[List[str]] = None
     ):
+        self.transport_type = transport
         self.opts = flowsdk_ffi.MqttOptionsFfi(
             client_id=client_id,
             mqtt_version=mqtt_version,
@@ -178,8 +321,25 @@ class FlowMqttClient:
             reconnect_max_delay_ms=reconnect_max_delay_ms,
             max_reconnect_attempts=max_reconnect_attempts
         )
-        self.engine = flowsdk_ffi.MqttEngineFfi.new_with_opts(self.opts)
-        self.protocol: Optional[FlowMqttProtocol] = None
+        
+        # Create appropriate engine based on transport type
+        if transport == TransportType.TCP:
+            self.engine = flowsdk_ffi.MqttEngineFfi.new_with_opts(self.opts)
+        elif transport == TransportType.QUIC:
+            # Build QUIC TLS options
+            tls_opts = flowsdk_ffi.MqttTlsOptionsFfi(
+                ca_cert_file=ca_cert_file,
+                client_cert_file=None,
+                client_key_file=None,
+                insecure_skip_verify=insecure_skip_verify,
+                alpn_protocols=alpn_protocols or ["mqtt"]
+            )
+            self.engine = flowsdk_ffi.QuicMqttEngineFfi(self.opts)
+            self.quic_tls_opts = tls_opts
+        else:
+            raise ValueError(f"Unsupported transport type: {transport}")
+        
+        self.protocol: Optional[Union[FlowMqttProtocol, FlowMqttDatagramProtocol]] = None
         self.on_message = on_message
         
         # Futures for pending operations
@@ -188,13 +348,14 @@ class FlowMqttClient:
         self._pending_subscribe: Dict[int, asyncio.Future] = {}
         self._pending_unsubscribe: Dict[int, asyncio.Future] = {}
 
-    async def connect(self, host: str, port: int):
+    async def connect(self, host: str, port: int, server_name: Optional[str] = None):
         """
         Connect to MQTT broker.
         
         Args:
             host: Broker hostname or IP address
             port: Broker port number
+            server_name: Server name for TLS SNI (required for QUIC)
             
         Raises:
             ConnectionError: If connection fails
@@ -202,11 +363,41 @@ class FlowMqttClient:
         loop = asyncio.get_running_loop()
         self._connect_future = loop.create_future()
         
-        transport, protocol = await loop.create_connection(
-            lambda: FlowMqttProtocol(self.engine, loop, self._on_event),
-            host, port
-        )
-        self.protocol = protocol
+        if self.transport_type == TransportType.TCP:
+            # TCP connection using FlowMqttProtocol
+            transport, protocol = await loop.create_connection(
+                lambda: FlowMqttProtocol(self.engine, loop, self._on_event),
+                host, port
+            )
+            self.protocol = protocol
+            
+        elif self.transport_type == TransportType.QUIC:
+            # QUIC connection using FlowMqttDatagramProtocol
+            if not server_name:
+                server_name = host  # Default to host if not specified
+            
+            # Resolve hostname to IP address for QUIC
+            addr_info = socket.getaddrinfo(
+                host, port,
+                family=socket.AF_INET,
+                type=socket.SOCK_DGRAM
+            )
+            if not addr_info:
+                raise ConnectionError(f"Could not resolve {host}")
+            
+            server_addr = f"{addr_info[0][4][0]}:{port}"
+            
+            # Create UDP socket and protocol
+            transport, protocol = await loop.create_datagram_endpoint(
+                lambda: FlowMqttDatagramProtocol(self.engine, loop, self._on_event),
+                remote_addr=addr_info[0][4]
+            )
+            self.protocol = protocol
+            protocol.remote_addr = addr_info[0][4]
+            
+            # Initiate QUIC connection with required parameters
+            now_ms = int((time.monotonic() - protocol.start_time) * 1000)
+            self.engine.connect(server_addr, server_name, self.quic_tls_opts, now_ms)
         
         # Wait for actual MQTT connection
         await self._connect_future
@@ -274,19 +465,29 @@ class FlowMqttClient:
             topic: MQTT topic to publish to
             payload: Message payload as bytes
             qos: Quality of Service level (0, 1, or 2)
-            retain: Whether to retain the message (None uses default)
+            retain: Whether to retain the message (None uses default, ignored for QUIC)
             
         Returns:
             Packet ID of the publish (0 for QoS 0)
             
         Raises:
             RuntimeError: If not connected
+            
+        Note:
+            QUIC transport does not support the retain parameter and priority.
         """
         if not self.protocol:
             raise RuntimeError("Not connected")
             
         loop = asyncio.get_running_loop()
-        pid = self.engine.publish(topic, payload, qos, retain)
+        
+        # Handle different engine publish signatures
+        if self.transport_type == TransportType.TCP:
+            # TCP engine takes 4 args: topic, payload, qos, retain
+            pid = self.engine.publish(topic, payload, qos, retain)
+        elif self.transport_type == TransportType.QUIC:
+            # QUIC engine takes 3 args: topic, payload, qos
+            pid = self.engine.publish(topic, payload, qos)
         
         if qos > 0:
             fut = loop.create_future()

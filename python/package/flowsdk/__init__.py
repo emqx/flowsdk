@@ -4,8 +4,8 @@ except ImportError:
     pass
 
 try:
-    from .async_client import FlowMqttClient, FlowMqttProtocol
+    from .async_client import FlowMqttClient, FlowMqttProtocol, TransportType
 except ImportError:
     pass
 
-__all__ = ['FlowMqttClient', 'FlowMqttProtocol', 'MqttEngineFfi', 'TlsMqttEngineFfi', 'QuicMqttEngineFfi', 'MqttOptionsFfi']
+__all__ = ['FlowMqttClient', 'FlowMqttProtocol', 'TransportType', 'MqttEngineFfi', 'TlsMqttEngineFfi', 'QuicMqttEngineFfi', 'MqttOptionsFfi']
