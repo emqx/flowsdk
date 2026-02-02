@@ -8,8 +8,8 @@ Cargo.lock
 *.profraw
 *.profdata
 
-# Python Bindings
-python_bindings/flowsdk_ffi.py
-python_bindings/*.dylib
-python_bindings/*.so
-python_bindings/*.dll
+# Python Examples (generated files)
+python/examples/flowsdk_ffi.py
+python/examples/*.dylib
+python/examples/*.so
+python/examples/*.dll
