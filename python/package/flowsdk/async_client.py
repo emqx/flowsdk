@@ -58,24 +58,27 @@ except ImportError:
 class TransportType(Enum):
     """MQTT transport protocol types."""
     TCP = "tcp"
+    TLS = "tls"
     QUIC = "quic"
 
 
 class FlowMqttProtocol(asyncio.Protocol):
     """
-    asyncio Protocol implementation for MQTT engine.
+    asyncio Protocol implementation for MQTT engine (TCP/TLS).
     
     This class handles the network layer, manages engine ticks, and pumps
     data between the network transport and the MQTT engine.
     
     Args:
-        engine: The MQTT engine instance from flowsdk_ffi
+        engine: The MQTT engine instance
+        transport_type: The transport protocol being used
         loop: The asyncio event loop
         on_event_cb: Callback function to handle MQTT events
     """
     
-    def __init__(self, engine, loop: asyncio.AbstractEventLoop, on_event_cb: Callable):
+    def __init__(self, engine, transport_type: TransportType, loop: asyncio.AbstractEventLoop, on_event_cb: Callable):
         self.engine = engine
+        self.transport_type = transport_type
         self.loop = loop
         self.transport: Optional[asyncio.Transport] = None
         self.on_event_cb = on_event_cb
@@ -84,11 +87,12 @@ class FlowMqttProtocol(asyncio.Protocol):
         self.closed = False
 
     def connection_made(self, transport: asyncio.Transport):
-        """Called when TCP connection is established."""
+        """Called when connection is established."""
         self.transport = transport
         
         # Start the MQTT connection
-        self.engine.connect()
+        if hasattr(self.engine, 'connect'):
+            self.engine.connect()
         
         # Start the tick loop immediately
         self._schedule_tick(0)
@@ -96,14 +100,21 @@ class FlowMqttProtocol(asyncio.Protocol):
     def data_received(self, data: bytes):
         """Called when data is received from the network."""
         # Feed network data to engine
-        self.engine.handle_incoming(data)
+        if self.transport_type == TransportType.TLS:
+            self.engine.handle_socket_data(data)
+        else:
+            self.engine.handle_incoming(data)
+            
         # Trigger an immediate pump to process potential responses
         self._pump()
 
     def connection_lost(self, exc: Optional[Exception]):
         """Called when the connection is closed."""
         self.closed = True
-        self.engine.handle_connection_lost()
+        # Only TCP engine has handle_connection_lost
+        if self.transport_type == TransportType.TCP and hasattr(self.engine, 'handle_connection_lost'):
+            self.engine.handle_connection_lost()
+            
         if self._tick_handle:
             self._tick_handle.cancel()
         
@@ -129,18 +140,26 @@ class FlowMqttProtocol(asyncio.Protocol):
         self._pump()
         
         # Schedule next tick
-        next_tick_ms = self.engine.next_tick_ms()
-        if next_tick_ms < 0:
-            delay = 0.1
+        if self.transport_type == TransportType.TCP:
+            next_tick_ms = self.engine.next_tick_ms()
+            if next_tick_ms < 0:
+                delay = 0.1
+            else:
+                delay = max(0, (next_tick_ms - now_ms) / 1000.0)
         else:
-            delay = max(0, (next_tick_ms - now_ms) / 1000.0)
+            # Fixed 10ms for TLS/QUIC
+            delay = 0.01
             
         self._schedule_tick(delay)
 
     def _pump(self):
         """Pump data between engine and network."""
         # 1. Send outgoing data
-        outgoing = self.engine.take_outgoing()
+        if self.transport_type == TransportType.TLS:
+            outgoing = self.engine.take_socket_data()
+        else:
+            outgoing = self.engine.take_outgoing()
+            
         if outgoing and self.transport and not self.transport.is_closing():
             self.transport.write(outgoing)
         
@@ -225,15 +244,14 @@ class FlowMqttDatagramProtocol(asyncio.DatagramProtocol):
         
         # Run protocol tick
         now_ms = int((time.monotonic() - self.start_time) * 1000)
+        # QUIC engine handle_tick returns events
         events = self.engine.handle_tick(now_ms)
-        
-        # Process tick events (QUIC returns events directly from handle_tick)
         for ev in events:
             self.on_event_cb(ev)
         
         self._pump()
         
-        # Fixed 10ms interval for QUIC responsiveness
+        # Fixed 10ms interval for QUIC
         delay = 0.01
         self._schedule_tick(delay)
 
@@ -306,10 +324,14 @@ class FlowMqttClient:
         max_reconnect_attempts: int = 0,
         on_message: Optional[Callable[[str, bytes, int], None]] = None,
         ca_cert_file: Optional[str] = None,
+        client_cert_file: Optional[str] = None,
+        client_key_file: Optional[str] = None,
         insecure_skip_verify: bool = False,
-        alpn_protocols: Optional[List[str]] = None
+        alpn_protocols: Optional[List[str]] = None,
+        server_name: Optional[str] = None
     ):
         self.transport_type = transport
+        self.server_name = server_name
         self.opts = flowsdk_ffi.MqttOptionsFfi(
             client_id=client_id,
             mqtt_version=mqtt_version,
@@ -322,20 +344,24 @@ class FlowMqttClient:
             max_reconnect_attempts=max_reconnect_attempts
         )
         
+        # Common TLS/QUIC options
+        self.tls_opts = flowsdk_ffi.MqttTlsOptionsFfi(
+            ca_cert_file=ca_cert_file,
+            client_cert_file=client_cert_file,
+            client_key_file=client_key_file,
+            insecure_skip_verify=insecure_skip_verify,
+            alpn_protocols=alpn_protocols or ["mqtt"]
+        )
+        
         # Create appropriate engine based on transport type
         if transport == TransportType.TCP:
             self.engine = flowsdk_ffi.MqttEngineFfi.new_with_opts(self.opts)
+        elif transport == TransportType.TLS:
+            if not server_name:
+                raise ValueError("server_name (SNI) is required for TLS transport")
+            self.engine = flowsdk_ffi.TlsMqttEngineFfi(self.opts, self.tls_opts, server_name)
         elif transport == TransportType.QUIC:
-            # Build QUIC TLS options
-            tls_opts = flowsdk_ffi.MqttTlsOptionsFfi(
-                ca_cert_file=ca_cert_file,
-                client_cert_file=None,
-                client_key_file=None,
-                insecure_skip_verify=insecure_skip_verify,
-                alpn_protocols=alpn_protocols or ["mqtt"]
-            )
             self.engine = flowsdk_ffi.QuicMqttEngineFfi(self.opts)
-            self.quic_tls_opts = tls_opts
         else:
             raise ValueError(f"Unsupported transport type: {transport}")
         
@@ -363,10 +389,10 @@ class FlowMqttClient:
         loop = asyncio.get_running_loop()
         self._connect_future = loop.create_future()
         
-        if self.transport_type == TransportType.TCP:
-            # TCP connection using FlowMqttProtocol
+        if self.transport_type in (TransportType.TCP, TransportType.TLS):
+            # Stream-based connection (TCP or TLS)
             transport, protocol = await loop.create_connection(
-                lambda: FlowMqttProtocol(self.engine, loop, self._on_event),
+                lambda: FlowMqttProtocol(self.engine, self.transport_type, loop, self._on_event),
                 host, port
             )
             self.protocol = protocol
@@ -397,7 +423,7 @@ class FlowMqttClient:
             
             # Initiate QUIC connection with required parameters
             now_ms = int((time.monotonic() - protocol.start_time) * 1000)
-            self.engine.connect(server_addr, server_name, self.quic_tls_opts, now_ms)
+            self.engine.connect(server_addr, server_name, self.tls_opts, now_ms)
         
         # Wait for actual MQTT connection
         await self._connect_future
@@ -483,10 +509,11 @@ class FlowMqttClient:
         
         # Handle different engine publish signatures
         if self.transport_type == TransportType.TCP:
-            # TCP engine takes 4 args: topic, payload, qos, retain
-            pid = self.engine.publish(topic, payload, qos, retain)
-        elif self.transport_type == TransportType.QUIC:
-            # QUIC engine takes 3 args: topic, payload, qos
+            # TCP engine takes 4 args: topic, payload, qos, priority
+            # Note: priority is currently passed as None as it's not exposed in high-level API yet
+            pid = self.engine.publish(topic, payload, qos, None)
+        else:
+            # TLS and QUIC engines take 3 args: topic, payload, qos
             pid = self.engine.publish(topic, payload, qos)
         
         if qos > 0:
