@@ -4,6 +4,8 @@ Example demonstrating the high-level FlowMqttClient for asyncio applications.
 This example shows how to use the FlowMqttClient class from the flowsdk package
 to easily connect, subscribe, publish, and disconnect from an MQTT broker using
 async/await syntax.
+
+@TODO: Add more features here
 """
 
 import asyncio
@@ -27,8 +29,10 @@ async def main():
     
     try:
         # Connect to broker
-        print(f"Connecting to broker.emqx.io:1883...")
-        await client.connect("broker.emqx.io", 1883)
+        host = "broker.emqx.io"
+        port = 1883
+        print(f"Connecting to {host}:{port}...")
+        await client.connect(host, port)
         print("✅ Connected!")
         
         # Subscribe and wait for ack

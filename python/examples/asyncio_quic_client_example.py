@@ -2,12 +2,18 @@
 Example demonstrating MQTT over QUIC using flowsdk-ffi with asyncio.
 
 QUIC provides a modern UDP-based transport with built-in encryption and multiplexing.
-This example shows how to use the unified FlowMqttClient with QUIC transport.
+This example shows how to use the FlowMqttClient with QUIC transport.
 
 Note: Requires a QUIC-enabled MQTT broker (e.g., EMQX with QUIC support).
 """
 
 import asyncio
+import os
+import sys
+
+# Add the package to path
+sys.path.append(os.path.join("python", "package"))
+
 from flowsdk import FlowMqttClient, TransportType
 
 
@@ -31,8 +37,10 @@ async def main():
     
     try:
         # Connect to broker using QUIC
-        print("🔌 Connecting to broker.emqx.io:14567 via QUIC...")
-        await client.connect("broker.emqx.io", 14567, server_name="broker.emqx.io")
+        host = "broker.emqx.io"
+        port = 14567
+        print(f"🔌 Connecting to {host}:{port} via QUIC...")
+        await client.connect(host, port, server_name="broker.emqx.io")
         print("✅ Connected!")
         
         # Subscribe to a test topic
