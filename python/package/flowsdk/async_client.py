@@ -1,5 +1,5 @@
 """
-A production-ready async MQTT client implementation using flowsdk-ffi with asyncio.
+async MQTT client implementation using flowsdk-ffi with asyncio.
 
 This module provides an asyncio-based MQTT client that wraps the flowsdk_ffi
 library, providing async/await support for MQTT operations. It implements a
@@ -9,6 +9,7 @@ pumping of the MQTT engine.
 Supports multiple transports:
     - TCP: Standard MQTT over TCP (default)
     - QUIC: MQTT over QUIC protocol (UDP-based, built-in encryption)
+    - TLS: MQTT over TLS (encrypted TCP)
 
 Classes:
     TransportType: Enum for selecting MQTT transport protocol
