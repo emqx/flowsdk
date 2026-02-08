@@ -1,6 +1,4 @@
 import flowsdk_ffi
-import time
-import json
 
 def test_mqtt_engine():
     print("--- Testing Standard MqttEngineFfi ---")

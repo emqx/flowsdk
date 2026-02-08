@@ -2,7 +2,7 @@
 import asyncio
 import flowsdk
 import time
-import sys
+
 from flowsdk import FlowMqttClient, TransportType, MqttOptionsFfi, MqttEngineFfi
 
 async def main():
@@ -21,7 +21,6 @@ async def main():
         password=None,
         reconnect_base_delay_ms=1000,
         reconnect_max_delay_ms=30000,
-        max_reconnect_attempts=0
     )
     engine = MqttEngineFfi.new_with_opts(opts)
     print(f"✅ Created MqttEngineFfi (Client ID: {client_id})")
@@ -43,7 +42,7 @@ async def main():
     
     # 4. Main orchestration loop
     try:
-        # Run for 15 seconds
+        # Run for 15 sconds
         start_time = time.monotonic()
         end_time = start_time + 15
         

@@ -112,7 +112,7 @@ class FlowMqttProtocol(asyncio.Protocol):
             self.engine.handle_incoming(data)
             
         # Trigger an immediate pump to process potential responses
-        self._pump()
+        self.pump()
 
     def connection_lost(self, exc: Optional[Exception]):
         """Called when the connection is closed."""
@@ -143,7 +143,7 @@ class FlowMqttProtocol(asyncio.Protocol):
         now_ms = int((time.monotonic() - self.start_time) * 1000)
         self.engine.handle_tick(now_ms)
         
-        self._pump()
+        self.pump()
         
         # Schedule next tick
         if self.transport_type == TransportType.TCP:
@@ -158,7 +158,7 @@ class FlowMqttProtocol(asyncio.Protocol):
             
         self._schedule_tick(delay)
 
-    def _pump(self):
+    def pump(self):
         """Pump data between engine and network."""
         # 1. Send outgoing data
         if self.transport_type == TransportType.TLS:
@@ -220,7 +220,7 @@ class FlowMqttDatagramProtocol(asyncio.DatagramProtocol):
         addr_str = f"{addr[0]}:{addr[1]}"
         self.engine.handle_datagram(data, addr_str, now_ms)
         # Trigger an immediate pump to process responses
-        self._pump()
+        self.pump()
 
     def error_received(self, exc: Exception):
         """Called when an error is received."""
@@ -254,13 +254,13 @@ class FlowMqttDatagramProtocol(asyncio.DatagramProtocol):
         for ev in events:
             self.on_event_cb(ev)
         
-        self._pump()
+        self.pump()
         
         # Fixed 10ms interval for QUIC
         delay = 0.01
         self._schedule_tick(delay)
 
-    def _pump(self):
+    def pump(self):
         """Pump data between engine and network."""
         # 1. Send outgoing datagrams
         datagrams = self.engine.take_outgoing_datagrams()
@@ -471,7 +471,7 @@ class FlowMqttClient:
         self._pending_subscribe[pid] = fut
         
         # Force a pump to send the packet immediately
-        self.protocol._pump()
+        self.protocol.pump()
         
         await fut
         return pid
@@ -498,7 +498,7 @@ class FlowMqttClient:
         self._pending_unsubscribe[pid] = fut
         
         # Force a pump to send the packet immediately
-        self.protocol._pump()
+        self.protocol.pump()
         
         await fut
         return pid
@@ -541,15 +541,25 @@ class FlowMqttClient:
             self._pending_publish[pid] = fut
             
             # Force a pump to send the packet immediately
-            self.protocol._pump()
+            self.protocol.pump()
             
             await fut
         else:
             # QoS 0: just send immediately, no ack needed
-            self.protocol._pump()
+            self.protocol.pump()
             
         return pid
     
+    def pump(self):
+        """
+        Force data transmission and process pending events.
+        
+        This can be useful if the automatic tick loop is not running or if
+        you want to ensure data is sent immediately.
+        """
+        if self.protocol:
+            self.protocol.pump()
+
     async def disconnect(self):
         """
         Disconnect from the broker gracefully.
@@ -558,7 +568,7 @@ class FlowMqttClient:
             return
             
         self.engine.disconnect()
-        self.protocol._pump()  # Flush DISCONNECT packet
+        self.protocol.pump()  # Flush DISCONNECT packet
         
         if self.protocol.transport:
             self.protocol.transport.close()

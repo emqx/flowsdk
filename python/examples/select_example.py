@@ -2,7 +2,6 @@ import socket
 import selectors
 import time
 import flowsdk
-import sys
 
 def main():
     """
