@@ -1,7 +1,7 @@
 import socket
 import selectors
 import time
-import flowsdk_ffi
+import flowsdk
 import sys
 
 def main():
@@ -33,7 +33,7 @@ def main():
 
     # 1. Create the engine
     client_id = f"python_select_no_io_{int(time.time() % 10000)}"
-    opts = flowsdk_ffi.MqttOptionsFfi(
+    opts = flowsdk.MqttOptionsFfi(
         client_id=client_id,
         mqtt_version=5,
         clean_start=True,
@@ -44,7 +44,7 @@ def main():
         reconnect_max_delay_ms=30000,
         max_reconnect_attempts=0
     )
-    engine = flowsdk_ffi.MqttEngineFfi.new_with_opts(opts)
+    engine = flowsdk.MqttEngineFfi.new_with_opts(opts)
     print(f"✅ Created MqttEngineFfi (Client ID: {client_id})")
 
     # 2. Establish TCP connection
