@@ -45,6 +45,7 @@ Example (QUIC):
 """
 
 import asyncio
+import logging
 import socket
 import time
 from enum import Enum
@@ -54,6 +55,10 @@ try:
     from . import flowsdk_ffi
 except ImportError:
     import flowsdk_ffi
+
+
+logger = logging.getLogger(__name__)
+logger.addHandler(logging.NullHandler())
 
 
 class TransportType(Enum):
@@ -196,11 +201,10 @@ class FlowMqttDatagramProtocol(asyncio.DatagramProtocol):
     def connection_made(self, transport: asyncio.DatagramTransport):
         """Called when UDP socket is ready."""
         self.transport = transport
-        # Get the remote address from the transport
         try:
             self.remote_addr = transport.get_extra_info('peername')
         except Exception:
-            pass
+            logger.debug("Could not get peername from transport", exc_info=True)
         
         # Don't call engine.connect() here - QUIC requires parameters
         # Connection will be initiated from FlowMqttClient.connect()
@@ -375,7 +379,7 @@ class FlowMqttClient:
         self._pending_subscribe: Dict[int, asyncio.Future] = {}
         self._pending_unsubscribe: Dict[int, asyncio.Future] = {}
 
-    async def connect(self, host: str, port: int, server_name: Optional[str] = None):
+    async def connect(self, host: str, port: int, server_name: Optional[str] = None, timeout: float = 10.0):
         """
         Connect to MQTT broker.
         
@@ -383,51 +387,66 @@ class FlowMqttClient:
             host: Broker hostname or IP address
             port: Broker port number
             server_name: Server name for TLS SNI (required for QUIC)
+            timeout: Connection timeout in seconds (default: 10.0)
             
         Raises:
             ConnectionError: If connection fails
+            asyncio.TimeoutError: If connection times out
         """
         loop = asyncio.get_running_loop()
         self._connect_future = loop.create_future()
         
-        if self.transport_type in (TransportType.TCP, TransportType.TLS):
-            # Stream-based connection (TCP or TLS)
-            transport, protocol = await loop.create_connection(
-                lambda: FlowMqttProtocol(self.engine, self.transport_type, loop, self._on_event),
-                host, port
-            )
-            self.protocol = protocol
+        async def _do_connect():
+            if self.transport_type in (TransportType.TCP, TransportType.TLS):
+                # Stream-based connection (TCP or TLS)
+                transport, protocol = await loop.create_connection(
+                    lambda: FlowMqttProtocol(self.engine, self.transport_type, loop, self._on_event),
+                    host, port
+                )
+                self.protocol = protocol
+                
+            elif self.transport_type == TransportType.QUIC:
+                # QUIC connection using FlowMqttDatagramProtocol
+                if not server_name:
+                    _server_name = host  # Default to host if not specified
+                else:
+                    _server_name = server_name
+                
+                # Resolve hostname to IP address for QUIC
+                addr_info = await loop.getaddrinfo(
+                    host, port,
+                    family=socket.AF_INET,
+                    type=socket.SOCK_DGRAM
+                )
+                if not addr_info:
+                    raise ConnectionError(f"Could not resolve {host}")
+                
+                server_addr = f"{addr_info[0][4][0]}:{port}"
+                
+                # Create UDP socket and protocol
+                transport, protocol = await loop.create_datagram_endpoint(
+                    lambda: FlowMqttDatagramProtocol(self.engine, loop, self._on_event),
+                    remote_addr=addr_info[0][4]
+                )
+                self.protocol = protocol
+                protocol.remote_addr = addr_info[0][4]
+                
+                # Initiate QUIC connection with required parameters
+                now_ms = int((time.monotonic() - protocol.start_time) * 1000)
+                self.engine.connect(server_addr, _server_name, self.tls_opts, now_ms)
             
-        elif self.transport_type == TransportType.QUIC:
-            # QUIC connection using FlowMqttDatagramProtocol
-            if not server_name:
-                server_name = host  # Default to host if not specified
-            
-            # Resolve hostname to IP address for QUIC
-            addr_info = socket.getaddrinfo(
-                host, port,
-                family=socket.AF_INET,
-                type=socket.SOCK_DGRAM
-            )
-            if not addr_info:
-                raise ConnectionError(f"Could not resolve {host}")
-            
-            server_addr = f"{addr_info[0][4][0]}:{port}"
-            
-            # Create UDP socket and protocol
-            transport, protocol = await loop.create_datagram_endpoint(
-                lambda: FlowMqttDatagramProtocol(self.engine, loop, self._on_event),
-                remote_addr=addr_info[0][4]
-            )
-            self.protocol = protocol
-            protocol.remote_addr = addr_info[0][4]
-            
-            # Initiate QUIC connection with required parameters
-            now_ms = int((time.monotonic() - protocol.start_time) * 1000)
-            self.engine.connect(server_addr, server_name, self.tls_opts, now_ms)
-        
-        # Wait for actual MQTT connection
-        await self._connect_future
+            # Wait for actual MQTT connection
+            if self._connect_future:
+                await self._connect_future
+
+        try:
+            await asyncio.wait_for(_do_connect(), timeout=timeout)
+        except Exception:
+            # Clean up on failure
+            self.protocol = None
+            if self._connect_future and not self._connect_future.done():
+                self._connect_future.cancel()
+            raise
 
     async def subscribe(self, topic: str, qos: int = 0) -> int:
         """
@@ -580,8 +599,14 @@ class FlowMqttClient:
             if self.on_message:
                 self.on_message(msg.topic, msg.payload, msg.qos)
             
+        elif ev.is_error():
+            if self._connect_future and not self._connect_future.done():
+                self._connect_future.set_exception(ConnectionError(f"MQTT connection error: {ev.message}"))
+            logger.error(f"MQTT Error: {ev.message}")
+
         elif ev.is_disconnected():
-            pass
+            if self._connect_future and not self._connect_future.done():
+                self._connect_future.set_exception(ConnectionError("MQTT disconnected during connection process"))
 
 
-__all__ = ['FlowMqttClient', 'FlowMqttProtocol']
+__all__ = ['FlowMqttClient', 'FlowMqttProtocol','TransportType', 'FlowMqttDatagramProtocol']
