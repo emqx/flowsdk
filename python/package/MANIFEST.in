@@ -1,3 +1,4 @@
 include flowsdk/*.dylib
 include flowsdk/*.so
 include flowsdk/*.dll
+include README.md
