@@ -6,14 +6,7 @@ This example shows how to use the FlowMqttClient with QUIC transport.
 
 Note: Requires a QUIC-enabled MQTT broker (e.g., EMQX with QUIC support).
 """
-
 import asyncio
-import os
-import sys
-
-# Add the package to path
-sys.path.append(os.path.join("python", "package"))
-
 from flowsdk import FlowMqttClient, TransportType
 
 

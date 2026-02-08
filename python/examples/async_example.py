@@ -1,8 +1,9 @@
 
 import asyncio
-import flowsdk_ffi
+import flowsdk
 import time
 import sys
+from flowsdk import FlowMqttClient, TransportType, MqttOptionsFfi, MqttEngineFfi
 
 async def main():
     print("🚀 FlowSDK No-IO Async Example")
@@ -11,7 +12,7 @@ async def main():
     # 1. Create the engine
     import random
     client_id = f"python_async_no_io_{random.randint(1000, 9999)}"
-    opts = flowsdk_ffi.MqttOptionsFfi(
+    opts = MqttOptionsFfi(
         client_id=client_id,
         mqtt_version=5,
         clean_start=True,
@@ -22,7 +23,7 @@ async def main():
         reconnect_max_delay_ms=30000,
         max_reconnect_attempts=0
     )
-    engine = flowsdk_ffi.MqttEngineFfi.new_with_opts(opts)
+    engine = MqttEngineFfi.new_with_opts(opts)
     print(f"✅ Created MqttEngineFfi (Client ID: {client_id})")
 
     # 2. Establish TCP connection using asyncio
