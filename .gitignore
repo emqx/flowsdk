@@ -12,6 +12,8 @@ Cargo.lock
 # FFI generated code
 python/package/flowsdk/flowsdk_ffi.py
 python/package/flowsdk/libflowsdk_ffi.dylib
+python/package/flowsdk/libflowsdk_ffi.so
+python/package/flowsdk/libflowsdk_ffi.dll
 
 # Python Examples (generated files)
 python/examples/flowsdk_ffi.py
