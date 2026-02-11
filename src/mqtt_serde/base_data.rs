@@ -95,12 +95,11 @@ impl VariableByteInteger {
         }
 
         // MQTT 5.0 Protocol Compliance: Check for non-minimal VBI encoding
+        // Optimized check: A VBI is non-minimal if it has more than one byte and
+        // the last byte (where MSB=0) is zero (e.g., [0x80, 0x00]).
         #[cfg(feature = "strict-protocol-compliance")]
         {
-            // A VBI encoding is non-minimal if it could be represented with fewer bytes
-            // This happens when there are unnecessary continuation bytes
-            let minimal_encoded = VariableByteInteger::encode(value as u32);
-            if minimal_encoded.len() != i {
+            if i > 1 && buffer[i - 1] == 0 {
                 return Err(ParseError::ParseError(
                     "Variable Byte Integer encoding is not minimal".to_string(),
                 ));
