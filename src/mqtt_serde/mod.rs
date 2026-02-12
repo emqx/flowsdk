@@ -83,20 +83,25 @@ pub(crate) fn validate_topic_filter(topic_filter: &str) -> Result<(), ParseError
     }
 
     // Split into levels for wildcard validation
-    let levels: Vec<&str> = topic_filter.split('/').collect();
+    let mut levels = topic_filter.split('/');
 
-    for (i, level) in levels.iter().enumerate() {
+    // We need to peek to know if it's the last level
+    let mut current_level = levels.next();
+    while let Some(level) = current_level {
+        let next_level = levels.next();
+        let is_last = next_level.is_none();
+
         // Multi-level wildcard (#) validation
         if level.contains('#') {
             // # must be the only character in the level
-            if *level != "#" {
+            if level != "#" {
                 return Err(ParseError::ParseError(
                     "Multi-level wildcard (#) must be the only character in topic level"
                         .to_string(),
                 ));
             }
             // # must be the last level
-            if i != levels.len() - 1 {
+            if !is_last {
                 return Err(ParseError::ParseError(
                     "Multi-level wildcard (#) must be the last level in topic filter".to_string(),
                 ));
@@ -106,13 +111,15 @@ pub(crate) fn validate_topic_filter(topic_filter: &str) -> Result<(), ParseError
         // Single-level wildcard (+) validation
         if level.contains('+') {
             // + must be the only character in the level
-            if *level != "+" {
+            if level != "+" {
                 return Err(ParseError::ParseError(
                     "Single-level wildcard (+) must be the only character in topic level"
                         .to_string(),
                 ));
             }
         }
+
+        current_level = next_level;
     }
 
     Ok(())
@@ -123,16 +130,20 @@ pub(crate) fn validate_topic_filter(topic_filter: &str) -> Result<(), ParseError
 pub(crate) fn validate_shared_subscription(topic_filter: &str) -> Result<(), ParseError> {
     if topic_filter.starts_with("$share/") {
         // Extract share name and topic filter
-        let parts: Vec<&str> = topic_filter.splitn(3, '/').collect();
-        if parts.len() < 3 {
-            return Err(ParseError::ParseError(
+        let mut parts = topic_filter.splitn(3, '/');
+        let _dollar_share = parts.next(); // "$share"
+        let share_name = parts.next().ok_or_else(|| {
+            ParseError::ParseError(
                 "Invalid shared subscription format: must be $share/ShareName/TopicFilter"
                     .to_string(),
-            ));
-        }
-
-        let share_name = parts[1];
-        let actual_topic_filter = parts[2];
+            )
+        })?;
+        let actual_topic_filter = parts.next().ok_or_else(|| {
+            ParseError::ParseError(
+                "Invalid shared subscription format: must be $share/ShareName/TopicFilter"
+                    .to_string(),
+            )
+        })?;
 
         if share_name.is_empty() {
             return Err(ParseError::ParseError(
