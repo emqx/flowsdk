@@ -90,7 +90,7 @@ impl MqttControlPacket for MqttPublish {
         // If QoS > 0, we need a packet identifier
         if self.qos > 0 {
             if let Some(packet_id) = self.packet_id {
-                bytes.extend(packet_id.to_be_bytes());
+                bytes.extend_from_slice(&packet_id.to_be_bytes());
             } else {
                 // @TODO need a parse error for that
                 return Err(ParseError::ParseError(
@@ -105,6 +105,21 @@ impl MqttControlPacket for MqttPublish {
 
     fn payload(&self) -> Result<Vec<u8>, parser::ParseError> {
         Ok(self.payload.clone())
+    }
+
+    fn encode_to_buffer(&self, bytes: &mut Vec<u8>) -> Result<(), ParseError> {
+        // We pre-calculate lengths to avoid multiple allocations
+        // This is a trade-off: we still call variable_header() and payload(),
+        // but we can optimize encode_to_buffer further later if needed.
+        // For now, let's at least avoid the clone in Default implementation of encode_to_buffer
+
+        let vhdr = self.variable_header()?;
+        let remaining_length = vhdr.len() + self.payload.len();
+
+        bytes.extend(self.fixed_header(remaining_length));
+        bytes.extend(vhdr);
+        bytes.extend_from_slice(&self.payload);
+        Ok(())
     }
 
     fn from_bytes(buffer: &[u8]) -> Result<ParseOk, ParseError> {
@@ -208,6 +223,18 @@ impl MqttControlPacket for MqttPublish {
         };
 
         Ok(ParseOk::Packet(MqttPacket::Publish5(publish), offset))
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, ParseError> {
+        let vhdr = self.variable_header()?;
+        let remaining_length = vhdr.len() + self.payload.len();
+        let fixed_hdr = self.fixed_header(remaining_length);
+
+        let mut bytes = Vec::with_capacity(fixed_hdr.len() + remaining_length);
+        bytes.extend(fixed_hdr);
+        bytes.extend(vhdr);
+        bytes.extend_from_slice(&self.payload);
+        Ok(bytes)
     }
 }
 

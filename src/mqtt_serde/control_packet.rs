@@ -222,14 +222,27 @@ pub trait MqttControlPacket {
     // decoder
     fn from_bytes(buffer: &[u8]) -> Result<ParseOk, ParseError>;
 
-    // encoder
-    fn to_bytes(&self) -> Result<Vec<u8>, ParseError> {
-        let mut bytes = Vec::new();
-
+    // encoder to existing buffer
+    fn encode_to_buffer(&self, bytes: &mut Vec<u8>) -> Result<(), ParseError> {
         let vhdr = self.variable_header()?;
         let payload = self.payload()?;
         let remaining_length = vhdr.len() + payload.len();
         bytes.extend(self.fixed_header(remaining_length));
+        bytes.extend(vhdr);
+        bytes.extend(payload);
+        Ok(())
+    }
+
+    // encoder
+    fn to_bytes(&self) -> Result<Vec<u8>, ParseError> {
+        let vhdr = self.variable_header()?;
+        let payload = self.payload()?;
+        let remaining_length = vhdr.len() + payload.len();
+        let fixed_hdr = self.fixed_header(remaining_length);
+
+        // Pre-allocate the entire packet size to avoid intermediate reallocations
+        let mut bytes = Vec::with_capacity(fixed_hdr.len() + remaining_length);
+        bytes.extend(fixed_hdr);
         bytes.extend(vhdr);
         bytes.extend(payload);
         Ok(bytes)

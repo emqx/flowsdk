@@ -71,8 +71,7 @@ pub enum Property {
 }
 
 impl Property {
-    fn encode(&self) -> Result<Vec<u8>, parser::ParseError> {
-        let mut bytes = Vec::new();
+    fn encode(&self, bytes: &mut Vec<u8>) -> Result<(), parser::ParseError> {
         match self {
             Property::PayloadFormatIndicator(val) => {
                 bytes.push(property_id(PropertyID::PayloadFormatIndicator));
@@ -80,7 +79,7 @@ impl Property {
             }
             Property::MessageExpiryInterval(val) => {
                 bytes.push(property_id(PropertyID::MessageExpiryInterval));
-                bytes.extend(val.to_be_bytes());
+                bytes.extend_from_slice(&val.to_be_bytes());
             }
             Property::ContentType(val) => {
                 bytes.push(property_id(PropertyID::ContentType));
@@ -100,7 +99,7 @@ impl Property {
             }
             Property::SessionExpiryInterval(val) => {
                 bytes.push(property_id(PropertyID::SessionExpiryInterval));
-                bytes.extend(val.to_be_bytes());
+                bytes.extend_from_slice(&val.to_be_bytes());
             }
             Property::AssignedClientIdentifier(val) => {
                 bytes.push(property_id(PropertyID::AssignedClientIdentifier));
@@ -108,7 +107,7 @@ impl Property {
             }
             Property::ServerKeepAlive(val) => {
                 bytes.push(property_id(PropertyID::ServerKeepAlive));
-                bytes.extend(val.to_be_bytes());
+                bytes.extend_from_slice(&val.to_be_bytes());
             }
             Property::AuthenticationMethod(val) => {
                 bytes.push(property_id(PropertyID::AuthenticationMethod));
@@ -124,7 +123,7 @@ impl Property {
             }
             Property::WillDelayInterval(val) => {
                 bytes.push(property_id(PropertyID::WillDelayInterval));
-                bytes.extend(val.to_be_bytes());
+                bytes.extend_from_slice(&val.to_be_bytes());
             }
             Property::RequestResponseInformation(val) => {
                 bytes.push(property_id(PropertyID::RequestResponseInformation));
@@ -144,15 +143,15 @@ impl Property {
             }
             Property::ReceiveMaximum(val) => {
                 bytes.push(property_id(PropertyID::ReceiveMaximum));
-                bytes.extend(val.to_be_bytes());
+                bytes.extend_from_slice(&val.to_be_bytes());
             }
             Property::TopicAliasMaximum(val) => {
                 bytes.push(property_id(PropertyID::TopicAliasMaximum));
-                bytes.extend(val.to_be_bytes());
+                bytes.extend_from_slice(&val.to_be_bytes());
             }
             Property::TopicAlias(val) => {
                 bytes.push(property_id(PropertyID::TopicAlias));
-                bytes.extend(val.to_be_bytes());
+                bytes.extend_from_slice(&val.to_be_bytes());
             }
             Property::MaximumQoS(val) => {
                 bytes.push(property_id(PropertyID::MaximumQoS));
@@ -169,7 +168,7 @@ impl Property {
             }
             Property::MaximumPacketSize(val) => {
                 bytes.push(property_id(PropertyID::MaximumPacketSize));
-                bytes.extend(val.to_be_bytes());
+                bytes.extend_from_slice(&val.to_be_bytes());
             }
             Property::WildcardSubscriptionAvailable(val) => {
                 bytes.push(property_id(PropertyID::WildcardSubscriptionAvailable));
@@ -184,7 +183,7 @@ impl Property {
                 bytes.push(*val);
             }
         }
-        Ok(bytes)
+        Ok(())
     }
 }
 
@@ -194,20 +193,22 @@ fn property_id(property: PropertyID) -> u8 {
 }
 
 pub fn encode_properities_hdr(properties: &Vec<Property>) -> Result<Vec<u8>, parser::ParseError> {
-    let props = encode_properities(properties)?;
-    let len = encode_variable_length(props.len());
+    let mut props = Vec::new();
+    encode_properities(properties, &mut props)?;
     let mut bytes = Vec::new();
-    bytes.extend(len);
+    bytes.extend(encode_variable_length(props.len()));
     bytes.extend(props);
     Ok(bytes)
 }
 
-fn encode_properities(properties: &Vec<Property>) -> Result<Vec<u8>, parser::ParseError> {
-    let mut bytes = Vec::new();
+fn encode_properities(
+    properties: &Vec<Property>,
+    bytes: &mut Vec<u8>,
+) -> Result<(), parser::ParseError> {
     for p in properties {
-        bytes.extend(p.encode()?);
+        p.encode(bytes)?;
     }
-    Ok(bytes)
+    Ok(())
 }
 
 pub fn parse_properties_hdr(buffer: &[u8]) -> Result<(Vec<Property>, usize), ParseError> {
@@ -471,7 +472,8 @@ mod tests {
     #[test]
     fn test_encode_property() {
         let prop = Property::PayloadFormatIndicator(1);
-        let bytes = prop.encode().unwrap();
+        let mut bytes = Vec::new();
+        prop.encode(&mut bytes).unwrap();
         assert_eq!(bytes, vec![0x01, 0x01]);
     }
 
