@@ -6,6 +6,7 @@ pub mod connect;
 
 pub mod auth;
 pub mod disconnect;
+pub(crate) mod packet_id_ack;
 pub mod pingreq;
 pub mod pingresp;
 pub mod puback;
