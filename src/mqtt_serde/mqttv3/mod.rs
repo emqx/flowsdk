@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+pub(crate) mod packet_id_ack;
+
 pub mod connack;
 pub mod connect;
 pub mod disconnect;
