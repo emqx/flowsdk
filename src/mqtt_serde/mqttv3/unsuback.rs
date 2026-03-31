@@ -1,83 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use serde::{Deserialize, Serialize};
+use crate::mqtt_serde::mqttv3::packet_id_ack::v3_packet_id_ack;
 
-use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
-use crate::mqtt_serde::parser::{packet_type, parse_remaining_length, ParseError, ParseOk};
-
-/// Represents the UNSUBACK packet in MQTT v3.1.1.
-///
-/// The UNSUBACK packet is sent by the Server to the Client to confirm receipt and processing
-/// of an UNSUBSCRIBE packet.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct MqttUnsubAck {
-    /// The Packet Identifier from the UNSUBSCRIBE packet that is being acknowledged.
-    pub message_id: u16,
-}
-
-impl MqttUnsubAck {
-    /// Creates a new `MqttUnsubAck` packet.
-    pub fn new(message_id: u16) -> Self {
-        Self { message_id }
-    }
-}
-
-impl MqttControlPacket for MqttUnsubAck {
-    fn control_packet_type(&self) -> u8 {
-        ControlPacketType::UNSUBACK as u8
-    }
-
-    fn variable_header(&self) -> Result<Vec<u8>, ParseError> {
-        Ok(self.message_id.to_be_bytes().to_vec())
-    }
-
-    fn payload(&self) -> Result<Vec<u8>, ParseError> {
-        // MQTT v3.1.1 UNSUBACK has no payload
-        Ok(Vec::new())
-    }
-
-    fn from_bytes(buffer: &[u8]) -> Result<ParseOk, ParseError> {
-        let packet_type = packet_type(buffer)?;
-        if packet_type != ControlPacketType::UNSUBACK as u8 {
-            return Err(ParseError::InvalidPacketType);
-        }
-
-        // Bits 3,2,1,0 of fixed header MUST be 0.
-        let flags = buffer[0] & 0x0F;
-        if flags != 0x00 {
-            return Err(ParseError::ParseError(
-                "UNSUBACK packet has invalid fixed header flags".to_string(),
-            ));
-        }
-
-        let (size, vbi_len) = parse_remaining_length(&buffer[1..])?;
-        let offset = 1 + vbi_len;
-        let total_len = offset + size;
-
-        if total_len > buffer.len() {
-            return Ok(ParseOk::Continue(total_len - buffer.len(), 0));
-        }
-
-        // Variable Header: Packet Identifier (2 bytes)
-        if size != 2 {
-            return Err(ParseError::ParseError(
-                "MQTT v3.1.1 UNSUBACK packet must have remaining length of 2".to_string(),
-            ));
-        }
-
-        let message_id = u16::from_be_bytes([buffer[offset], buffer[offset + 1]]);
-
-        Ok(ParseOk::Packet(
-            MqttPacket::UnsubAck3(MqttUnsubAck::new(message_id)),
-            total_len,
-        ))
-    }
-}
+v3_packet_id_ack!(MqttUnsubAck, UNSUBACK, 0x00, "UNSUBACK", UnsubAck3);
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::MqttUnsubAck;
+    use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
+    use crate::mqtt_serde::parser::{ParseError, ParseOk};
 
     #[test]
     fn test_unsuback_new() {

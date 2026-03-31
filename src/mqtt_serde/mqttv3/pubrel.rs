@@ -1,87 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use serde::{Deserialize, Serialize};
+use crate::mqtt_serde::mqttv3::packet_id_ack::v3_packet_id_ack;
 
-use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
-use crate::mqtt_serde::parser::{packet_type, parse_remaining_length, ParseError, ParseOk};
-
-/// Represents the PUBREL packet in MQTT v3.1.1.
-///
-/// The PUBREL packet is the response to a PUBREC packet. It is the third packet
-/// of the QoS 2 protocol exchange.
-#[derive(Debug, PartialEq, Eq, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct MqttPubRel {
-    /// The Packet Identifier from the PUBREC packet that is being acknowledged.
-    pub message_id: u16,
-}
-
-impl MqttPubRel {
-    /// Creates a new `MqttPubRel` packet.
-    pub fn new(message_id: u16) -> Self {
-        Self { message_id }
-    }
-}
-
-impl MqttControlPacket for MqttPubRel {
-    fn control_packet_type(&self) -> u8 {
-        ControlPacketType::PUBREL as u8
-    }
-
-    fn flags(&self) -> u8 {
-        // For PUBREL, bits 3,2,1,0 MUST be 0,0,1,0
-        0x02
-    }
-
-    fn variable_header(&self) -> Result<Vec<u8>, ParseError> {
-        Ok(self.message_id.to_be_bytes().to_vec())
-    }
-
-    fn payload(&self) -> Result<Vec<u8>, ParseError> {
-        // PUBREL has no payload.
-        Ok(Vec::new())
-    }
-
-    fn from_bytes(buffer: &[u8]) -> Result<ParseOk, ParseError> {
-        let packet_type = packet_type(buffer)?;
-        if packet_type != ControlPacketType::PUBREL as u8 {
-            return Err(ParseError::InvalidPacketType);
-        }
-
-        // For PUBREL, bits 3,2,1,0 of fixed header MUST be 0,0,1,0.
-        let flags = buffer[0] & 0x0F;
-        if flags != 0x02 {
-            return Err(ParseError::ParseError(
-                "PUBREL packet has invalid fixed header flags".to_string(),
-            ));
-        }
-
-        let (size, vbi_len) = parse_remaining_length(&buffer[1..])?;
-        let total_len = 1 + vbi_len + size;
-
-        if total_len > buffer.len() {
-            return Ok(ParseOk::Continue(total_len - buffer.len(), 0));
-        }
-
-        // Remaining Length MUST be 2.
-        if size != 2 {
-            return Err(ParseError::ParseError(
-                "PUBREL packet must have a remaining length of 2".to_string(),
-            ));
-        }
-
-        let message_id = u16::from_be_bytes([buffer[1 + vbi_len], buffer[1 + vbi_len + 1]]);
-
-        Ok(ParseOk::Packet(
-            MqttPacket::PubRel3(MqttPubRel::new(message_id)),
-            total_len,
-        ))
-    }
-}
+v3_packet_id_ack!(MqttPubRel, PUBREL, 0x02, "PUBREL", PubRel3);
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use super::MqttPubRel;
+    use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
+    use crate::mqtt_serde::parser::{ParseError, ParseOk};
 
     #[test]
     fn test_pubrel_new() {
