@@ -1,169 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use serde::{Deserialize, Serialize};
+use crate::mqtt_serde::mqttv5::packet_id_ack::v5_packet_id_ack;
 
-use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
-use crate::mqtt_serde::mqttv5::common::properties::{
-    encode_properities_hdr, parse_properties_hdr, Property,
-};
-use crate::mqtt_serde::parser::{
-    packet_type, parse_packet_id, parse_remaining_length, ParseError, ParseOk,
-};
-
-/// Represents the PUBREL packet in MQTT v5.0.
-/// PUBREL is the second acknowledgment in a QoS 2 PUBLISH packet flow.
-/// It is sent in response to a PUBREC packet.
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct MqttPubRel {
-    pub packet_id: u16,
-    pub reason_code: u8,
-    pub properties: Vec<Property>,
-}
-
-impl MqttPubRel {
-    /// Creates a new `MqttPubRel` packet.
-    ///
-    /// # Arguments
-    /// * `packet_id` - The packet identifier from the corresponding PUBREC packet
-    /// * `reason_code` - The reason code (0x00 = Success, others indicate error)
-    /// * `properties` - Optional properties
-    pub fn new(packet_id: u16, reason_code: u8, properties: Vec<Property>) -> Self {
-        Self {
-            packet_id,
-            reason_code,
-            properties,
-        }
-    }
-
-    /// Creates a successful PUBREL with no properties (minimal packet)
-    pub fn new_success(packet_id: u16) -> Self {
-        Self::new(packet_id, 0x00, Vec::new())
-    }
-
-    /// Creates a PUBREL with an error reason code
-    pub fn new_error(packet_id: u16, reason_code: u8, properties: Vec<Property>) -> Self {
-        Self::new(packet_id, reason_code, properties)
-    }
-}
-
-impl MqttControlPacket for MqttPubRel {
-    fn control_packet_type(&self) -> u8 {
-        ControlPacketType::PUBREL as u8
-    }
-
-    /// PUBREL is the only control packet that has fixed header flags set to 0010 (bit 1 = 1)
-    /// This is required by MQTT 5.0 specification section 3.6.1.1
-    fn flags(&self) -> u8 {
-        0x02 // Fixed header flags: bit 1 = 1, others = 0
-    }
-
-    fn variable_header(&self) -> Result<Vec<u8>, ParseError> {
-        let mut bytes = Vec::new();
-
-        // MQTT 5.0: 3.6.2 PUBREL Variable Header
-        // Packet Identifier - always present
-        bytes.extend_from_slice(&self.packet_id.to_be_bytes());
-
-        // MQTT 5.0: 3.6.2.1 PUBREL Reason Code
-        // The Reason Code and Properties are only present if the Remaining Length is greater than 2.
-        // For a successful acknowledgment with no properties, we send a minimal packet.
-        if self.reason_code == 0x00 && self.properties.is_empty() {
-            return Ok(bytes);
-        }
-
-        // Include reason code if not default success or if properties are present
-        bytes.push(self.reason_code);
-
-        // MQTT 5.0: 3.6.2.2 PUBREL Properties
-        bytes.extend(encode_properities_hdr(&self.properties)?);
-
-        Ok(bytes)
-    }
-
-    // MQTT 5.0: 3.6.3 PUBREL Payload
-    fn payload(&self) -> Result<Vec<u8>, ParseError> {
-        // PUBREL packets have no payload.
-        Ok(Vec::new())
-    }
-
-    fn from_bytes(buffer: &[u8]) -> Result<ParseOk, ParseError> {
-        let first_byte = *buffer.first().ok_or(ParseError::BufferTooShort)?;
-        let packet_type = packet_type(buffer)?;
-
-        if packet_type != ControlPacketType::PUBREL as u8 {
-            return Err(ParseError::InvalidPacketType);
-        }
-
-        // MQTT 5.0: 3.6.1.1 - PUBREL Fixed Header flags must be 0010
-        #[cfg(feature = "strict-protocol-compliance")]
-        {
-            let flags = first_byte & 0x0F;
-            if flags != 0x02 {
-                return Err(ParseError::ParseError(format!(
-                    "Invalid PUBREL flags: expected 0x02, got 0x{:02x}",
-                    flags
-                )));
-            }
-        }
-
-        let (size, vbi_len) = parse_remaining_length(&buffer[1..])?;
-        let mut offset: usize = 1 + vbi_len;
-        let total_len = offset + size;
-
-        if total_len > buffer.len() {
-            return Ok(ParseOk::Continue(total_len - buffer.len(), 0));
-        }
-
-        // MQTT 5.0: 3.6.2 PUBREL Variable Header
-        // Packet Identifier - always present
-        let (packet_id, consumed) =
-            parse_packet_id(buffer.get(offset..).ok_or(ParseError::BufferTooShort)?)?;
-        offset += consumed;
-
-        // MQTT 5.0: 3.6.2.1 PUBREL Reason Code
-        // Defaults to 0x00 (Success) if not present (when remaining length is exactly 2).
-        let reason_code = if size > 2 {
-            let code = *buffer.get(offset).ok_or(ParseError::BufferTooShort)?;
-            offset += 1;
-            code
-        } else {
-            0x00 // Default to Success
-        };
-
-        // MQTT 5.0: 3.6.2.2 PUBREL Properties
-        let (properties, consumed) = if offset < total_len {
-            parse_properties_hdr(
-                buffer
-                    .get(offset..total_len)
-                    .ok_or(ParseError::BufferTooShort)?,
-            )?
-        } else {
-            (vec![], 0)
-        };
-        offset += consumed;
-
-        if offset != total_len {
-            return Err(ParseError::InternalError(format!(
-                "Inconsistent offset {} != total: {}",
-                offset, total_len
-            )));
-        }
-
-        let pubrel = MqttPubRel {
-            packet_id,
-            reason_code,
-            properties,
-        };
-
-        Ok(ParseOk::Packet(MqttPacket::PubRel5(pubrel), offset))
-    }
-}
+v5_packet_id_ack!(MqttPubRel, PUBREL, 0x02, "PUBREL", PubRel5, true);
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    use super::MqttPubRel;
+    use crate::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket};
+    use crate::mqtt_serde::mqttv5::common::properties::Property;
+    use crate::mqtt_serde::parser::{ParseError, ParseOk};
     #[test]
     fn test_pubrel_minimal_success() {
         // Test minimal PUBREL (success, no properties)
@@ -253,6 +99,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_pubrel_flags_validation() {
         // Test that PUBREL with incorrect flags is rejected

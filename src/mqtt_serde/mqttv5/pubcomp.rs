@@ -1,149 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use serde::{Deserialize, Serialize};
+use crate::mqtt_serde::mqttv5::packet_id_ack::v5_packet_id_ack;
 
-use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
-use crate::mqtt_serde::mqttv5::common::properties::{
-    encode_properities_hdr, parse_properties_hdr, Property,
-};
-use crate::mqtt_serde::parser::{
-    packet_type, parse_packet_id, parse_remaining_length, ParseError, ParseOk,
-};
-
-/// Represents the PUBCOMP packet in MQTT v5.0.
-/// PUBCOMP is the final acknowledgment in a QoS 2 PUBLISH packet flow.
-/// It is sent in response to a PUBREL packet.
-#[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-pub struct MqttPubComp {
-    pub packet_id: u16,
-    pub reason_code: u8,
-    pub properties: Vec<Property>,
-}
-
-impl MqttPubComp {
-    /// Creates a new `MqttPubComp` packet.
-    ///
-    /// # Arguments
-    /// * `packet_id` - The packet identifier from the corresponding PUBREL packet
-    /// * `reason_code` - The reason code (0x00 = Success, others indicate error)
-    /// * `properties` - Optional properties
-    pub fn new(packet_id: u16, reason_code: u8, properties: Vec<Property>) -> Self {
-        Self {
-            packet_id,
-            reason_code,
-            properties,
-        }
-    }
-
-    /// Creates a successful PUBCOMP with no properties (minimal packet)
-    pub fn new_success(packet_id: u16) -> Self {
-        Self::new(packet_id, 0x00, Vec::new())
-    }
-
-    /// Creates a PUBCOMP with an error reason code
-    pub fn new_error(packet_id: u16, reason_code: u8, properties: Vec<Property>) -> Self {
-        Self::new(packet_id, reason_code, properties)
-    }
-}
-
-impl MqttControlPacket for MqttPubComp {
-    fn control_packet_type(&self) -> u8 {
-        ControlPacketType::PUBCOMP as u8
-    }
-
-    fn variable_header(&self) -> Result<Vec<u8>, ParseError> {
-        let mut bytes = Vec::new();
-
-        // MQTT 5.0: 3.7.2 PUBCOMP Variable Header
-        // Packet Identifier - always present
-        bytes.extend_from_slice(&self.packet_id.to_be_bytes());
-
-        // MQTT 5.0: 3.7.2.1 PUBCOMP Reason Code
-        // The Reason Code and Properties are only present if the Remaining Length is greater than 2.
-        // For a successful acknowledgment with no properties, we send a minimal packet.
-        if self.reason_code == 0x00 && self.properties.is_empty() {
-            return Ok(bytes);
-        }
-
-        // Include reason code if not default success or if properties are present
-        bytes.push(self.reason_code);
-
-        // MQTT 5.0: 3.7.2.2 PUBCOMP Properties
-        bytes.extend(encode_properities_hdr(&self.properties)?);
-
-        Ok(bytes)
-    }
-
-    // MQTT 5.0: 3.7.3 PUBCOMP Payload
-    fn payload(&self) -> Result<Vec<u8>, ParseError> {
-        // PUBCOMP packets have no payload.
-        Ok(Vec::new())
-    }
-
-    fn from_bytes(buffer: &[u8]) -> Result<ParseOk, ParseError> {
-        let packet_type = packet_type(buffer)?;
-        if packet_type != ControlPacketType::PUBCOMP as u8 {
-            return Err(ParseError::InvalidPacketType);
-        }
-
-        let (size, vbi_len) = parse_remaining_length(&buffer[1..])?;
-        let mut offset: usize = 1 + vbi_len;
-        let total_len = offset + size;
-
-        if total_len > buffer.len() {
-            return Ok(ParseOk::Continue(total_len - buffer.len(), 0));
-        }
-
-        // MQTT 5.0: 3.7.2 PUBCOMP Variable Header
-        // Packet Identifier - always present
-        let (packet_id, consumed) =
-            parse_packet_id(buffer.get(offset..).ok_or(ParseError::BufferTooShort)?)?;
-        offset += consumed;
-
-        // MQTT 5.0: 3.7.2.1 PUBCOMP Reason Code
-        // Defaults to 0x00 (Success) if not present (when remaining length is exactly 2).
-        let reason_code = if size > 2 {
-            let code = *buffer.get(offset).ok_or(ParseError::BufferTooShort)?;
-            offset += 1;
-            code
-        } else {
-            0x00 // Default to Success
-        };
-
-        // MQTT 5.0: 3.7.2.2 PUBCOMP Properties
-        let (properties, consumed) = if offset < total_len {
-            parse_properties_hdr(
-                buffer
-                    .get(offset..total_len)
-                    .ok_or(ParseError::BufferTooShort)?,
-            )?
-        } else {
-            (vec![], 0)
-        };
-        offset += consumed;
-
-        if offset != total_len {
-            return Err(ParseError::InternalError(format!(
-                "Inconsistent offset {} != total: {}",
-                offset, total_len
-            )));
-        }
-
-        let pubcomp = MqttPubComp {
-            packet_id,
-            reason_code,
-            properties,
-        };
-
-        Ok(ParseOk::Packet(MqttPacket::PubComp5(pubcomp), offset))
-    }
-}
+v5_packet_id_ack!(MqttPubComp, PUBCOMP, 0x00, "PUBCOMP", PubComp5, false);
 
 #[cfg(test)]
 mod tests {
-    use super::*;
-
+    use super::MqttPubComp;
+    use crate::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket};
+    use crate::mqtt_serde::mqttv5::common::properties::Property;
+    use crate::mqtt_serde::parser::{ParseError, ParseOk};
     #[test]
     fn test_pubcomp_minimal_success() {
         // Test minimal PUBCOMP (success, no properties)
