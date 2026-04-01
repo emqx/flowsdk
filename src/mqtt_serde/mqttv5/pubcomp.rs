@@ -9,7 +9,7 @@ mod tests {
     use super::MqttPubComp;
     use crate::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket};
     use crate::mqtt_serde::mqttv5::common::properties::Property;
-    use crate::mqtt_serde::parser::{ParseError, ParseOk};
+    use crate::mqtt_serde::parser::ParseOk;
     #[test]
     fn test_pubcomp_minimal_success() {
         // Test minimal PUBCOMP (success, no properties)
