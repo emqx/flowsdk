@@ -190,14 +190,26 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   Clean Start: {}", mqtt_options.clean_start);
     println!("   Keep Alive: {} seconds\n", mqtt_options.keep_alive);
 
+    // Enable TLS key logging if SSLKEYLOGFILE is set (for Wireshark decryption)
+    let enable_key_log = std::env::var("SSLKEYLOGFILE").is_ok();
+    if enable_key_log {
+        println!("🔑 SSLKEYLOGFILE is set — TLS session keys will be logged");
+    }
+
     // Configure tokio async client settings
-    let async_config = TokioAsyncClientConfig::builder()
+    let mut config_builder = TokioAsyncClientConfig::builder()
         .auto_reconnect(false)
         .command_queue_size(1000)
         .buffer_messages(true)
         .max_buffer_size(1000)
-        .tcp_nodelay(true)
-        .build();
+        .tcp_nodelay(true);
+
+    #[cfg(feature = "rustls-tls")]
+    {
+        config_builder = config_builder.tls_enable_key_log(enable_key_log);
+    }
+
+    let async_config = config_builder.build();
 
     // Create and connect client
     println!("🔌 Connecting to broker.emqx.io:8883 via TLS...");

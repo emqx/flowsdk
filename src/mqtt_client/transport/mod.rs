@@ -107,4 +107,4 @@ pub use tcp::TcpTransport;
 pub use tls::TlsTransport;
 
 #[cfg(feature = "rustls-tls")]
-pub use rustls_tls::RustlsTlsTransport;
+pub use rustls_tls::{RustlsTlsConfig, RustlsTlsTransport};
