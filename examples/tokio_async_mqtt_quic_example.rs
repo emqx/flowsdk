@@ -164,6 +164,12 @@ async fn run_example(test_mode: bool) -> Result<(), Box<dyn std::error::Error>> 
         .clean_start(true)
         .build();
 
+    // Enable TLS key logging if SSLKEYLOGFILE is set (for Wireshark decryption)
+    let enable_key_log = std::env::var("SSLKEYLOGFILE").is_ok();
+    if enable_key_log {
+        println!("🔑 SSLKEYLOGFILE is set — TLS session keys will be logged");
+    }
+
     // Configure tokio async client settings with QUIC options
     let async_config = TokioAsyncClientConfig::builder()
         .auto_reconnect(true)
@@ -172,6 +178,7 @@ async fn run_example(test_mode: bool) -> Result<(), Box<dyn std::error::Error>> 
         .quic_insecure_skip_verify(true) // ⚠️ For testing only!
         .quic_enable_0rtt(false)
         .quic_datagram_receive_buffer_size(0) // disable datagram
+        .quic_enable_key_log(enable_key_log)
         .build();
 
     // Create event handler

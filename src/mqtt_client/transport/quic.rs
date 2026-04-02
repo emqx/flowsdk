@@ -93,6 +93,8 @@ mod imp {
         pub insecure_skip_verify: bool,
         /// Datagram receive buffer size in bytes (0 = disable datagrams)
         pub datagram_receive_buffer_size: usize,
+        /// Enable TLS key logging (writes to the file specified by SSLKEYLOGFILE env var)
+        pub enable_key_log: bool,
     }
 
     /// Builder for `QuicConfig` to simplify ergonomic construction.
@@ -104,6 +106,7 @@ mod imp {
         client_private_key: Option<Vec<u8>>,
         insecure_skip_verify: bool,
         datagram_receive_buffer_size: usize,
+        enable_key_log: bool,
     }
 
     impl QuicConfigBuilder {
@@ -275,6 +278,14 @@ mod imp {
             self
         }
 
+        /// Enable TLS key logging. When enabled, TLS session keys are written to the file
+        /// specified by the `SSLKEYLOGFILE` environment variable (using `rustls::KeyLogFile`).
+        /// This allows tools like Wireshark to decrypt captured QUIC traffic.
+        pub fn enable_key_log(mut self, enable: bool) -> Self {
+            self.enable_key_log = enable;
+            self
+        }
+
         /// Finalize the builder into a `QuicConfig`.
         pub fn build(self) -> QuicConfig {
             QuicConfig {
@@ -285,6 +296,7 @@ mod imp {
                 client_private_key: self.client_private_key,
                 insecure_skip_verify: self.insecure_skip_verify,
                 datagram_receive_buffer_size: self.datagram_receive_buffer_size,
+                enable_key_log: self.enable_key_log,
             }
         }
     }
@@ -300,6 +312,7 @@ mod imp {
                 client_private_key: None,
                 insecure_skip_verify: false,
                 datagram_receive_buffer_size: 0,
+                enable_key_log: false,
             }
         }
     }
@@ -417,6 +430,11 @@ mod imp {
 
             // Enable early data if requested
             rustls_cfg.enable_early_data = cfg.enable_0rtt;
+
+            // Enable TLS key logging if requested (writes to SSLKEYLOGFILE)
+            if cfg.enable_key_log {
+                rustls_cfg.key_log = Arc::new(rustls::KeyLogFile::new());
+            }
 
             // Convert rustls config into a quinn QuicClientConfig, then wrap
             // it in quinn::ClientConfig
