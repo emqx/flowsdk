@@ -256,6 +256,10 @@ pub struct TokioAsyncClientConfig {
     /// Only used when connecting via quic:// URLs (requires `quic` feature)
     #[cfg(feature = "quic")]
     pub quic_datagram_receive_buffer_size: usize,
+    /// QUIC transport: Enable TLS key logging (writes to SSLKEYLOGFILE)
+    /// Only used when connecting via quic:// URLs (requires `quic` feature)
+    #[cfg(feature = "quic")]
+    pub quic_enable_key_log: bool,
     /// Enable priority queue for QoS-based message prioritization
     pub priority_queue_enabled: bool,
     /// Maximum size of the priority queue
@@ -292,6 +296,8 @@ impl Default for TokioAsyncClientConfig {
             quic_client_key_pem: None, // No client key by default
             #[cfg(feature = "quic")]
             quic_datagram_receive_buffer_size: 0, // Disable datagram
+            #[cfg(feature = "quic")]
+            quic_enable_key_log: false, // Disable key logging by default
             priority_queue_enabled: true,
             priority_queue_limit: 1000,
         }
@@ -760,6 +766,19 @@ impl ConfigBuilder {
     #[cfg(feature = "quic")]
     pub fn quic_datagram_receive_buffer_size(mut self, size: usize) -> Self {
         self.config.quic_datagram_receive_buffer_size = size;
+        self
+    }
+
+    /// Enable TLS key logging for QUIC connections
+    ///
+    /// When enabled, TLS session keys are written to the file specified by
+    /// the `SSLKEYLOGFILE` environment variable. This allows tools like
+    /// Wireshark to decrypt captured QUIC traffic.
+    ///
+    /// Only applies when connecting via quic:// URLs (requires `quic` feature)
+    #[cfg(feature = "quic")]
+    pub fn quic_enable_key_log(mut self, enable: bool) -> Self {
+        self.config.quic_enable_key_log = enable;
         self
     }
 }
@@ -2071,6 +2090,10 @@ impl TokioClientWorker {
                     builder = builder.datagram_receive_buffer_size(
                         self.config.quic_datagram_receive_buffer_size,
                     );
+                }
+
+                if self.config.quic_enable_key_log {
+                    builder = builder.enable_key_log(true);
                 }
                 let cfg = builder.build();
 
