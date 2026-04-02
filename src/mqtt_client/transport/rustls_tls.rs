@@ -36,6 +36,8 @@ mod imp {
         pub danger_accept_invalid_hostnames: bool,
         /// Optional ALPN protocols (usually not needed for MQTT over TCP)
         pub alpn_protocols: Vec<Vec<u8>>,
+        /// Enable TLS key logging (writes to the file specified by SSLKEYLOGFILE env var)
+        pub enable_key_log: bool,
     }
 
     impl RustlsTlsConfig {
@@ -110,6 +112,11 @@ mod imp {
                     }));
             }
 
+            // Enable TLS key logging if requested (writes to SSLKEYLOGFILE)
+            if self.enable_key_log {
+                cfg.key_log = Arc::new(rustls::KeyLogFile::new());
+            }
+
             Ok(cfg)
         }
     }
@@ -124,6 +131,7 @@ mod imp {
         danger_accept_invalid_certs: bool,
         danger_accept_invalid_hostnames: bool,
         alpn_protocols: Vec<Vec<u8>>,
+        enable_key_log: bool,
     }
 
     impl RustlsTlsConfigBuilder {
@@ -244,6 +252,14 @@ mod imp {
             self
         }
 
+        /// Enable TLS key logging. When enabled, TLS session keys are written to the file
+        /// specified by the `SSLKEYLOGFILE` environment variable (using `rustls::KeyLogFile`).
+        /// This allows tools like Wireshark to decrypt captured TLS traffic.
+        pub fn enable_key_log(mut self, enable: bool) -> Self {
+            self.enable_key_log = enable;
+            self
+        }
+
         /// Build the final `RustlsTlsConfig`.
         pub fn build(self) -> RustlsTlsConfig {
             RustlsTlsConfig {
@@ -254,6 +270,7 @@ mod imp {
                 danger_accept_invalid_certs: self.danger_accept_invalid_certs,
                 danger_accept_invalid_hostnames: self.danger_accept_invalid_hostnames,
                 alpn_protocols: self.alpn_protocols,
+                enable_key_log: self.enable_key_log,
             }
         }
     }

@@ -260,6 +260,10 @@ pub struct TokioAsyncClientConfig {
     /// Only used when connecting via quic:// URLs (requires `quic` feature)
     #[cfg(feature = "quic")]
     pub quic_enable_key_log: bool,
+    /// Rustls TLS transport: Enable TLS key logging (writes to SSLKEYLOGFILE)
+    /// Only used when connecting via mqtts:// URLs with rustls-tls backend
+    #[cfg(feature = "rustls-tls")]
+    pub tls_enable_key_log: bool,
     /// Enable priority queue for QoS-based message prioritization
     pub priority_queue_enabled: bool,
     /// Maximum size of the priority queue
@@ -298,6 +302,8 @@ impl Default for TokioAsyncClientConfig {
             quic_datagram_receive_buffer_size: 0, // Disable datagram
             #[cfg(feature = "quic")]
             quic_enable_key_log: false, // Disable key logging by default
+            #[cfg(feature = "rustls-tls")]
+            tls_enable_key_log: false, // Disable key logging by default
             priority_queue_enabled: true,
             priority_queue_limit: 1000,
         }
@@ -779,6 +785,19 @@ impl ConfigBuilder {
     #[cfg(feature = "quic")]
     pub fn quic_enable_key_log(mut self, enable: bool) -> Self {
         self.config.quic_enable_key_log = enable;
+        self
+    }
+
+    /// Enable TLS key logging for rustls TLS connections
+    ///
+    /// When enabled, TLS session keys are written to the file specified by
+    /// the `SSLKEYLOGFILE` environment variable. This allows tools like
+    /// Wireshark to decrypt captured TLS traffic.
+    ///
+    /// Only applies when connecting via mqtts:// URLs with rustls-tls backend
+    #[cfg(feature = "rustls-tls")]
+    pub fn tls_enable_key_log(mut self, enable: bool) -> Self {
+        self.config.tls_enable_key_log = enable;
         self
     }
 }
@@ -1973,15 +1992,26 @@ impl TokioClientWorker {
                 match self.engine.options().tls_backend {
                     #[cfg(feature = "rustls-tls")]
                     Some(crate::mqtt_client::opts::TlsBackend::Rustls) => {
+                        let mut rustls_cfg =
+                            crate::mqtt_client::transport::RustlsTlsConfig::builder()
+                                .use_system_roots(true);
+                        if self.config.tls_enable_key_log {
+                            rustls_cfg = rustls_cfg.enable_key_log(true);
+                        }
                         let transport =
-                            crate::mqtt_client::transport::RustlsTlsTransport::connect(addr)
-                                .await
-                                .map_err(|e| MqttClientError::ConnectionLost {
+                            crate::mqtt_client::transport::RustlsTlsTransport::connect_with_config(
+                                addr,
+                                rustls_cfg.build(),
+                            )
+                            .await
+                            .map_err(|e| {
+                                MqttClientError::ConnectionLost {
                                     reason: format!(
                                         "Rustls TLS connection failed to {}: {}",
                                         peer, e
                                     ),
-                                })?;
+                                }
+                            })?;
                         Ok(Box::new(transport) as BoxedTransport)
                     }
                     #[cfg(feature = "tls")]
