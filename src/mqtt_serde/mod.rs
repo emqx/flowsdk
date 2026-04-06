@@ -9,6 +9,7 @@ pub mod parser;
 use crate::mqtt_serde::base_data::{BinaryData, TwoByteInteger, Utf8String, VariableByteInteger};
 use crate::mqtt_serde::parser::ParseError;
 //re export
+pub use crate::mqtt_serde::parser::leveled::ParseLevel;
 pub use crate::mqtt_serde::parser::stream::MqttStream;
 
 // MQTT 5.0 Spec, 1.5.4

@@ -131,4 +131,5 @@ fn vbi(buffer: &[u8]) -> Result<(usize, usize), ParseError> {
     Ok((value, consumed))
 }
 
+pub mod leveled;
 pub mod stream;

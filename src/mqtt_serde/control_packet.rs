@@ -50,6 +50,31 @@ pub enum MqttPacket {
 }
 
 impl MqttPacket {
+    /// Returns the `ControlPacketType` for this packet.
+    pub fn packet_type(&self) -> ControlPacketType {
+        match self {
+            MqttPacket::Connect5(_) | MqttPacket::Connect3(_) => ControlPacketType::CONNECT,
+            MqttPacket::ConnAck5(_) | MqttPacket::ConnAck3(_) => ControlPacketType::CONNACK,
+            MqttPacket::Publish5(_) | MqttPacket::Publish3(_) => ControlPacketType::PUBLISH,
+            MqttPacket::PubAck5(_) | MqttPacket::PubAck3(_) => ControlPacketType::PUBACK,
+            MqttPacket::PubRec5(_) | MqttPacket::PubRec3(_) => ControlPacketType::PUBREC,
+            MqttPacket::PubRel5(_) | MqttPacket::PubRel3(_) => ControlPacketType::PUBREL,
+            MqttPacket::PubComp5(_) | MqttPacket::PubComp3(_) => ControlPacketType::PUBCOMP,
+            MqttPacket::Subscribe5(_) | MqttPacket::Subscribe3(_) => ControlPacketType::SUBSCRIBE,
+            MqttPacket::SubAck5(_) | MqttPacket::SubAck3(_) => ControlPacketType::SUBACK,
+            MqttPacket::Unsubscribe5(_) | MqttPacket::Unsubscribe3(_) => {
+                ControlPacketType::UNSUBSCRIBE
+            }
+            MqttPacket::UnsubAck5(_) | MqttPacket::UnsubAck3(_) => ControlPacketType::UNSUBACK,
+            MqttPacket::PingReq5(_) | MqttPacket::PingReq3(_) => ControlPacketType::PINGREQ,
+            MqttPacket::PingResp5(_) | MqttPacket::PingResp3(_) => ControlPacketType::PINGRESP,
+            MqttPacket::Disconnect5(_) | MqttPacket::Disconnect3(_) => {
+                ControlPacketType::DISCONNECT
+            }
+            MqttPacket::Auth(_) => ControlPacketType::AUTH,
+        }
+    }
+
     pub fn to_bytes(&self) -> Result<Vec<u8>, ParseError> {
         match self {
             // V5
@@ -150,6 +175,7 @@ impl MqttPacket {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ControlPacketType {
     CONNECT = 1,
     CONNACK = 2,
@@ -190,6 +216,15 @@ impl TryFrom<u8> for ControlPacketType {
             15 => Ok(ControlPacketType::AUTH),
             _ => Err(ParseError::InvalidPacketType),
         }
+    }
+}
+
+impl ControlPacketType {
+    /// Extracts the packet type and flags from the first byte of a fixed header.
+    pub fn from_first_byte(byte: u8) -> Result<(Self, u8), ParseError> {
+        let pkt_type = Self::try_from(byte >> 4)?;
+        let flags = byte & 0x0F;
+        Ok((pkt_type, flags))
     }
 }
 
