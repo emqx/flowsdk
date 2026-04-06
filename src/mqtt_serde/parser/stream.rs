@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::mqtt_serde::control_packet::MqttPacket;
+use crate::mqtt_serde::parser::leveled::{
+    parse_headers_only, parse_raw_body, parse_type_only, LeveledParseOk, ParseLevel, ParsedPacket,
+};
 use crate::mqtt_serde::parser::{parse_utf8_string, parse_vbi, ParseError, ParseOk};
 use bytes::{Buf, BytesMut};
 
@@ -11,11 +14,23 @@ pub struct MqttParser {
     buffer: BytesMut,
     // 0 means undefined for new, 4 means MQTT v3.1.1, 5 means MQTT v5.0
     mqtt_version: u8,
+    parse_level: ParseLevel,
 }
 
 impl Default for MqttParser {
     fn default() -> Self {
         Self::new(16384, 0) // Default buffer size and MQTT version
+    }
+}
+
+impl From<u8> for ParseLevel {
+    fn from(value: u8) -> Self {
+        match value {
+            1 => ParseLevel::HeadersParsed,
+            2 => ParseLevel::RawBody,
+            3 => ParseLevel::TypeOnly,
+            _ => ParseLevel::Full,
+        }
     }
 }
 
@@ -25,7 +40,25 @@ impl MqttParser {
         MqttParser {
             buffer: BytesMut::with_capacity(buffer_size),
             mqtt_version,
+            parse_level: ParseLevel::Full,
         }
+    }
+
+    /// Creates a new parser with the specified parse level.
+    pub fn with_level(buffer_size: usize, mqtt_version: u8, parse_level: ParseLevel) -> Self {
+        MqttParser {
+            buffer: BytesMut::with_capacity(buffer_size),
+            mqtt_version,
+            parse_level,
+        }
+    }
+
+    pub fn set_parse_level(&mut self, level: ParseLevel) {
+        self.parse_level = level;
+    }
+
+    pub fn parse_level(&self) -> ParseLevel {
+        self.parse_level
     }
 
     pub fn get_mqtt_vsn(&self) -> u8 {
@@ -103,6 +136,66 @@ impl MqttParser {
             Ok(ParseOk::TopicName(_, _)) => Err(ParseError::ParseError(
                 "Unexpected ParseOk variant".to_string(),
             )),
+        }
+    }
+
+    /// Returns the next parsed result at the configured parse level.
+    ///
+    /// For Level 0 (`Full`), this is equivalent to wrapping `next_packet()` in `ParsedPacket::Full`.
+    /// Higher levels skip progressively more parsing for better throughput.
+    pub fn next_parsed(&mut self) -> Result<Option<ParsedPacket>, ParseError> {
+        if self.buffer.is_empty() {
+            return Ok(None);
+        }
+
+        match self.parse_level {
+            ParseLevel::Full => {
+                assert!(
+                    self.mqtt_version != 0,
+                    "MQTT version must be set before parsing packets"
+                );
+                match MqttPacket::from_bytes_with_version(&self.buffer, self.mqtt_version) {
+                    Ok(ParseOk::Packet(packet, consumed)) => {
+                        self.buffer.advance(consumed);
+                        Ok(Some(ParsedPacket::Full(packet)))
+                    }
+                    Ok(ParseOk::Continue(_, _)) => Ok(None),
+                    Err(e) => Err(e),
+                    Ok(ParseOk::TopicName(_, _)) => Err(ParseError::ParseError(
+                        "Unexpected ParseOk variant".to_string(),
+                    )),
+                }
+            }
+            ParseLevel::TypeOnly => match parse_type_only(&self.buffer) {
+                Ok(LeveledParseOk::Packet(pkt, consumed)) => {
+                    self.buffer.advance(consumed);
+                    Ok(Some(pkt))
+                }
+                Ok(LeveledParseOk::Continue(_, _)) => Ok(None),
+                Err(e) => Err(e),
+            },
+            ParseLevel::RawBody => match parse_raw_body(&self.buffer) {
+                Ok(LeveledParseOk::Packet(pkt, consumed)) => {
+                    self.buffer.advance(consumed);
+                    Ok(Some(pkt))
+                }
+                Ok(LeveledParseOk::Continue(_, _)) => Ok(None),
+                Err(e) => Err(e),
+            },
+            ParseLevel::HeadersParsed => {
+                assert!(
+                    self.mqtt_version != 0,
+                    "MQTT version must be set before parsing packets"
+                );
+                match parse_headers_only(&self.buffer, self.mqtt_version) {
+                    Ok(LeveledParseOk::Packet(pkt, consumed)) => {
+                        self.buffer.advance(consumed);
+                        Ok(Some(pkt))
+                    }
+                    Ok(LeveledParseOk::Continue(_, _)) => Ok(None),
+                    Err(e) => Err(e),
+                }
+            }
         }
     }
 

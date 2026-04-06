@@ -6,7 +6,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 
 use flowsdk::mqtt_serde::control_packet::MqttPacket;
-
 use flowsdk::mqtt_serde::parser::stream::MqttParser;
 use flowsdk::mqtt_serde::parser::ParseError;
 use mqtt_grpc_proxy::{
