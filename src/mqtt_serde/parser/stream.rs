@@ -2,7 +2,8 @@
 
 use crate::mqtt_serde::control_packet::MqttPacket;
 use crate::mqtt_serde::parser::leveled::{
-    parse_headers_only, parse_raw_body, parse_type_only, LeveledParseOk, ParseLevel, ParsedPacket,
+    packet_frame_len, parse_headers_only, parse_raw_body, parse_type_only, LeveledParseOk,
+    ParseLevel, ParsedPacket,
 };
 use crate::mqtt_serde::parser::{parse_utf8_string, parse_vbi, ParseError, ParseOk};
 use bytes::{Buf, BytesMut};
@@ -174,26 +175,32 @@ impl MqttParser {
                 Ok(LeveledParseOk::Continue(_, _)) => Ok(None),
                 Err(e) => Err(e),
             },
-            ParseLevel::RawBody => match parse_raw_body(&self.buffer) {
-                Ok(LeveledParseOk::Packet(pkt, consumed)) => {
-                    self.buffer.advance(consumed);
-                    Ok(Some(pkt))
+            ParseLevel::RawBody => {
+                let total_len = match packet_frame_len(&self.buffer)? {
+                    Some(n) => n,
+                    None => return Ok(None),
+                };
+                let packet_bytes = self.buffer.split_to(total_len).freeze();
+                match parse_raw_body(packet_bytes) {
+                    Ok(LeveledParseOk::Packet(pkt, _)) => Ok(Some(pkt)),
+                    Err(e) => Err(e),
+                    _ => unreachable!("frame completeness already verified"),
                 }
-                Ok(LeveledParseOk::Continue(_, _)) => Ok(None),
-                Err(e) => Err(e),
-            },
+            }
             ParseLevel::HeadersParsed => {
                 assert!(
                     self.mqtt_version != 0,
                     "MQTT version must be set before parsing packets"
                 );
-                match parse_headers_only(&self.buffer, self.mqtt_version) {
-                    Ok(LeveledParseOk::Packet(pkt, consumed)) => {
-                        self.buffer.advance(consumed);
-                        Ok(Some(pkt))
-                    }
-                    Ok(LeveledParseOk::Continue(_, _)) => Ok(None),
+                let total_len = match packet_frame_len(&self.buffer)? {
+                    Some(n) => n,
+                    None => return Ok(None),
+                };
+                let packet_bytes = self.buffer.split_to(total_len).freeze();
+                match parse_headers_only(packet_bytes, self.mqtt_version) {
+                    Ok(LeveledParseOk::Packet(pkt, _)) => Ok(Some(pkt)),
                     Err(e) => Err(e),
+                    _ => unreachable!("frame completeness already verified"),
                 }
             }
         }

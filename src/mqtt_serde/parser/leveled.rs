@@ -208,6 +208,28 @@ pub enum LeveledParseOk {
     Packet(ParsedPacket, usize),
 }
 
+// ── Helpers: frame length ───────────────────────────────────────────────
+
+/// Returns the total packet frame size if enough data is available, or `None`
+/// if more bytes are needed. Only inspects byte 0 + the VBI; does **not**
+/// validate packet contents.
+pub fn packet_frame_len(buffer: &[u8]) -> Result<Option<usize>, ParseError> {
+    if buffer.len() < 2 {
+        return Ok(None);
+    }
+    let (remaining_len, vbi_bytes) = match parse_remaining_length(&buffer[1..]) {
+        Ok(v) => v,
+        Err(ParseError::More(_, _)) => return Ok(None),
+        Err(e) => return Err(e),
+    };
+    let total = 1 + vbi_bytes + remaining_len;
+    if buffer.len() < total {
+        Ok(None)
+    } else {
+        Ok(Some(total))
+    }
+}
+
 // ── Level 3: TypeOnly ──────────────────────────────────────────────────
 
 /// Parse only the packet type and flags from byte 0, skip the rest.
@@ -244,8 +266,8 @@ pub fn parse_type_only(buffer: &[u8]) -> Result<LeveledParseOk, ParseError> {
 
 // ── Level 2: RawBody ───────────────────────────────────────────────────
 
-/// Parse the fixed header, return remaining bytes as-is.
-pub fn parse_raw_body(buffer: &[u8]) -> Result<LeveledParseOk, ParseError> {
+/// Parse the fixed header, return remaining bytes as a zero-copy view.
+pub fn parse_raw_body(buffer: Bytes) -> Result<LeveledParseOk, ParseError> {
     if buffer.is_empty() {
         return Err(ParseError::BufferEmpty);
     }
@@ -267,7 +289,7 @@ pub fn parse_raw_body(buffer: &[u8]) -> Result<LeveledParseOk, ParseError> {
         return Ok(LeveledParseOk::Continue(total_len - buffer.len(), 0));
     }
 
-    let remaining = Bytes::copy_from_slice(&buffer[remaining_start..total_len]);
+    let remaining = buffer.slice(remaining_start..total_len);
 
     Ok(LeveledParseOk::Packet(
         ParsedPacket::RawBody(RawBodyPacket {
@@ -281,8 +303,8 @@ pub fn parse_raw_body(buffer: &[u8]) -> Result<LeveledParseOk, ParseError> {
 
 // ── Level 1: HeadersParsed ─────────────────────────────────────────────
 
-/// Parse variable headers, keep payload as raw bytes. Dispatches by MQTT version.
-pub fn parse_headers_only(buffer: &[u8], mqtt_version: u8) -> Result<LeveledParseOk, ParseError> {
+/// Parse variable headers, keep payload as a zero-copy `Bytes` view.
+pub fn parse_headers_only(buffer: Bytes, mqtt_version: u8) -> Result<LeveledParseOk, ParseError> {
     match mqtt_version {
         3 | 4 => parse_headers_only_v3(buffer),
         5 => parse_headers_only_v5(buffer),
@@ -290,7 +312,7 @@ pub fn parse_headers_only(buffer: &[u8], mqtt_version: u8) -> Result<LeveledPars
     }
 }
 
-fn parse_headers_only_v5(buffer: &[u8]) -> Result<LeveledParseOk, ParseError> {
+fn parse_headers_only_v5(buffer: Bytes) -> Result<LeveledParseOk, ParseError> {
     if buffer.is_empty() {
         return Err(ParseError::BufferEmpty);
     }
@@ -331,7 +353,7 @@ fn parse_headers_only_v5(buffer: &[u8]) -> Result<LeveledParseOk, ParseError> {
         ControlPacketType::PINGREQ | ControlPacketType::PINGRESP => (VariableHeader::Empty, 0),
     };
 
-    let raw_payload = Bytes::copy_from_slice(&packet_body[vhdr_consumed..]);
+    let raw_payload = buffer.slice((fixed_hdr_len + vhdr_consumed)..total_len);
 
     Ok(LeveledParseOk::Packet(
         ParsedPacket::HeadersParsed(HeadersParsedPacket {
@@ -345,7 +367,7 @@ fn parse_headers_only_v5(buffer: &[u8]) -> Result<LeveledParseOk, ParseError> {
     ))
 }
 
-fn parse_headers_only_v3(buffer: &[u8]) -> Result<LeveledParseOk, ParseError> {
+fn parse_headers_only_v3(buffer: Bytes) -> Result<LeveledParseOk, ParseError> {
     if buffer.is_empty() {
         return Err(ParseError::BufferEmpty);
     }
@@ -398,7 +420,7 @@ fn parse_headers_only_v3(buffer: &[u8]) -> Result<LeveledParseOk, ParseError> {
         }
     };
 
-    let raw_payload = Bytes::copy_from_slice(&packet_body[vhdr_consumed..]);
+    let raw_payload = buffer.slice((fixed_hdr_len + vhdr_consumed)..total_len);
 
     Ok(LeveledParseOk::Packet(
         ParsedPacket::HeadersParsed(HeadersParsedPacket {
@@ -918,14 +940,14 @@ mod tests {
             false,
             false,
         );
-        let bytes = publish.to_bytes().unwrap();
+        let bytes = Bytes::from(publish.to_bytes().unwrap());
         let vbi_len = {
             let (_, vbi) = parse_remaining_length(&bytes[1..]).unwrap();
             vbi
         };
         let expected_remaining_len = bytes.len() - 1 - vbi_len;
 
-        match parse_raw_body(&bytes).unwrap() {
+        match parse_raw_body(bytes.clone()).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::RawBody(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PUBLISH);
                 assert_eq!(pkt.remaining.len(), expected_remaining_len);
@@ -938,8 +960,8 @@ mod tests {
     #[test]
     fn test_raw_body_pingreq() {
         // PINGREQ is 0xC0, 0x00 (no remaining data)
-        let bytes = [0xC0, 0x00];
-        match parse_raw_body(&bytes).unwrap() {
+        let bytes = Bytes::from_static(&[0xC0, 0x00]);
+        match parse_raw_body(bytes).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::RawBody(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PINGREQ);
                 assert!(pkt.remaining.is_empty());
@@ -961,8 +983,8 @@ mod tests {
             false,
             false,
         );
-        let bytes = publish.to_bytes().unwrap();
-        match parse_headers_only(&bytes, 5).unwrap() {
+        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PUBLISH);
                 assert_eq!(consumed, bytes.len());
@@ -996,8 +1018,8 @@ mod tests {
             true,
             false,
         );
-        let bytes = publish.to_bytes().unwrap();
-        match parse_headers_only(&bytes, 5).unwrap() {
+        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, bytes.len());
                 match &pkt.variable_header {
@@ -1031,8 +1053,8 @@ mod tests {
             false,
             false,
         );
-        let bytes = publish.to_bytes().unwrap();
-        match parse_headers_only(&bytes, 4).unwrap() {
+        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, bytes.len());
                 match &pkt.variable_header {
@@ -1056,8 +1078,8 @@ mod tests {
 
     #[test]
     fn test_headers_parsed_pingreq_v5() {
-        let bytes = [0xC0, 0x00];
-        match parse_headers_only(&bytes, 5).unwrap() {
+        let bytes = Bytes::from_static(&[0xC0, 0x00]);
+        match parse_headers_only(bytes, 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PINGREQ);
                 assert_eq!(consumed, 2);
@@ -1080,17 +1102,17 @@ mod tests {
             true,
             true,
         );
-        let bytes = publish.to_bytes().unwrap();
+        let bytes = Bytes::from(publish.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v5(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
             _ => panic!("Expected Packet"),
         };
-        let consumed_l1 = match parse_headers_only(&bytes, 5).unwrap() {
+        let consumed_l1 = match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(_, c) => c,
             _ => panic!("Expected Packet"),
         };
-        let consumed_l2 = match parse_raw_body(&bytes).unwrap() {
+        let consumed_l2 = match parse_raw_body(bytes.clone()).unwrap() {
             LeveledParseOk::Packet(_, c) => c,
             _ => panic!("Expected Packet"),
         };
@@ -1115,17 +1137,17 @@ mod tests {
             false,
             true,
         );
-        let bytes = publish.to_bytes().unwrap();
+        let bytes = Bytes::from(publish.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v3(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
             _ => panic!("Expected Packet"),
         };
-        let consumed_l1 = match parse_headers_only(&bytes, 4).unwrap() {
+        let consumed_l1 = match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(_, c) => c,
             _ => panic!("Expected Packet"),
         };
-        let consumed_l2 = match parse_raw_body(&bytes).unwrap() {
+        let consumed_l2 = match parse_raw_body(bytes.clone()).unwrap() {
             LeveledParseOk::Packet(_, c) => c,
             _ => panic!("Expected Packet"),
         };
