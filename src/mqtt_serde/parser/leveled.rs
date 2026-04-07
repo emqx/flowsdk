@@ -2156,4 +2156,440 @@ mod tests {
 
         assert_eq!(consumed_l0, consumed_l1);
     }
+
+    // ── V5 PUBLISH with properties ─────────────────────────────────────
+
+    #[test]
+    fn test_headers_parsed_publish_v5_qos2_with_props() {
+        let publish = publishv5::MqttPublish::new(
+            2,
+            "sensor/data".to_string(),
+            Some(500),
+            vec![0xDD; 30],
+            true, // retain
+            true, // dup
+        );
+        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        match parse_headers_only(bytes.clone(), 5).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
+                assert_eq!(consumed, bytes.len());
+                match &pkt.variable_header {
+                    VariableHeader::PublishV5 {
+                        topic_name,
+                        qos,
+                        dup,
+                        retain,
+                        packet_id,
+                        ..
+                    } => {
+                        assert_eq!(topic_name, "sensor/data");
+                        assert_eq!(*qos, 2);
+                        assert!(*dup);
+                        assert!(*retain);
+                        assert_eq!(*packet_id, Some(500));
+                    }
+                    other => panic!("Expected PublishV5, got {:?}", other),
+                }
+                assert_eq!(pkt.raw_payload.len(), 30);
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+    }
+
+    // ── V5 PUBLISH QoS 0 with empty payload ───────────────────────────
+
+    #[test]
+    fn test_headers_parsed_publish_v5_empty_payload() {
+        let publish =
+            publishv5::MqttPublish::new(0, "status".to_string(), None, vec![], false, false);
+        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        match parse_headers_only(bytes.clone(), 5).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
+                assert_eq!(consumed, bytes.len());
+                assert!(pkt.raw_payload.is_empty());
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+    }
+
+    // ── V3 PUBREC, PUBCOMP ────────────────────────────────────────────
+
+    #[test]
+    fn test_headers_parsed_pubrec_v3() {
+        use crate::mqtt_serde::mqttv3::pubrec::MqttPubRec;
+        let pubrec = MqttPubRec::new(88);
+        let bytes = Bytes::from(pubrec.to_bytes().unwrap());
+        match parse_headers_only(bytes.clone(), 4).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
+                assert_eq!(pkt.packet_type, ControlPacketType::PUBREC);
+                assert_eq!(consumed, bytes.len());
+                match &pkt.variable_header {
+                    VariableHeader::PacketIdOnlyV3 { message_id } => {
+                        assert_eq!(*message_id, 88);
+                    }
+                    other => panic!("Expected PacketIdOnlyV3, got {:?}", other),
+                }
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_headers_parsed_pubcomp_v3() {
+        use crate::mqtt_serde::mqttv3::pubcomp::MqttPubComp;
+        let pubcomp = MqttPubComp::new(88);
+        let bytes = Bytes::from(pubcomp.to_bytes().unwrap());
+        match parse_headers_only(bytes.clone(), 4).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
+                assert_eq!(pkt.packet_type, ControlPacketType::PUBCOMP);
+                assert_eq!(consumed, bytes.len());
+                match &pkt.variable_header {
+                    VariableHeader::PacketIdOnlyV3 { message_id } => {
+                        assert_eq!(*message_id, 88);
+                    }
+                    other => panic!("Expected PacketIdOnlyV3, got {:?}", other),
+                }
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+    }
+
+    // ── V3 version == 3 path ──────────────────────────────────────────
+
+    #[test]
+    fn test_headers_parsed_v3_with_version_3() {
+        // parse_headers_only accepts both version 3 and 4
+        let bytes = Bytes::from_static(&[0xC0, 0x00]); // PINGREQ
+        match parse_headers_only(bytes, 3).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
+                assert_eq!(pkt.packet_type, ControlPacketType::PINGREQ);
+                assert_eq!(pkt.mqtt_version, 4); // internally normalised
+                assert_eq!(consumed, 2);
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+    }
+
+    // ── DISCONNECT v5 with reason code only (remaining_len == 1) ──────
+
+    #[test]
+    fn test_headers_parsed_disconnect_v5_rc_only() {
+        // Fixed header: 0xE0 (DISCONNECT), 0x01 (remaining 1), 0x04 (RC)
+        let bytes = Bytes::from_static(&[0xE0, 0x01, 0x04]);
+        match parse_headers_only(bytes, 5).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
+                assert_eq!(consumed, 3);
+                match &pkt.variable_header {
+                    VariableHeader::DisconnectV5 {
+                        reason_code,
+                        properties,
+                    } => {
+                        assert_eq!(*reason_code, 0x04);
+                        assert!(properties.is_empty());
+                    }
+                    other => panic!("Expected DisconnectV5, got {:?}", other),
+                }
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+    }
+
+    // ── AUTH v5 with reason code only (remaining_len == 1) ─────────────
+
+    #[test]
+    fn test_headers_parsed_auth_v5_rc_only() {
+        // Fixed header: 0xF0 (AUTH), 0x01 (remaining 1), 0x18 (Continue Auth)
+        let bytes = Bytes::from_static(&[0xF0, 0x01, 0x18]);
+        match parse_headers_only(bytes, 5).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
+                assert_eq!(consumed, 3);
+                match &pkt.variable_header {
+                    VariableHeader::AuthV5 {
+                        reason_code,
+                        properties,
+                    } => {
+                        assert_eq!(*reason_code, 0x18);
+                        assert!(properties.is_empty());
+                    }
+                    other => panic!("Expected AuthV5, got {:?}", other),
+                }
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+    }
+
+    // ── V3 PUBLISH QoS 0 (no message_id) ──────────────────────────────
+
+    #[test]
+    fn test_headers_parsed_publish_v3_qos0() {
+        let publish =
+            publishv3::MqttPublish::new("t".to_string(), 0, vec![1, 2, 3], None, false, false);
+        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        match parse_headers_only(bytes.clone(), 4).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
+                assert_eq!(consumed, bytes.len());
+                match &pkt.variable_header {
+                    VariableHeader::PublishV3 {
+                        qos, message_id, ..
+                    } => {
+                        assert_eq!(*qos, 0);
+                        assert_eq!(*message_id, None);
+                    }
+                    other => panic!("Expected PublishV3, got {:?}", other),
+                }
+                assert_eq!(pkt.raw_payload.len(), 3);
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+    }
+
+    // ── Cross-level: CONNECT v5 ────────────────────────────────────────
+
+    #[test]
+    fn test_consumed_consistency_connect_v5() {
+        use crate::mqtt_serde::mqttv5::connect::MqttConnect;
+        let connect = MqttConnect::new("cid".to_string(), None, None, None, 60, true, Vec::new());
+        let bytes = Bytes::from(connect.to_bytes().unwrap());
+
+        let consumed_l0 = match MqttPacket::from_bytes_v5(&bytes).unwrap() {
+            crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+        let consumed_l1 = match parse_headers_only(bytes.clone(), 5).unwrap() {
+            LeveledParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+        let consumed_l2 = match parse_raw_body(bytes.clone()).unwrap() {
+            LeveledParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+        let consumed_l3 = match parse_type_only(&bytes).unwrap() {
+            LeveledParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+
+        assert_eq!(consumed_l0, consumed_l1);
+        assert_eq!(consumed_l1, consumed_l2);
+        assert_eq!(consumed_l2, consumed_l3);
+    }
+
+    // ── Cross-level: CONNECT v3 ────────────────────────────────────────
+
+    #[test]
+    fn test_consumed_consistency_connect_v3() {
+        use crate::mqtt_serde::mqttv3::connect::MqttConnect;
+        let connect = MqttConnect::new("cid".to_string(), 30, true);
+        let bytes = Bytes::from(connect.to_bytes().unwrap());
+
+        let consumed_l0 = match MqttPacket::from_bytes_v3(&bytes).unwrap() {
+            crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+        let consumed_l1 = match parse_headers_only(bytes.clone(), 4).unwrap() {
+            LeveledParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+        let consumed_l2 = match parse_raw_body(bytes.clone()).unwrap() {
+            LeveledParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+        let consumed_l3 = match parse_type_only(&bytes).unwrap() {
+            LeveledParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+
+        assert_eq!(consumed_l0, consumed_l1);
+        assert_eq!(consumed_l1, consumed_l2);
+        assert_eq!(consumed_l2, consumed_l3);
+    }
+
+    // ── Cross-level: PUBACK v5 ─────────────────────────────────────────
+
+    #[test]
+    fn test_consumed_consistency_puback_v5() {
+        use crate::mqtt_serde::mqttv5::puback::MqttPubAck;
+        let puback = MqttPubAck::new(1, 0x00, Vec::new());
+        let bytes = Bytes::from(puback.to_bytes().unwrap());
+
+        let consumed_l0 = match MqttPacket::from_bytes_v5(&bytes).unwrap() {
+            crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+        let consumed_l1 = match parse_headers_only(bytes.clone(), 5).unwrap() {
+            LeveledParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+        let consumed_l2 = match parse_raw_body(bytes.clone()).unwrap() {
+            LeveledParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+        let consumed_l3 = match parse_type_only(&bytes).unwrap() {
+            LeveledParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+
+        assert_eq!(consumed_l0, consumed_l1);
+        assert_eq!(consumed_l1, consumed_l2);
+        assert_eq!(consumed_l2, consumed_l3);
+    }
+
+    // ── Cross-level: PUBACK v3 ─────────────────────────────────────────
+
+    #[test]
+    fn test_consumed_consistency_puback_v3() {
+        use crate::mqtt_serde::mqttv3::puback::MqttPubAck;
+        let puback = MqttPubAck::new(42);
+        let bytes = Bytes::from(puback.to_bytes().unwrap());
+
+        let consumed_l0 = match MqttPacket::from_bytes_v3(&bytes).unwrap() {
+            crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+        let consumed_l1 = match parse_headers_only(bytes.clone(), 4).unwrap() {
+            LeveledParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+        let consumed_l2 = match parse_raw_body(bytes.clone()).unwrap() {
+            LeveledParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+        let consumed_l3 = match parse_type_only(&bytes).unwrap() {
+            LeveledParseOk::Packet(_, c) => c,
+            _ => panic!("Expected Packet"),
+        };
+
+        assert_eq!(consumed_l0, consumed_l1);
+        assert_eq!(consumed_l1, consumed_l2);
+        assert_eq!(consumed_l2, consumed_l3);
+    }
+
+    // ── PINGRESP v5 ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_headers_parsed_pingresp_v5() {
+        let bytes = Bytes::from_static(&[0xD0, 0x00]);
+        match parse_headers_only(bytes, 5).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
+                assert_eq!(pkt.packet_type, ControlPacketType::PINGRESP);
+                assert_eq!(consumed, 2);
+                assert!(matches!(pkt.variable_header, VariableHeader::Empty));
+                assert!(pkt.raw_payload.is_empty());
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+    }
+
+    // ── V5 CONNACK with properties containing multiple values ─────────
+
+    #[test]
+    fn test_headers_parsed_connack_v5_rich_props() {
+        use crate::mqtt_serde::mqttv5::connack::MqttConnAck;
+        let connack = MqttConnAck::new(
+            true,
+            0x00,
+            Some(vec![
+                Property::SessionExpiryInterval(3600),
+                Property::MaximumPacketSize(65535),
+                Property::TopicAliasMaximum(10),
+            ]),
+        );
+        let bytes = Bytes::from(connack.to_bytes().unwrap());
+        match parse_headers_only(bytes.clone(), 5).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
+                assert_eq!(consumed, bytes.len());
+                match &pkt.variable_header {
+                    VariableHeader::ConnAckV5 {
+                        properties: Some(props),
+                        ..
+                    } => {
+                        assert_eq!(props.len(), 3);
+                    }
+                    other => panic!("Expected ConnAckV5 with properties, got {:?}", other),
+                }
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+    }
+
+    // ── raw_body for various packet types ──────────────────────────────
+
+    #[test]
+    fn test_raw_body_connack_v5() {
+        use crate::mqtt_serde::mqttv5::connack::MqttConnAck;
+        let connack = MqttConnAck::new(false, 0x00, None);
+        let bytes = Bytes::from(connack.to_bytes().unwrap());
+        match parse_raw_body(bytes.clone()).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::RawBody(pkt), consumed) => {
+                assert_eq!(pkt.packet_type, ControlPacketType::CONNACK);
+                assert_eq!(consumed, bytes.len());
+                // remaining should contain: session_present + RC + properties VBI
+                assert!(!pkt.remaining.is_empty());
+            }
+            other => panic!("Expected RawBody, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_raw_body_disconnect_v5() {
+        // Empty DISCONNECT (remaining_len=0)
+        let bytes = Bytes::from_static(&[0xE0, 0x00]);
+        match parse_raw_body(bytes).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::RawBody(pkt), consumed) => {
+                assert_eq!(pkt.packet_type, ControlPacketType::DISCONNECT);
+                assert_eq!(consumed, 2);
+                assert!(pkt.remaining.is_empty());
+            }
+            other => panic!("Expected RawBody, got {:?}", other),
+        }
+    }
+
+    // ── type_only for various non-PUBLISH types ────────────────────────
+
+    #[test]
+    fn test_type_only_pingreq() {
+        match parse_type_only(&[0xC0, 0x00]).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::TypeOnly(pkt), consumed) => {
+                assert_eq!(pkt.packet_type, ControlPacketType::PINGREQ);
+                assert_eq!(pkt.flags, 0x00);
+                assert_eq!(consumed, 2);
+            }
+            other => panic!("Expected TypeOnly, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_type_only_pingresp() {
+        match parse_type_only(&[0xD0, 0x00]).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::TypeOnly(pkt), consumed) => {
+                assert_eq!(pkt.packet_type, ControlPacketType::PINGRESP);
+                assert_eq!(consumed, 2);
+            }
+            other => panic!("Expected TypeOnly, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_type_only_disconnect() {
+        match parse_type_only(&[0xE0, 0x00]).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::TypeOnly(pkt), consumed) => {
+                assert_eq!(pkt.packet_type, ControlPacketType::DISCONNECT);
+                assert_eq!(consumed, 2);
+            }
+            other => panic!("Expected TypeOnly, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_type_only_connack() {
+        use crate::mqtt_serde::mqttv5::connack::MqttConnAck;
+        let connack = MqttConnAck::new(false, 0x00, None);
+        let bytes = connack.to_bytes().unwrap();
+        match parse_type_only(&bytes).unwrap() {
+            LeveledParseOk::Packet(ParsedPacket::TypeOnly(pkt), consumed) => {
+                assert_eq!(pkt.packet_type, ControlPacketType::CONNACK);
+                assert_eq!(consumed, bytes.len());
+            }
+            other => panic!("Expected TypeOnly, got {:?}", other),
+        }
+    }
 }
