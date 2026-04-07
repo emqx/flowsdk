@@ -529,14 +529,12 @@ fn parse_connack_header_v5(body: &[u8]) -> Result<(VariableHeader, usize), Parse
     let reason_code = body[1];
     let mut offset = 2;
 
-    let properties = if body.len() > 2 {
-        let (props, consumed) =
-            crate::mqtt_serde::mqttv5::common::properties::parse_properties_hdr(&body[offset..])?;
-        offset += consumed;
-        Some(props)
-    } else {
-        None
-    };
+    // MQTT v5 requires the properties length field to always be present.
+    let (props, consumed) = crate::mqtt_serde::mqttv5::common::properties::parse_properties_hdr(
+        body.get(offset..).ok_or(ParseError::BufferTooShort)?,
+    )?;
+    offset += consumed;
+    let properties = if props.is_empty() { None } else { Some(props) };
 
     Ok((
         VariableHeader::ConnAckV5 {
