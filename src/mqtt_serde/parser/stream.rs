@@ -276,3 +276,414 @@ where
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket};
+    use crate::mqtt_serde::mqttv5::publishv5;
+    use crate::mqtt_serde::parser::leveled::{ParseLevel, ParsedPacket, VariableHeader};
+
+    // ── MqttParser construction ────────────────────────────────────────
+
+    #[test]
+    fn test_parser_default() {
+        let parser = MqttParser::default();
+        assert_eq!(parser.get_mqtt_vsn(), 0);
+        assert_eq!(parser.parse_level(), ParseLevel::Full);
+    }
+
+    #[test]
+    fn test_parser_with_level() {
+        let parser = MqttParser::with_level(4096, 5, ParseLevel::TypeOnly);
+        assert_eq!(parser.get_mqtt_vsn(), 5);
+        assert_eq!(parser.parse_level(), ParseLevel::TypeOnly);
+    }
+
+    #[test]
+    fn test_set_parse_level() {
+        let mut parser = MqttParser::new(4096, 5);
+        assert_eq!(parser.parse_level(), ParseLevel::Full);
+        parser.set_parse_level(ParseLevel::RawBody);
+        assert_eq!(parser.parse_level(), ParseLevel::RawBody);
+    }
+
+    #[test]
+    fn test_parse_level_from_u8() {
+        assert_eq!(ParseLevel::from(0), ParseLevel::Full);
+        assert_eq!(ParseLevel::from(1), ParseLevel::HeadersParsed);
+        assert_eq!(ParseLevel::from(2), ParseLevel::RawBody);
+        assert_eq!(ParseLevel::from(3), ParseLevel::TypeOnly);
+        assert_eq!(ParseLevel::from(99), ParseLevel::Full); // default
+    }
+
+    // ── next_parsed: empty buffer ──────────────────────────────────────
+
+    #[test]
+    fn test_next_parsed_empty_buffer() {
+        let mut parser = MqttParser::with_level(4096, 5, ParseLevel::TypeOnly);
+        assert!(parser.next_parsed().unwrap().is_none());
+    }
+
+    // ── next_parsed: Level 0 (Full) ────────────────────────────────────
+
+    #[test]
+    fn test_next_parsed_full_v5() {
+        let mut parser = MqttParser::with_level(4096, 5, ParseLevel::Full);
+        let publish =
+            publishv5::MqttPublish::new(0, "t/1".to_string(), None, vec![0x61; 5], false, false);
+        let bytes = publish.to_bytes().unwrap();
+        parser.feed(&bytes);
+
+        let result = parser.next_parsed().unwrap().unwrap();
+        assert_eq!(result.packet_type(), ControlPacketType::PUBLISH);
+        assert!(result.as_packet().is_some());
+        // Buffer should be drained
+        assert!(parser.next_parsed().unwrap().is_none());
+    }
+
+    // ── next_parsed: Level 3 (TypeOnly) ────────────────────────────────
+
+    #[test]
+    fn test_next_parsed_type_only() {
+        let mut parser = MqttParser::with_level(4096, 5, ParseLevel::TypeOnly);
+        let publish =
+            publishv5::MqttPublish::new(0, "t".to_string(), None, vec![1, 2, 3], false, false);
+        parser.feed(&publish.to_bytes().unwrap());
+
+        let result = parser.next_parsed().unwrap().unwrap();
+        assert_eq!(result.packet_type(), ControlPacketType::PUBLISH);
+        assert!(result.as_packet().is_none());
+        assert!(parser.next_parsed().unwrap().is_none());
+    }
+
+    // ── next_parsed: Level 2 (RawBody) ─────────────────────────────────
+
+    #[test]
+    fn test_next_parsed_raw_body() {
+        let mut parser = MqttParser::with_level(4096, 5, ParseLevel::RawBody);
+        let publish =
+            publishv5::MqttPublish::new(0, "t".to_string(), None, vec![1, 2, 3], false, false);
+        parser.feed(&publish.to_bytes().unwrap());
+
+        let result = parser.next_parsed().unwrap().unwrap();
+        match result {
+            ParsedPacket::RawBody(ref pkt) => {
+                assert_eq!(pkt.packet_type, ControlPacketType::PUBLISH);
+                assert!(!pkt.remaining.is_empty());
+            }
+            other => panic!("Expected RawBody, got {:?}", other),
+        }
+        assert!(parser.next_parsed().unwrap().is_none());
+    }
+
+    // ── next_parsed: Level 1 (HeadersParsed) ───────────────────────────
+
+    #[test]
+    fn test_next_parsed_headers_parsed() {
+        let mut parser = MqttParser::with_level(4096, 5, ParseLevel::HeadersParsed);
+        let publish = publishv5::MqttPublish::new(
+            1,
+            "a/b".to_string(),
+            Some(42),
+            vec![0xAA; 10],
+            false,
+            false,
+        );
+        parser.feed(&publish.to_bytes().unwrap());
+
+        let result = parser.next_parsed().unwrap().unwrap();
+        match result {
+            ParsedPacket::HeadersParsed(ref pkt) => {
+                assert_eq!(pkt.packet_type, ControlPacketType::PUBLISH);
+                match &pkt.variable_header {
+                    VariableHeader::PublishV5 {
+                        topic_name,
+                        qos,
+                        packet_id,
+                        ..
+                    } => {
+                        assert_eq!(topic_name, "a/b");
+                        assert_eq!(*qos, 1);
+                        assert_eq!(*packet_id, Some(42));
+                    }
+                    other => panic!("Expected PublishV5, got {:?}", other),
+                }
+                assert_eq!(pkt.raw_payload.len(), 10);
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+        assert!(parser.next_parsed().unwrap().is_none());
+    }
+
+    // ── Partial feed / incremental parsing ─────────────────────────────
+
+    #[test]
+    fn test_next_parsed_partial_feed() {
+        let mut parser = MqttParser::with_level(4096, 5, ParseLevel::TypeOnly);
+        let publish =
+            publishv5::MqttPublish::new(0, "topic".to_string(), None, vec![0x61; 50], false, false);
+        let bytes = publish.to_bytes().unwrap();
+
+        // Feed only half
+        let mid = bytes.len() / 2;
+        parser.feed(&bytes[..mid]);
+        assert!(parser.next_parsed().unwrap().is_none());
+
+        // Feed the rest
+        parser.feed(&bytes[mid..]);
+        let result = parser.next_parsed().unwrap().unwrap();
+        assert_eq!(result.packet_type(), ControlPacketType::PUBLISH);
+    }
+
+    #[test]
+    fn test_next_parsed_partial_feed_raw_body() {
+        let mut parser = MqttParser::with_level(4096, 5, ParseLevel::RawBody);
+        let publish =
+            publishv5::MqttPublish::new(0, "t".to_string(), None, vec![0xBB; 20], false, false);
+        let bytes = publish.to_bytes().unwrap();
+
+        // Feed byte by byte until we get a result
+        let mut got_packet = false;
+        for &b in &bytes {
+            parser.feed(&[b]);
+            if let Some(pkt) = parser.next_parsed().unwrap() {
+                assert_eq!(pkt.packet_type(), ControlPacketType::PUBLISH);
+                got_packet = true;
+                break;
+            }
+        }
+        assert!(got_packet);
+    }
+
+    #[test]
+    fn test_next_parsed_partial_feed_headers_parsed() {
+        let mut parser = MqttParser::with_level(4096, 5, ParseLevel::HeadersParsed);
+        let publish =
+            publishv5::MqttPublish::new(0, "t".to_string(), None, vec![0xCC; 10], false, false);
+        let bytes = publish.to_bytes().unwrap();
+
+        // Feed first 3 bytes only
+        parser.feed(&bytes[..3]);
+        assert!(parser.next_parsed().unwrap().is_none());
+
+        // Feed the rest
+        parser.feed(&bytes[3..]);
+        let result = parser.next_parsed().unwrap().unwrap();
+        assert_eq!(result.packet_type(), ControlPacketType::PUBLISH);
+    }
+
+    // ── Multi-packet streaming ─────────────────────────────────────────
+
+    #[test]
+    fn test_next_parsed_multiple_packets() {
+        let mut parser = MqttParser::with_level(4096, 5, ParseLevel::TypeOnly);
+
+        let p1 = publishv5::MqttPublish::new(0, "a".to_string(), None, vec![1], false, false);
+        let p2 = publishv5::MqttPublish::new(0, "b".to_string(), None, vec![2], false, false);
+        // PINGREQ
+        let ping = [0xC0u8, 0x00];
+
+        let mut all_bytes = p1.to_bytes().unwrap();
+        all_bytes.extend_from_slice(&p2.to_bytes().unwrap());
+        all_bytes.extend_from_slice(&ping);
+        parser.feed(&all_bytes);
+
+        // Should yield 3 packets
+        let r1 = parser.next_parsed().unwrap().unwrap();
+        assert_eq!(r1.packet_type(), ControlPacketType::PUBLISH);
+
+        let r2 = parser.next_parsed().unwrap().unwrap();
+        assert_eq!(r2.packet_type(), ControlPacketType::PUBLISH);
+
+        let r3 = parser.next_parsed().unwrap().unwrap();
+        assert_eq!(r3.packet_type(), ControlPacketType::PINGREQ);
+
+        assert!(parser.next_parsed().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_next_parsed_multiple_packets_headers_parsed() {
+        let mut parser = MqttParser::with_level(4096, 5, ParseLevel::HeadersParsed);
+
+        let p1 = publishv5::MqttPublish::new(0, "x".to_string(), None, vec![10], false, false);
+        let p2 =
+            publishv5::MqttPublish::new(1, "y".to_string(), Some(7), vec![20, 30], true, false);
+
+        let mut all_bytes = p1.to_bytes().unwrap();
+        all_bytes.extend_from_slice(&p2.to_bytes().unwrap());
+        parser.feed(&all_bytes);
+
+        // First packet
+        let r1 = parser.next_parsed().unwrap().unwrap();
+        match r1 {
+            ParsedPacket::HeadersParsed(ref pkt) => {
+                match &pkt.variable_header {
+                    VariableHeader::PublishV5 {
+                        topic_name, qos, ..
+                    } => {
+                        assert_eq!(topic_name, "x");
+                        assert_eq!(*qos, 0);
+                    }
+                    other => panic!("Expected PublishV5, got {:?}", other),
+                }
+                assert_eq!(pkt.raw_payload.len(), 1);
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+
+        // Second packet
+        let r2 = parser.next_parsed().unwrap().unwrap();
+        match r2 {
+            ParsedPacket::HeadersParsed(ref pkt) => match &pkt.variable_header {
+                VariableHeader::PublishV5 {
+                    topic_name,
+                    qos,
+                    retain,
+                    packet_id,
+                    ..
+                } => {
+                    assert_eq!(topic_name, "y");
+                    assert_eq!(*qos, 1);
+                    assert!(*retain);
+                    assert_eq!(*packet_id, Some(7));
+                }
+                other => panic!("Expected PublishV5, got {:?}", other),
+            },
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+
+        assert!(parser.next_parsed().unwrap().is_none());
+    }
+
+    // ── Level switching mid-stream ─────────────────────────────────────
+
+    #[test]
+    fn test_switch_parse_level_between_packets() {
+        let mut parser = MqttParser::with_level(4096, 5, ParseLevel::TypeOnly);
+
+        let p1 = publishv5::MqttPublish::new(0, "t".to_string(), None, vec![1], false, false);
+        let p2 = publishv5::MqttPublish::new(0, "t".to_string(), None, vec![2], false, false);
+
+        let mut all_bytes = p1.to_bytes().unwrap();
+        all_bytes.extend_from_slice(&p2.to_bytes().unwrap());
+        parser.feed(&all_bytes);
+
+        // Parse first as TypeOnly
+        let r1 = parser.next_parsed().unwrap().unwrap();
+        assert!(matches!(r1, ParsedPacket::TypeOnly(_)));
+
+        // Switch to RawBody for the second
+        parser.set_parse_level(ParseLevel::RawBody);
+        let r2 = parser.next_parsed().unwrap().unwrap();
+        assert!(matches!(r2, ParsedPacket::RawBody(_)));
+
+        assert!(parser.next_parsed().unwrap().is_none());
+    }
+
+    // ── next_packet (Level 0 only) ─────────────────────────────────────
+
+    #[test]
+    fn test_next_packet_v5() {
+        let mut parser = MqttParser::new(4096, 5);
+        let publish = publishv5::MqttPublish::new(0, "t".to_string(), None, vec![1], false, false);
+        parser.feed(&publish.to_bytes().unwrap());
+
+        let pkt = parser.next_packet().unwrap().unwrap();
+        assert_eq!(pkt.packet_type(), ControlPacketType::PUBLISH);
+        assert!(parser.next_packet().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_next_packet_empty() {
+        let mut parser = MqttParser::new(4096, 5);
+        assert!(parser.next_packet().unwrap().is_none());
+    }
+
+    #[test]
+    fn test_next_packet_partial() {
+        let mut parser = MqttParser::new(4096, 5);
+        let publish =
+            publishv5::MqttPublish::new(0, "t".to_string(), None, vec![0; 20], false, false);
+        let bytes = publish.to_bytes().unwrap();
+        parser.feed(&bytes[..3]);
+        assert!(parser.next_packet().unwrap().is_none());
+        parser.feed(&bytes[3..]);
+        assert!(parser.next_packet().unwrap().is_some());
+    }
+
+    // ── set_mqtt_vsn ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_set_mqtt_vsn_from_connect_v5() {
+        use crate::mqtt_serde::mqttv5::connect::MqttConnect;
+        let connect = MqttConnect::new("c".to_string(), None, None, None, 60, true, Vec::new());
+        let mut parser = MqttParser::new(4096, 0);
+        parser.feed(&connect.to_bytes().unwrap());
+        assert_eq!(parser.set_mqtt_vsn(0).unwrap(), 5);
+        assert_eq!(parser.get_mqtt_vsn(), 5);
+    }
+
+    #[test]
+    fn test_set_mqtt_vsn_from_connect_v3() {
+        use crate::mqtt_serde::mqttv3::connect::MqttConnect;
+        let connect = MqttConnect::new("c".to_string(), 60, true);
+        let mut parser = MqttParser::new(4096, 0);
+        parser.feed(&connect.to_bytes().unwrap());
+        assert_eq!(parser.set_mqtt_vsn(0).unwrap(), 4);
+    }
+
+    #[test]
+    fn test_set_mqtt_vsn_already_set() {
+        let mut parser = MqttParser::new(4096, 5);
+        assert_eq!(parser.set_mqtt_vsn(0).unwrap(), 5);
+    }
+
+    #[test]
+    fn test_set_mqtt_vsn_not_connect() {
+        let mut parser = MqttParser::new(4096, 0);
+        // Feed a PINGREQ (not CONNECT)
+        parser.feed(&[0xC0, 0x00]);
+        assert!(parser.set_mqtt_vsn(0).is_err());
+    }
+
+    // ── V3 next_parsed via MqttParser ──────────────────────────────────
+
+    #[test]
+    fn test_next_parsed_v3_full() {
+        use crate::mqtt_serde::mqttv3::publishv3;
+        let mut parser = MqttParser::with_level(4096, 4, ParseLevel::Full);
+        let publish = publishv3::MqttPublish::new("t".to_string(), 0, vec![1], None, false, false);
+        parser.feed(&publish.to_bytes().unwrap());
+        let result = parser.next_parsed().unwrap().unwrap();
+        assert_eq!(result.packet_type(), ControlPacketType::PUBLISH);
+        assert!(result.as_packet().is_some());
+    }
+
+    #[test]
+    fn test_next_parsed_v3_headers_parsed() {
+        use crate::mqtt_serde::mqttv3::publishv3;
+        let mut parser = MqttParser::with_level(4096, 4, ParseLevel::HeadersParsed);
+        let publish =
+            publishv3::MqttPublish::new("t".to_string(), 1, vec![1, 2], Some(99), false, false);
+        parser.feed(&publish.to_bytes().unwrap());
+        let result = parser.next_parsed().unwrap().unwrap();
+        match result {
+            ParsedPacket::HeadersParsed(pkt) => {
+                assert_eq!(pkt.mqtt_version, 4);
+                match &pkt.variable_header {
+                    VariableHeader::PublishV3 {
+                        topic_name,
+                        message_id,
+                        ..
+                    } => {
+                        assert_eq!(topic_name, "t");
+                        assert_eq!(*message_id, Some(99));
+                    }
+                    other => panic!("Expected PublishV3, got {:?}", other),
+                }
+            }
+            other => panic!("Expected HeadersParsed, got {:?}", other),
+        }
+    }
+}
