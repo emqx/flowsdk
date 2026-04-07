@@ -23,14 +23,14 @@ case "${OS}" in
 esac
 
 echo "Building flowsdk_ffi ($PROFILE)..."
-cargo build -p flowsdk_ffi --profile $CARGO_PROFILE
+cargo build -p flowsdk_ffi --profile $CARGO_PROFILE --features quic
 
 echo "Generating Kotlin bindings..."
 # Create package directory if it doesn't exist
 mkdir -p kotlin/package/src/main/kotlin
 
 # Output direct to kotlin/package/src/main/kotlin
-cargo run -p flowsdk_ffi --features=uniffi/cli --bin uniffi-bindgen generate \
+cargo run -p flowsdk_ffi --features=uniffi/cli,quic --bin uniffi-bindgen generate \
     --library "$TARGET_DIR/libflowsdk_ffi.$EXT" \
     --language kotlin \
     --out-dir kotlin/package/src/main/kotlin
