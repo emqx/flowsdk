@@ -284,22 +284,493 @@ pub trait MqttControlPacket {
     }
 }
 
-#[test]
-fn test_control_packet_type_conversion() {
-    let pkt = MqttPacket::Connect5(connectv5::MqttConnect {
-        protocol_name: "MQTT".to_string(),
-        protocol_version: 5,
-        keep_alive: 60,
-        client_id: "test_client".to_string(),
-        will: None,
-        username: None,
-        password: None,
-        properties: Vec::new(),
-        clean_start: true,
-    });
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-    let json = serde_json::to_string(&pkt).unwrap();
+    #[test]
+    fn test_control_packet_type_conversion() {
+        let pkt = MqttPacket::Connect5(connectv5::MqttConnect {
+            protocol_name: "MQTT".to_string(),
+            protocol_version: 5,
+            keep_alive: 60,
+            client_id: "test_client".to_string(),
+            will: None,
+            username: None,
+            password: None,
+            properties: Vec::new(),
+            clean_start: true,
+        });
 
-    let expected ="{\"type\":\"Connect5\",\"protocol_name\":\"MQTT\",\"protocol_version\":5,\"keep_alive\":60,\"client_id\":\"test_client\",\"will\":null,\"username\":null,\"password\":null,\"properties\":[],\"clean_start\":true}";
-    assert_eq!(json, expected);
+        let json = serde_json::to_string(&pkt).unwrap();
+
+        let expected ="{\"type\":\"Connect5\",\"protocol_name\":\"MQTT\",\"protocol_version\":5,\"keep_alive\":60,\"client_id\":\"test_client\",\"will\":null,\"username\":null,\"password\":null,\"properties\":[],\"clean_start\":true}";
+        assert_eq!(json, expected);
+    }
+
+    // Test packet_type() for all MQTTv5 packet variants
+    #[test]
+    fn test_packet_type_v5_connect() {
+        let packet = MqttPacket::Connect5(connectv5::MqttConnect {
+            protocol_name: "MQTT".to_string(),
+            protocol_version: 5,
+            keep_alive: 60,
+            client_id: "test".to_string(),
+            will: None,
+            username: None,
+            password: None,
+            properties: Vec::new(),
+            clean_start: true,
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::CONNECT);
+    }
+
+    #[test]
+    fn test_packet_type_v5_connack() {
+        let packet = MqttPacket::ConnAck5(connackv5::MqttConnAck {
+            session_present: false,
+            reason_code: 0,
+            properties: Some(Vec::new()),
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::CONNACK);
+    }
+
+    #[test]
+    fn test_packet_type_v5_publish() {
+        let packet = MqttPacket::Publish5(publishv5::MqttPublish {
+            dup: false,
+            qos: 0,
+            retain: false,
+            topic_name: "test/topic".to_string(),
+            packet_id: None,
+            properties: Vec::new(),
+            payload: Vec::new(),
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::PUBLISH);
+    }
+
+    #[test]
+    fn test_packet_type_v5_puback() {
+        let packet = MqttPacket::PubAck5(pubackv5::MqttPubAck {
+            packet_id: 1,
+            reason_code: 0,
+            properties: Vec::new(),
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::PUBACK);
+    }
+
+    #[test]
+    fn test_packet_type_v5_pubrec() {
+        let packet = MqttPacket::PubRec5(pubrecv5::MqttPubRec {
+            packet_id: 1,
+            reason_code: 0,
+            properties: Vec::new(),
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::PUBREC);
+    }
+
+    #[test]
+    fn test_packet_type_v5_pubrel() {
+        let packet = MqttPacket::PubRel5(pubrelv5::MqttPubRel {
+            packet_id: 1,
+            reason_code: 0,
+            properties: Vec::new(),
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::PUBREL);
+    }
+
+    #[test]
+    fn test_packet_type_v5_pubcomp() {
+        let packet = MqttPacket::PubComp5(pubcompv5::MqttPubComp {
+            packet_id: 1,
+            reason_code: 0,
+            properties: Vec::new(),
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::PUBCOMP);
+    }
+
+    #[test]
+    fn test_packet_type_v5_subscribe() {
+        let packet = MqttPacket::Subscribe5(subscribev5::MqttSubscribe {
+            packet_id: 1,
+            properties: Vec::new(),
+            subscriptions: vec![subscribev5::TopicSubscription {
+                topic_filter: "test/#".to_string(),
+                qos: 1,
+                no_local: false,
+                retain_as_published: false,
+                retain_handling: 0,
+            }],
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::SUBSCRIBE);
+    }
+
+    #[test]
+    fn test_packet_type_v5_suback() {
+        let packet = MqttPacket::SubAck5(subackv5::MqttSubAck {
+            packet_id: 1,
+            properties: Vec::new(),
+            reason_codes: vec![0],
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::SUBACK);
+    }
+
+    #[test]
+    fn test_packet_type_v5_unsubscribe() {
+        let packet = MqttPacket::Unsubscribe5(unsubscribev5::MqttUnsubscribe {
+            packet_id: 1,
+            properties: Vec::new(),
+            topic_filters: vec!["test/#".to_string()],
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::UNSUBSCRIBE);
+    }
+
+    #[test]
+    fn test_packet_type_v5_unsuback() {
+        let packet = MqttPacket::UnsubAck5(unsubackv5::MqttUnsubAck {
+            packet_id: 1,
+            properties: Vec::new(),
+            reason_codes: vec![0],
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::UNSUBACK);
+    }
+
+    #[test]
+    fn test_packet_type_v5_pingreq() {
+        let packet = MqttPacket::PingReq5(pingreqv5::MqttPingReq);
+        assert_eq!(packet.packet_type(), ControlPacketType::PINGREQ);
+    }
+
+    #[test]
+    fn test_packet_type_v5_pingresp() {
+        let packet = MqttPacket::PingResp5(pingrespv5::MqttPingResp);
+        assert_eq!(packet.packet_type(), ControlPacketType::PINGRESP);
+    }
+
+    #[test]
+    fn test_packet_type_v5_disconnect() {
+        let packet = MqttPacket::Disconnect5(disconnectv5::MqttDisconnect {
+            reason_code: 0,
+            properties: Vec::new(),
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::DISCONNECT);
+    }
+
+    #[test]
+    fn test_packet_type_v5_auth() {
+        let packet = MqttPacket::Auth(authv5::MqttAuth {
+            reason_code: 0,
+            properties: Vec::new(),
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::AUTH);
+    }
+
+    // Test packet_type() for all MQTTv3 packet variants
+    #[test]
+    fn test_packet_type_v3_connect() {
+        let packet = MqttPacket::Connect3(connectv3::MqttConnect {
+            protocol_name: "MQTT".to_string(),
+            protocol_version: 4,
+            keep_alive: 60,
+            client_id: "test".to_string(),
+            will: None,
+            username: None,
+            password: None,
+            clean_session: true,
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::CONNECT);
+    }
+
+    #[test]
+    fn test_packet_type_v3_connack() {
+        let packet = MqttPacket::ConnAck3(connackv3::MqttConnAck {
+            session_present: false,
+            return_code: 0,
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::CONNACK);
+    }
+
+    #[test]
+    fn test_packet_type_v3_publish() {
+        let packet = MqttPacket::Publish3(publishv3::MqttPublish {
+            dup: false,
+            qos: 0,
+            retain: false,
+            topic_name: "test/topic".to_string(),
+            message_id: None,
+            payload: Vec::new(),
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::PUBLISH);
+    }
+
+    #[test]
+    fn test_packet_type_v3_puback() {
+        let packet = MqttPacket::PubAck3(pubackv3::MqttPubAck { message_id: 1 });
+        assert_eq!(packet.packet_type(), ControlPacketType::PUBACK);
+    }
+
+    #[test]
+    fn test_packet_type_v3_pubrec() {
+        let packet = MqttPacket::PubRec3(pubrecv3::MqttPubRec { message_id: 1 });
+        assert_eq!(packet.packet_type(), ControlPacketType::PUBREC);
+    }
+
+    #[test]
+    fn test_packet_type_v3_pubrel() {
+        let packet = MqttPacket::PubRel3(pubrelv3::MqttPubRel { message_id: 1 });
+        assert_eq!(packet.packet_type(), ControlPacketType::PUBREL);
+    }
+
+    #[test]
+    fn test_packet_type_v3_pubcomp() {
+        let packet = MqttPacket::PubComp3(pubcompv3::MqttPubComp { message_id: 1 });
+        assert_eq!(packet.packet_type(), ControlPacketType::PUBCOMP);
+    }
+
+    #[test]
+    fn test_packet_type_v3_subscribe() {
+        let packet = MqttPacket::Subscribe3(subscribev3::MqttSubscribe {
+            message_id: 1,
+            subscriptions: vec![subscribev3::SubscriptionTopic {
+                topic_filter: "test/#".to_string(),
+                qos: 1,
+            }],
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::SUBSCRIBE);
+    }
+
+    #[test]
+    fn test_packet_type_v3_suback() {
+        let packet = MqttPacket::SubAck3(subackv3::MqttSubAck {
+            message_id: 1,
+            return_codes: vec![1],
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::SUBACK);
+    }
+
+    #[test]
+    fn test_packet_type_v3_unsubscribe() {
+        let packet = MqttPacket::Unsubscribe3(unsubscribev3::MqttUnsubscribe {
+            message_id: 1,
+            topic_filters: vec!["test/#".to_string()],
+        });
+        assert_eq!(packet.packet_type(), ControlPacketType::UNSUBSCRIBE);
+    }
+
+    #[test]
+    fn test_packet_type_v3_unsuback() {
+        let packet = MqttPacket::UnsubAck3(unsubackv3::MqttUnsubAck { message_id: 1 });
+        assert_eq!(packet.packet_type(), ControlPacketType::UNSUBACK);
+    }
+
+    #[test]
+    fn test_packet_type_v3_pingreq() {
+        let packet = MqttPacket::PingReq3(pingreqv3::MqttPingReq);
+        assert_eq!(packet.packet_type(), ControlPacketType::PINGREQ);
+    }
+
+    #[test]
+    fn test_packet_type_v3_pingresp() {
+        let packet = MqttPacket::PingResp3(pingrespv3::MqttPingResp);
+        assert_eq!(packet.packet_type(), ControlPacketType::PINGRESP);
+    }
+
+    #[test]
+    fn test_packet_type_v3_disconnect() {
+        let packet = MqttPacket::Disconnect3(disconnectv3::MqttDisconnect {});
+        assert_eq!(packet.packet_type(), ControlPacketType::DISCONNECT);
+    }
+
+    // Test that V3 and V5 variants of the same packet type return the same ControlPacketType
+    #[test]
+    fn test_packet_type_consistency_connect() {
+        let v5 = MqttPacket::Connect5(connectv5::MqttConnect {
+            protocol_name: "MQTT".to_string(),
+            protocol_version: 5,
+            keep_alive: 60,
+            client_id: "test".to_string(),
+            will: None,
+            username: None,
+            password: None,
+            properties: Vec::new(),
+            clean_start: true,
+        });
+        let v3 = MqttPacket::Connect3(connectv3::MqttConnect {
+            protocol_name: "MQTT".to_string(),
+            protocol_version: 4,
+            keep_alive: 60,
+            client_id: "test".to_string(),
+            will: None,
+            username: None,
+            password: None,
+            clean_session: true,
+        });
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_connack() {
+        let v5 = MqttPacket::ConnAck5(connackv5::MqttConnAck {
+            session_present: false,
+            reason_code: 0,
+            properties: Some(Vec::new()),
+        });
+        let v3 = MqttPacket::ConnAck3(connackv3::MqttConnAck {
+            session_present: false,
+            return_code: 0,
+        });
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_publish() {
+        let v5 = MqttPacket::Publish5(publishv5::MqttPublish {
+            dup: false,
+            qos: 0,
+            retain: false,
+            topic_name: "test".to_string(),
+            packet_id: None,
+            properties: Vec::new(),
+            payload: Vec::new(),
+        });
+        let v3 = MqttPacket::Publish3(publishv3::MqttPublish {
+            dup: false,
+            qos: 0,
+            retain: false,
+            topic_name: "test".to_string(),
+            message_id: None,
+            payload: Vec::new(),
+        });
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_puback() {
+        let v5 = MqttPacket::PubAck5(pubackv5::MqttPubAck {
+            packet_id: 1,
+            reason_code: 0,
+            properties: Vec::new(),
+        });
+        let v3 = MqttPacket::PubAck3(pubackv3::MqttPubAck { message_id: 1 });
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_pubrec() {
+        let v5 = MqttPacket::PubRec5(pubrecv5::MqttPubRec {
+            packet_id: 1,
+            reason_code: 0,
+            properties: Vec::new(),
+        });
+        let v3 = MqttPacket::PubRec3(pubrecv3::MqttPubRec { message_id: 1 });
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_pubrel() {
+        let v5 = MqttPacket::PubRel5(pubrelv5::MqttPubRel {
+            packet_id: 1,
+            reason_code: 0,
+            properties: Vec::new(),
+        });
+        let v3 = MqttPacket::PubRel3(pubrelv3::MqttPubRel { message_id: 1 });
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_pubcomp() {
+        let v5 = MqttPacket::PubComp5(pubcompv5::MqttPubComp {
+            packet_id: 1,
+            reason_code: 0,
+            properties: Vec::new(),
+        });
+        let v3 = MqttPacket::PubComp3(pubcompv3::MqttPubComp { message_id: 1 });
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_subscribe() {
+        let v5 = MqttPacket::Subscribe5(subscribev5::MqttSubscribe {
+            packet_id: 1,
+            properties: Vec::new(),
+            subscriptions: vec![subscribev5::TopicSubscription {
+                topic_filter: "test".to_string(),
+                qos: 1,
+                no_local: false,
+                retain_as_published: false,
+                retain_handling: 0,
+            }],
+        });
+        let v3 = MqttPacket::Subscribe3(subscribev3::MqttSubscribe {
+            message_id: 1,
+            subscriptions: vec![subscribev3::SubscriptionTopic {
+                topic_filter: "test".to_string(),
+                qos: 1,
+            }],
+        });
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_suback() {
+        let v5 = MqttPacket::SubAck5(subackv5::MqttSubAck {
+            packet_id: 1,
+            properties: Vec::new(),
+            reason_codes: vec![0],
+        });
+        let v3 = MqttPacket::SubAck3(subackv3::MqttSubAck {
+            message_id: 1,
+            return_codes: vec![1],
+        });
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_unsubscribe() {
+        let v5 = MqttPacket::Unsubscribe5(unsubscribev5::MqttUnsubscribe {
+            packet_id: 1,
+            properties: Vec::new(),
+            topic_filters: vec!["test".to_string()],
+        });
+        let v3 = MqttPacket::Unsubscribe3(unsubscribev3::MqttUnsubscribe {
+            message_id: 1,
+            topic_filters: vec!["test".to_string()],
+        });
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_unsuback() {
+        let v5 = MqttPacket::UnsubAck5(unsubackv5::MqttUnsubAck {
+            packet_id: 1,
+            properties: Vec::new(),
+            reason_codes: vec![0],
+        });
+        let v3 = MqttPacket::UnsubAck3(unsubackv3::MqttUnsubAck { message_id: 1 });
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_pingreq() {
+        let v5 = MqttPacket::PingReq5(pingreqv5::MqttPingReq);
+        let v3 = MqttPacket::PingReq3(pingreqv3::MqttPingReq);
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_pingresp() {
+        let v5 = MqttPacket::PingResp5(pingrespv5::MqttPingResp);
+        let v3 = MqttPacket::PingResp3(pingrespv3::MqttPingResp);
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
+
+    #[test]
+    fn test_packet_type_consistency_disconnect() {
+        let v5 = MqttPacket::Disconnect5(disconnectv5::MqttDisconnect {
+            reason_code: 0,
+            properties: Vec::new(),
+        });
+        let v3 = MqttPacket::Disconnect3(disconnectv3::MqttDisconnect {});
+        assert_eq!(v5.packet_type(), v3.packet_type());
+    }
 }
