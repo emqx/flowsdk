@@ -28,6 +28,7 @@ pub enum ParseLevel {
     TypeOnly = 3,
 }
 
+#[allow(clippy::large_enum_variant)]
 /// Result of a leveled parse. The variant depends on the configured `ParseLevel`.
 #[derive(Debug)]
 pub enum ParsedPacket {
@@ -198,6 +199,7 @@ pub enum VariableHeader {
 }
 
 /// Result type for leveled parsing.
+#[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 pub enum LeveledParseOk {
     /// Not enough data in the buffer for a full packet.
@@ -606,6 +608,7 @@ fn parse_unsuback_header_v5(body: &[u8]) -> Result<(VariableHeader, usize), Pars
 
 /// Shared parser for PUBACK, PUBREC, PUBREL, PUBCOMP (v5).
 /// These all have: packet_id (2 bytes) + optional reason_code (1 byte) + optional properties.
+#[allow(clippy::enum_variant_names)]
 enum VhdrV5Kind {
     PubAck,
     PubRec,
