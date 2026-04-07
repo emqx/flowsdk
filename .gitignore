@@ -22,3 +22,6 @@ python/examples/*.so
 python/examples/*.dll
 
 python/**/*.pyc
+
+# Kotlin Examples (generated files)
+kotlin/package/src/main/resources/libflowsdk_ffi.dylib
