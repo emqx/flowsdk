@@ -25,3 +25,4 @@ python/**/*.pyc
 
 # Kotlin Examples (generated files)
 kotlin/package/src/main/resources/libflowsdk_ffi.dylib
+kotlin/.gradle/

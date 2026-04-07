@@ -152,6 +152,52 @@ jobs:
     - name: Build and Test Bindings
       run: ./scripts/build_python_bindings.sh --test
 
+  kotlin-bindings:
+    name: Kotlin Bindings
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Set up JDK 17
+      uses: actions/setup-java@v4
+      with:
+        distribution: 'temurin'
+        java-version: '17'
+
+    - name: Cache Gradle dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.gradle/caches
+          ~/.gradle/wrapper
+        key: ${{ runner.os }}-gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
+        restore-keys: |
+          ${{ runner.os }}-gradle-
+
+    - name: Cache Cargo dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-kotlin-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-kotlin-
+
+    - name: Build and Verify Kotlin Bindings
+      run: ./scripts/build_kotlin_bindings.sh
+
+    - name: Verify Examples Build
+      run: |
+        cd kotlin
+        ./gradlew :examples:simple_client:build
+        ./gradlew :examples:quic_client:build
+
   coverage:
     name: Code Coverage
     runs-on: ubuntu-latest

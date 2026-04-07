@@ -13,6 +13,7 @@ repositories {
 dependencies {
     implementation(project(":package"))
     implementation(kotlin("stdlib"))
+    implementation("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.8.0")
 }
 
 application {
