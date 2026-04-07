@@ -729,7 +729,9 @@ fn parse_auth_header_v5(
     body: &[u8],
     remaining_len: usize,
 ) -> Result<(VariableHeader, usize), ParseError> {
-    // AUTH v5: reason code + properties, no payload
+    // AUTH v5: reason code + properties, no payload.
+    // §3.15.2.1: Reason Code and Property Length can be omitted if RC is 0x00
+    // and there are no Properties (Remaining Length of 0).
     if remaining_len == 0 {
         return Ok((
             VariableHeader::AuthV5 {
