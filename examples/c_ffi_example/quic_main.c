@@ -22,6 +22,7 @@ typedef struct {
   const char *client_key_file;
   const char *alpn;
   uint8_t insecure_skip_verify;
+  uint8_t enable_key_log;
 } MqttTlsOptionsC;
 
 typedef struct {
@@ -88,6 +89,7 @@ int main(int argc, char **argv) {
    */
   const char *broker_host = "broker.emqx.io";
   const char *broker_port = "14567";
+  const char *sslkeylogfile = getenv("SSLKEYLOGFILE");
 
   if (argc > 1)
     broker_host = argv[1];
@@ -143,6 +145,11 @@ int main(int argc, char **argv) {
 
   MqttTlsOptionsC q_opts = {0};
   q_opts.insecure_skip_verify = 1;
+  q_opts.enable_key_log = sslkeylogfile != NULL;
+
+  if (q_opts.enable_key_log) {
+    printf("TLS key logging enabled -> %s\n", sslkeylogfile);
+  }
 
   if (mqtt_quic_engine_connect(engine, server_addr_str, broker_host, &q_opts) !=
       0) {
