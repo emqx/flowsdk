@@ -67,6 +67,7 @@ pub struct MqttTlsOptionsFFI {
     pub client_key_file: Option<String>,
     pub insecure_skip_verify: bool,
     pub alpn_protocols: Vec<String>,
+    pub enable_key_log: bool,
 }
 
 #[derive(uniffi::Record)]
