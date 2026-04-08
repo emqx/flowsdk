@@ -333,7 +333,8 @@ class FlowMqttClient:
         client_key_file: Optional[str] = None,
         insecure_skip_verify: bool = False,
         alpn_protocols: Optional[List[str]] = None,
-        server_name: Optional[str] = None
+        server_name: Optional[str] = None,
+        enable_key_log: bool = False
     ):
         self.transport_type = transport
         self.server_name = server_name
@@ -355,7 +356,8 @@ class FlowMqttClient:
             client_cert_file=client_cert_file,
             client_key_file=client_key_file,
             insecure_skip_verify=insecure_skip_verify,
-            alpn_protocols=alpn_protocols or ["mqtt"]
+            alpn_protocols=alpn_protocols or ["mqtt"],
+            enable_key_log=enable_key_log
         )
         
         # Create appropriate engine based on transport type
