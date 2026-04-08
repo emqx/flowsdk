@@ -310,6 +310,10 @@ impl TlsMqttEngineFFI {
             config.alpn_protocols = vec![b"mqtt".to_vec()];
         }
 
+        if tls_opts.enable_key_log {
+            config.key_log = Arc::new(rustls::KeyLogFile::new());
+        }
+
         let engine = TlsMqttEngine::new(options, &server_name, Arc::new(config)).unwrap();
         TlsMqttEngineFFI {
             engine: Mutex::new(engine),
