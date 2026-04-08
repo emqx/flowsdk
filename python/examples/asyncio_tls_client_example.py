@@ -25,12 +25,19 @@ async def test_tls():
         if topic == "test/python/tls" and payload == b"Hello TLS!":
             msg_received.set()
 
+    # Check if TLS key logging is requested via environment variable
+    keylog_file = os.environ.get("SSLKEYLOGFILE")
+    enable_key_log = keylog_file is not None
+    if enable_key_log:
+        print(f"🔑 TLS key logging enabled → {keylog_file}")
+
     # We'll use broker.emqx.io:8883 which supports TLS
     client = FlowMqttClient(
         client_id=f"python_tls_test_{int(time.time() % 10000)}",
         transport=TransportType.TLS,
         insecure_skip_verify=False,  # Skip verification for simplicity in test
         server_name="broker.emqx.io",
+        enable_key_log=enable_key_log,
         on_message=on_message
     )
     
