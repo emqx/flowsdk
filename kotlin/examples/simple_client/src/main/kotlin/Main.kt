@@ -1,15 +1,25 @@
 package example
 
 import uniffi.flowsdk_ffi.*
+import java.net.InetSocketAddress
+import java.nio.ByteBuffer
+import java.nio.channels.SelectionKey
+import java.nio.channels.Selector
+import java.nio.channels.SocketChannel
 import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.*
 
+private const val BROKER_HOST = "broker.emqx.io"
+private const val BROKER_PORT = 1883
+private const val RUN_DURATION_MS = 15_000L
+private const val TICK_INTERVAL_MS = 10L
+
 fun main() = runBlocking {
-    println("Initializing FlowSDK Kotlin Example with Coroutines...")
+    println("Initializing FlowSDK TCP MQTT Kotlin Example...")
 
     // 1. Configure Options
     val opts = MqttOptionsFfi(
-        clientId = "kotlin_example_client",
+        clientId = "kotlin_tcp_${System.currentTimeMillis() % 100000}",
         mqttVersion = 5.toUByte(),
         cleanStart = true,
         keepAlive = 60.toUShort(),
@@ -24,60 +34,158 @@ fun main() = runBlocking {
     val engine = MqttEngineFfi.newWithOpts(opts)
     println("Engine created.")
 
-    // 3. Connect (this is async in the engine, but we trigger it here)
+    // 3. Connect TCP socket
+    val brokerAddr = InetSocketAddress(BROKER_HOST, BROKER_PORT)
+    val channel = SocketChannel.open().apply {
+        configureBlocking(false)
+        connect(brokerAddr)
+    }
+    val selector = Selector.open()
+    channel.register(selector, SelectionKey.OP_CONNECT or SelectionKey.OP_READ)
+    
+    println("Connecting to TCP broker at $BROKER_HOST:$BROKER_PORT...")
+
+    // 4. Trigger MQTT connect (produces outgoing CONNECT packet)
     engine.connect()
-    println("Connect triggered.")
-
-    // 4. Event loop using coroutines
+    
+    // 5. Event loop using coroutines
+    val recvBuf = ByteBuffer.allocateDirect(65536)
     val startTime = System.currentTimeMillis()
-    var running = true
-    var hasPublished = false
+    var subscribed = false
+    var published = false
+    var tcpConnected = false
 
-    // Run for 5 seconds using coroutines
     launch {
-        while (running && System.currentTimeMillis() - startTime < 5000) {
-            // Handle incoming events
+        while (System.currentTimeMillis() - startTime < RUN_DURATION_MS) {
+            // Wait for I/O or tick timeout
+            selector.select(TICK_INTERVAL_MS)
+
+            val keys = selector.selectedKeys()
+            for (key in keys) {
+                if (key.isConnectable) {
+                    if (channel.finishConnect()) {
+                        println("TCP connected.")
+                        key.interestOps(SelectionKey.OP_READ)
+                        tcpConnected = true
+                        
+                        // Send initial MQTT CONNECT packet
+                        val outgoing = engine.takeOutgoing()
+                        if (outgoing.isNotEmpty()) {
+                            channel.write(ByteBuffer.wrap(outgoing))
+                        }
+                    }
+                }
+                if (key.isReadable) {
+                    // Read from TCP socket
+                    recvBuf.clear()
+                    val bytesRead = channel.read(recvBuf)
+                    if (bytesRead > 0) {
+                        recvBuf.flip()
+                        val data = ByteArray(recvBuf.limit())
+                        recvBuf.get(data)
+                        val incomingEvents = engine.handleIncoming(data)
+                        
+                        // Process events from handleIncoming immediately
+                        for (event in incomingEvents) {
+                            when (event) {
+                                is MqttEventFfi.Connected -> {
+                                    println("✓ Connected! Session Present: ${event.v1.sessionPresent}")
+                                    
+                                    if (!subscribed) {
+                                        val subPid = engine.subscribe("test/kotlin/tcp", 1.toUByte())
+                                        println("✓ Subscribed to 'test/kotlin/tcp' with PID: $subPid")
+                                        subscribed = true
+                                    }
+                                }
+                                is MqttEventFfi.Subscribed -> {
+                                    println("✓ Subscribe Ack: PID ${event.v1.packetId}")
+                                    
+                                    if (!published) {
+                                        val payload = "Hello from Kotlin TCP!".toByteArray(StandardCharsets.UTF_8)
+                                        val pubPid = engine.publish("test/kotlin/tcp", payload, 1.toUByte(), null)
+                                        println("✓ Published to 'test/kotlin/tcp' with PID: $pubPid")
+                                        published = true
+                                    }
+                                }
+                                is MqttEventFfi.MessageReceived -> {
+                                    val msg = String(event.v1.payload, StandardCharsets.UTF_8)
+                                    println("📨 Received Message on '${event.v1.topic}': $msg")
+                                }
+                                is MqttEventFfi.Published -> println("✓ Publish Ack: PID ${event.v1.packetId}")
+                                is MqttEventFfi.Disconnected -> println("✗ Disconnected. Reason: ${event.reasonCode}")
+                                is MqttEventFfi.Error -> println("✗ Error: ${event.message}")
+                                else -> Unit
+                            }
+                        }
+                    } else if (bytesRead < 0) {
+                        println("TCP connection closed by broker")
+                        break
+                    }
+                }
+            }
+            keys.clear()
+
+            // Handle tick
             val nowMs = (System.currentTimeMillis() - startTime).toULong()
             val events = engine.handleTick(nowMs)
+            
             for (event in events) {
                 when (event) {
                     is MqttEventFfi.Connected -> {
                         println("✓ Connected! Session Present: ${event.v1.sessionPresent}")
                         
-                        // Subscribe once connected
-                        val subPid = engine.subscribe("test/topic", 1.toUByte())
-                        println("✓ Subscribed to 'test/topic' with PID: $subPid")
-
-                        // Publish a message (only once)
-                        if (!hasPublished) {
-                            val payload = "Hello from Kotlin with Coroutines!".toByteArray(StandardCharsets.UTF_8)
-                            
-                            val pubPid = engine.publish("test/topic", payload, 1.toUByte(), null)
-                            println("✓ Published to 'test/topic' with PID: $pubPid")
-                            hasPublished = true
+                        if (!subscribed) {
+                            val subPid = engine.subscribe("test/kotlin/tcp", 1.toUByte())
+                            println("✓ Subscribed to 'test/kotlin/tcp' with PID: $subPid")
+                            subscribed = true
+                        }
+                    }
+                    is MqttEventFfi.Subscribed -> {
+                        println("✓ Subscribe Ack: PID ${event.v1.packetId}")
+                        
+                        // Publish after subscription is confirmed
+                        if (!published) {
+                            val payload = "Hello from Kotlin TCP!".toByteArray(StandardCharsets.UTF_8)
+                            val pubPid = engine.publish("test/kotlin/tcp", payload, 1.toUByte(), null)
+                            println("✓ Published to 'test/kotlin/tcp' with PID: $pubPid")
+                            published = true
                         }
                     }
                     is MqttEventFfi.MessageReceived -> {
-                        // payload is ByteArray
                         val msg = String(event.v1.payload, StandardCharsets.UTF_8)
                         println("📨 Received Message on '${event.v1.topic}': $msg")
                     }
                     is MqttEventFfi.Published -> println("✓ Publish Ack: PID ${event.v1.packetId}")
-                    is MqttEventFfi.Subscribed -> println("✓ Subscribe Ack: PID ${event.v1.packetId}")
                     is MqttEventFfi.Disconnected -> {
                         println("✗ Disconnected. Reason: ${event.reasonCode}")
-                        running = false
                     }
-                    else -> println("ℹ Event: $event")
+                    is MqttEventFfi.Error -> println("✗ Error: ${event.message}")
+                    else -> Unit
                 }
             }
 
-            // Use coroutine delay instead of Thread.sleep
+            // Send any outgoing data (only after TCP connection is established)
+            if (tcpConnected) {
+                val outgoing = engine.takeOutgoing()
+                if (outgoing.isNotEmpty()) {
+                    channel.write(ByteBuffer.wrap(outgoing))
+                }
+            }
+
+            // Use coroutine delay
             delay(10)
         }
-    }.join()  // Wait for the event loop coroutine to complete
+    }.join()
 
-    // 5. Cleanup
+    // 6. Cleanup
+    println("Run time elapsed, disconnecting...")
     engine.disconnect()
-    println("Disconnected and exiting.")
+    val finalData = engine.takeOutgoing()
+    if (finalData.isNotEmpty()) {
+        channel.write(ByteBuffer.wrap(finalData))
+    }
+    
+    selector.close()
+    channel.close()
+    println("Done.")
 }
