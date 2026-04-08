@@ -3217,7 +3217,8 @@ data class MqttTlsOptionsFfi (
     var `clientCertFile`: kotlin.String?, 
     var `clientKeyFile`: kotlin.String?, 
     var `insecureSkipVerify`: kotlin.Boolean, 
-    var `alpnProtocols`: List<kotlin.String>
+    var `alpnProtocols`: List<kotlin.String>, 
+    var `enableKeyLog`: kotlin.Boolean
 ) {
     
     companion object
@@ -3234,6 +3235,7 @@ public object FfiConverterTypeMqttTlsOptionsFFI: FfiConverterRustBuffer<MqttTlsO
             FfiConverterOptionalString.read(buf),
             FfiConverterBoolean.read(buf),
             FfiConverterSequenceString.read(buf),
+            FfiConverterBoolean.read(buf),
         )
     }
 
@@ -3242,7 +3244,8 @@ public object FfiConverterTypeMqttTlsOptionsFFI: FfiConverterRustBuffer<MqttTlsO
             FfiConverterOptionalString.allocationSize(value.`clientCertFile`) +
             FfiConverterOptionalString.allocationSize(value.`clientKeyFile`) +
             FfiConverterBoolean.allocationSize(value.`insecureSkipVerify`) +
-            FfiConverterSequenceString.allocationSize(value.`alpnProtocols`)
+            FfiConverterSequenceString.allocationSize(value.`alpnProtocols`) +
+            FfiConverterBoolean.allocationSize(value.`enableKeyLog`)
     )
 
     override fun write(value: MqttTlsOptionsFfi, buf: ByteBuffer) {
@@ -3251,6 +3254,7 @@ public object FfiConverterTypeMqttTlsOptionsFFI: FfiConverterRustBuffer<MqttTlsO
             FfiConverterOptionalString.write(value.`clientKeyFile`, buf)
             FfiConverterBoolean.write(value.`insecureSkipVerify`, buf)
             FfiConverterSequenceString.write(value.`alpnProtocols`, buf)
+            FfiConverterBoolean.write(value.`enableKeyLog`, buf)
     }
 }
 

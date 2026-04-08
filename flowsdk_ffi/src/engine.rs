@@ -506,6 +506,10 @@ impl QuicMqttEngineFFI {
             config.alpn_protocols = vec![b"mqtt".to_vec()];
         }
 
+        if tls_opts.enable_key_log {
+            config.key_log = Arc::new(rustls::KeyLogFile::new());
+        }
+
         self.engine
             .lock()
             .unwrap()
@@ -907,6 +911,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_new(
             client_key_file: None,
             insecure_skip_verify: false,
             alpn_protocols: vec!["mqtt".to_string()],
+            enable_key_log: false,
         }
     } else {
         let r = &*tls_opts;
@@ -948,6 +953,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_new(
             client_key_file,
             insecure_skip_verify: r.insecure_skip_verify != 0,
             alpn_protocols,
+            enable_key_log: r.enable_key_log != 0,
         }
     };
 
@@ -1203,6 +1209,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_connect(
                 client_key_file: None,
                 insecure_skip_verify: false,
                 alpn_protocols: vec!["mqtt".to_string()],
+                enable_key_log: false,
             }
         } else {
             let r = &*tls_opts;
@@ -1239,6 +1246,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_connect(
                 client_key_file,
                 insecure_skip_verify: r.insecure_skip_verify != 0,
                 alpn_protocols: vec!["mqtt".to_string()],
+                enable_key_log: r.enable_key_log != 0,
             }
         };
 
@@ -1455,6 +1463,7 @@ pub struct MqttTlsOptionsC {
     pub client_key_file: *const c_char,
     pub alpn: *const c_char,
     pub insecure_skip_verify: u8,
+    pub enable_key_log: u8,
 }
 
 #[repr(C)]
