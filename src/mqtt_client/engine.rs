@@ -916,9 +916,12 @@ impl QuicMqttEngine {
         transport.datagram_receive_buffer_size(None);
         // Set max_idle_timeout to prevent QUIC from timing out before MQTT keepalive mechanism
         // Use 120 seconds to accommodate MQTT keepalive (typically 30-60s) with 2x multiplier for safety
-        transport.max_idle_timeout(Some(
-            std::time::Duration::from_secs(120).try_into().unwrap(),
-        ));
+        let idle_timeout = std::time::Duration::from_secs(120)
+            .try_into()
+            .map_err(|e| MqttClientError::InternalError {
+                message: format!("Failed to convert QUIC idle timeout: {}", e),
+            })?;
+        transport.max_idle_timeout(Some(idle_timeout));
         client_config.transport_config(Arc::new(transport));
 
         let (ch, conn) = self
