@@ -35,13 +35,14 @@ fun main() {
     println("QUIC Engine created.")
 
     // 3. TLS options — insecureSkipVerify=true for demo broker only
+    val enableTlsKeyLog = !System.getenv("SSLKEYLOGFILE").isNullOrBlank()
     val tlsOpts = MqttTlsOptionsFfi(
         caCertFile = null,
         clientCertFile = null,
         clientKeyFile = null,
         insecureSkipVerify = true,
         alpnProtocols = listOf(),
-        enableKeyLog = true  // Enable TLS keylog for debugging QUIC traffic
+        enableKeyLog = enableTlsKeyLog // Enable TLS keylog for debugging QUIC traffic
     )
 
     // 4. Resolve broker and open non-blocking UDP socket
