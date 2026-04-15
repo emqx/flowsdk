@@ -8,6 +8,14 @@ Cargo.lock
 *.profraw
 *.profdata
 
+# Swift: runtime library copies and XCFramework build artifacts (populated by build_swift_bindings.sh)
+swift/.build/
+swift/.swiftpm/
+swift/lib/
+swift/Generated/
+swift/xcframework-intermediates/
+swift/FlowSDK.xcframework/
+
 
 # FFI generated code
 python/package/flowsdk/flowsdk_ffi.py
@@ -22,6 +30,7 @@ python/examples/*.so
 python/examples/*.dll
 
 python/**/*.pyc
+python/package/flowsdk.egg-info/
 
 # Kotlin Examples (generated files)
 kotlin/package/src/main/resources/libflowsdk_ffi.dylib
