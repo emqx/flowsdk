@@ -11,23 +11,28 @@ use ffi_types::*;
 
 use std::sync::Mutex;
 
-#[derive(uniffi::Object)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Object))]
 pub struct MqttEngineFFI {
     engine: Mutex<MqttEngine>,
     start_time: Instant,
     events: Mutex<Vec<MqttEventFFI>>,
 }
 
+// QUIC backend selection: `quic` (quinn-proto) takes priority over `quic-quiche`.
 #[cfg(feature = "quic")]
-use flowsdk::mqtt_client::engine::QuicMqttEngine;
+use flowsdk::mqtt_client::engine::QuicMqttEngine as ActiveQuicEngine;
+#[cfg(all(feature = "quic-quiche", not(feature = "quic")))]
+use flowsdk::mqtt_client::quic_engine_quiche::QuicMqttEngineQuiche as ActiveQuicEngine;
+
 #[cfg(feature = "tls")]
 use flowsdk::mqtt_client::tls_engine::TlsMqttEngine;
 use std::net::SocketAddr;
+#[cfg(feature = "quic")]
 use std::sync::Arc;
 
-#[uniffi::export]
+#[cfg_attr(feature = "uniffi-bindings", uniffi::export)]
 impl MqttEngineFFI {
-    #[uniffi::constructor]
+    #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
     pub fn new(client_id: Option<String>, mqtt_version: u8) -> Self {
         let client_id = client_id.unwrap_or_else(|| "mqtt_client".to_string());
         let options = MqttClientOptions::builder()
@@ -43,7 +48,7 @@ impl MqttEngineFFI {
         }
     }
 
-    #[uniffi::constructor]
+    #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
     pub fn new_with_opts(opts: MqttOptionsFFI) -> Self {
         let mut builder = MqttClientOptions::builder()
             .client_id(opts.client_id)
@@ -223,16 +228,18 @@ fn map_event(event: MqttEvent) -> MqttEventFFI {
     }
 }
 
-#[derive(uniffi::Object)]
+#[cfg(feature = "tls")]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Object))]
 pub struct TlsMqttEngineFFI {
     engine: Mutex<TlsMqttEngine>,
     start_time: Instant,
     events: Mutex<Vec<MqttEventFFI>>,
 }
 
-#[uniffi::export]
+#[cfg(feature = "tls")]
+#[cfg_attr(feature = "uniffi-bindings", uniffi::export)]
 impl TlsMqttEngineFFI {
-    #[uniffi::constructor]
+    #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
     pub fn new(opts: MqttOptionsFFI, tls_opts: MqttTlsOptionsFFI, server_name: String) -> Self {
         let options = MqttClientOptions::builder()
             .client_id(opts.client_id)
@@ -389,9 +396,11 @@ impl TlsMqttEngineFFI {
     }
 }
 
+#[cfg(feature = "tls")]
 #[derive(Debug)]
 struct InsecureServerCertVerifier;
 
+#[cfg(feature = "tls")]
 impl rustls::client::danger::ServerCertVerifier for InsecureServerCertVerifier {
     fn verify_server_cert(
         &self,
@@ -431,16 +440,18 @@ impl rustls::client::danger::ServerCertVerifier for InsecureServerCertVerifier {
     }
 }
 
-#[derive(uniffi::Object)]
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Object))]
 pub struct QuicMqttEngineFFI {
-    engine: Mutex<QuicMqttEngine>,
+    engine: Mutex<ActiveQuicEngine>,
     start_time: Instant,
     events: Mutex<Vec<MqttEventFFI>>,
 }
 
-#[uniffi::export]
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
+#[cfg_attr(feature = "uniffi-bindings", uniffi::export)]
 impl QuicMqttEngineFFI {
-    #[uniffi::constructor]
+    #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
     pub fn new(opts: MqttOptionsFFI) -> Self {
         let options = MqttClientOptions::builder()
             .client_id(opts.client_id)
@@ -452,73 +463,12 @@ impl QuicMqttEngineFFI {
             .max_reconnect_attempts(opts.max_reconnect_attempts)
             .build();
 
-        let engine = QuicMqttEngine::new(options).unwrap();
+        let engine = ActiveQuicEngine::new(options).unwrap();
         QuicMqttEngineFFI {
             engine: Mutex::new(engine),
             start_time: Instant::now(),
             events: Mutex::new(Vec::new()),
         }
-    }
-
-    pub fn connect(
-        &self,
-        server_addr: String,
-        server_name: String,
-        tls_opts: MqttTlsOptionsFFI,
-        now_ms: u64,
-    ) {
-        let addr: SocketAddr = server_addr.parse().unwrap();
-        let now = self.start_time + Duration::from_millis(now_ms);
-
-        let _ = rustls::crypto::ring::default_provider().install_default();
-        let crypto_builder = rustls::ClientConfig::builder();
-
-        let mut config = if tls_opts.insecure_skip_verify {
-            crypto_builder
-                .dangerous()
-                .with_custom_certificate_verifier(Arc::new(InsecureServerCertVerifier))
-                .with_no_client_auth()
-        } else {
-            let mut root_store = rustls::RootCertStore::empty();
-            if let Some(ca_path) = tls_opts.ca_cert_file {
-                if let Ok(file) = std::fs::File::open(ca_path) {
-                    let mut reader = std::io::BufReader::new(file);
-                    let certs = rustls_pemfile::certs(&mut reader)
-                        .filter_map(|r| r.ok())
-                        .collect::<Vec<_>>();
-                    for cert in certs {
-                        root_store.add(cert).ok();
-                    }
-                }
-            } else {
-                for cert in rustls_native_certs::load_native_certs().unwrap_or_default() {
-                    root_store.add(cert).ok();
-                }
-            }
-            crypto_builder
-                .with_root_certificates(root_store)
-                .with_no_client_auth()
-        };
-
-        if !tls_opts.alpn_protocols.is_empty() {
-            config.alpn_protocols = tls_opts
-                .alpn_protocols
-                .into_iter()
-                .map(|s| s.into_bytes())
-                .collect();
-        } else {
-            config.alpn_protocols = vec![b"mqtt".to_vec()];
-        }
-
-        if tls_opts.enable_key_log {
-            config.key_log = Arc::new(rustls::KeyLogFile::new());
-        }
-
-        self.engine
-            .lock()
-            .unwrap()
-            .connect(addr, &server_name, config, now)
-            .ok();
     }
 
     pub fn handle_datagram(&self, data: Vec<u8>, remote_addr: String, now_ms: u64) {
@@ -591,6 +541,101 @@ impl QuicMqttEngineFFI {
 
     pub fn is_connected(&self) -> bool {
         self.engine.lock().unwrap().is_connected()
+    }
+}
+
+/// Quinn-proto `connect()` — builds a `rustls::ClientConfig` and calls the QUIC engine.
+#[cfg(feature = "quic")]
+impl QuicMqttEngineFFI {
+    pub fn connect(
+        &self,
+        server_addr: String,
+        server_name: String,
+        tls_opts: MqttTlsOptionsFFI,
+        now_ms: u64,
+    ) {
+        let addr: SocketAddr = server_addr.parse().unwrap();
+        let now = self.start_time + Duration::from_millis(now_ms);
+
+        let _ = rustls::crypto::ring::default_provider().install_default();
+        let crypto_builder = rustls::ClientConfig::builder();
+
+        let mut config = if tls_opts.insecure_skip_verify {
+            crypto_builder
+                .dangerous()
+                .with_custom_certificate_verifier(Arc::new(InsecureServerCertVerifier))
+                .with_no_client_auth()
+        } else {
+            let mut root_store = rustls::RootCertStore::empty();
+            if let Some(ca_path) = tls_opts.ca_cert_file {
+                if let Ok(file) = std::fs::File::open(ca_path) {
+                    let mut reader = std::io::BufReader::new(file);
+                    let certs = rustls_pemfile::certs(&mut reader)
+                        .filter_map(|r| r.ok())
+                        .collect::<Vec<_>>();
+                    for cert in certs {
+                        root_store.add(cert).ok();
+                    }
+                }
+            } else {
+                for cert in rustls_native_certs::load_native_certs().unwrap_or_default() {
+                    root_store.add(cert).ok();
+                }
+            }
+            crypto_builder
+                .with_root_certificates(root_store)
+                .with_no_client_auth()
+        };
+
+        if !tls_opts.alpn_protocols.is_empty() {
+            config.alpn_protocols = tls_opts
+                .alpn_protocols
+                .into_iter()
+                .map(|s| s.into_bytes())
+                .collect();
+        } else {
+            config.alpn_protocols = vec![b"mqtt".to_vec()];
+        }
+
+        if tls_opts.enable_key_log {
+            config.key_log = Arc::new(rustls::KeyLogFile::new());
+        }
+
+        self.engine
+            .lock()
+            .unwrap()
+            .connect(addr, &server_name, config, now)
+            .ok();
+    }
+}
+
+/// Quiche `connect()` — builds quiche's TLS config directly (system OpenSSL).
+#[cfg(all(feature = "quic-quiche", not(feature = "quic")))]
+impl QuicMqttEngineFFI {
+    pub fn connect(
+        &self,
+        server_addr: String,
+        server_name: String,
+        tls_opts: MqttTlsOptionsFFI,
+        _now_ms: u64,
+    ) {
+        let addr: SocketAddr = server_addr.parse().unwrap();
+        let alpn: Vec<Vec<u8>> = tls_opts
+            .alpn_protocols
+            .into_iter()
+            .map(|s| s.into_bytes())
+            .collect();
+        self.engine
+            .lock()
+            .unwrap()
+            .connect(
+                addr,
+                &server_name,
+                tls_opts.ca_cert_file.as_deref(),
+                tls_opts.insecure_skip_verify,
+                alpn,
+            )
+            .ok();
     }
 }
 
@@ -878,6 +923,7 @@ pub unsafe extern "C" fn mqtt_engine_free_string(ptr: *mut c_char) {
 ///
 /// This function is unsafe because it dereferences raw pointers for `client_id`,
 /// `server_name`, and `tls_opts`.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_tls_engine_new(
     client_id: *const c_char,
@@ -971,6 +1017,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_new(
 /// # Safety
 ///
 /// This function is unsafe because it performs manual memory deallocation of a `TlsMqttEngineFFI`.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_tls_engine_free(ptr: *mut TlsMqttEngineFFI) {
     if !ptr.is_null() {
@@ -981,6 +1028,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_free(ptr: *mut TlsMqttEngineFFI) {
 /// # Safety
 ///
 /// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_tls_engine_connect(ptr: *mut TlsMqttEngineFFI) {
     if let Some(engine) = ptr.as_ref() {
@@ -991,6 +1039,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_connect(ptr: *mut TlsMqttEngineFFI) {
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers for `ptr` and `data`.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_tls_engine_handle_socket_data(
     ptr: *mut TlsMqttEngineFFI,
@@ -1006,6 +1055,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_handle_socket_data(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers for `ptr` and `out_len`.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_tls_engine_take_socket_data(
     ptr: *mut TlsMqttEngineFFI,
@@ -1034,6 +1084,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_take_socket_data(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_tls_engine_handle_tick(ptr: *mut TlsMqttEngineFFI, now_ms: u64) {
     if let Some(engine) = ptr.as_ref() {
@@ -1044,6 +1095,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_handle_tick(ptr: *mut TlsMqttEngineFFI,
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers for `ptr`, `topic`, and `payload`.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_tls_engine_publish(
     ptr: *mut TlsMqttEngineFFI,
@@ -1064,6 +1116,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_publish(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers for `ptr` and `topic_filter`.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_tls_engine_subscribe(
     ptr: *mut TlsMqttEngineFFI,
@@ -1081,6 +1134,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_subscribe(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers for `ptr` and `topic_filter`.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_tls_engine_unsubscribe(
     ptr: *mut TlsMqttEngineFFI,
@@ -1097,6 +1151,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_unsubscribe(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_tls_engine_disconnect(ptr: *mut TlsMqttEngineFFI) {
     if let Some(engine) = ptr.as_ref() {
@@ -1107,6 +1162,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_disconnect(ptr: *mut TlsMqttEngineFFI) 
 /// # Safety
 ///
 /// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_tls_engine_is_connected(ptr: *mut TlsMqttEngineFFI) -> i32 {
     if let Some(engine) = ptr.as_ref() {
@@ -1120,41 +1176,12 @@ pub unsafe extern "C" fn mqtt_tls_engine_is_connected(ptr: *mut TlsMqttEngineFFI
     }
 }
 
-/// # Safety
-///
-/// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`
-/// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_engine_take_events(ptr: *mut MqttEngineFFI) -> *mut c_char {
-    if let Some(engine) = ptr.as_ref() {
-        let events = engine.take_events();
-        let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
-        CString::new(json).unwrap().into_raw()
-    } else {
-        std::ptr::null_mut()
-    }
-}
-
-/// # Safety
-///
-/// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`
-/// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_tls_engine_take_events(ptr: *mut TlsMqttEngineFFI) -> *mut c_char {
-    if let Some(engine) = ptr.as_ref() {
-        let events = engine.take_events();
-        let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
-        CString::new(json).unwrap().into_raw()
-    } else {
-        std::ptr::null_mut()
-    }
-}
-
 // QUIC Engine C wrappers
 /// # Safety
 ///
 /// This function is unsafe because it dereferences a raw pointer for `client_id`
 /// and returns a raw pointer to a new `QuicMqttEngineFFI`.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_new(
     client_id: *const c_char,
@@ -1182,6 +1209,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_new(
 /// # Safety
 ///
 /// This function is unsafe because it performs manual memory deallocation of a `QuicMqttEngineFFI`.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_free(ptr: *mut QuicMqttEngineFFI) {
     if !ptr.is_null() {
@@ -1193,6 +1221,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_free(ptr: *mut QuicMqttEngineFFI) {
 ///
 /// This function is unsafe because it dereferences raw pointers for `ptr`, `server_addr`,
 /// `server_name`, and `tls_opts`.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_connect(
     ptr: *mut QuicMqttEngineFFI,
@@ -1264,6 +1293,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_connect(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers for `ptr`, `data`, and `remote_addr`.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_handle_datagram(
     ptr: *mut QuicMqttEngineFFI,
@@ -1281,6 +1311,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_handle_datagram(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers for `ptr` and `out_count`.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_take_outgoing_datagrams(
     ptr: *mut QuicMqttEngineFFI,
@@ -1324,6 +1355,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_take_outgoing_datagrams(
 /// # Safety
 ///
 /// This function is unsafe because it performs manual memory deallocation of a datagram slice.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_free_datagrams(ptr: *mut MqttDatagramC, count: usize) {
     if !ptr.is_null() {
@@ -1346,6 +1378,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_free_datagrams(ptr: *mut MqttDatagramC
 /// # Safety
 ///
 /// This function is unsafe because it dereferences a raw pointer to `QuicMqttEngineFFI`.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_handle_tick(ptr: *mut QuicMqttEngineFFI, now_ms: u64) {
     if let Some(engine) = ptr.as_ref() {
@@ -1355,22 +1388,8 @@ pub unsafe extern "C" fn mqtt_quic_engine_handle_tick(ptr: *mut QuicMqttEngineFF
 
 /// # Safety
 ///
-/// This function is unsafe because it dereferences a raw pointer to `QuicMqttEngineFFI`
-/// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
-#[no_mangle]
-pub unsafe extern "C" fn mqtt_quic_engine_take_events(ptr: *mut QuicMqttEngineFFI) -> *mut c_char {
-    if let Some(engine) = ptr.as_ref() {
-        let events = engine.take_events();
-        let json = serde_json::to_string(&events).unwrap_or_else(|_| "[]".to_string());
-        CString::new(json).unwrap().into_raw()
-    } else {
-        std::ptr::null_mut()
-    }
-}
-
-/// # Safety
-///
 /// This function is unsafe because it dereferences raw pointers for `ptr`, `topic`, and `payload`.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_publish(
     ptr: *mut QuicMqttEngineFFI,
@@ -1391,6 +1410,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_publish(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers for `ptr` and `topic_filter`.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_subscribe(
     ptr: *mut QuicMqttEngineFFI,
@@ -1408,6 +1428,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_subscribe(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences raw pointers for `ptr` and `topic_filter`.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_unsubscribe(
     ptr: *mut QuicMqttEngineFFI,
@@ -1424,6 +1445,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_unsubscribe(
 /// # Safety
 ///
 /// This function is unsafe because it dereferences a raw pointer to `QuicMqttEngineFFI`.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_disconnect(ptr: *mut QuicMqttEngineFFI) {
     if let Some(engine) = ptr.as_ref() {
@@ -1434,6 +1456,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_disconnect(ptr: *mut QuicMqttEngineFFI
 /// # Safety
 ///
 /// This function is unsafe because it dereferences a raw pointer to `QuicMqttEngineFFI`.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_is_connected(ptr: *mut QuicMqttEngineFFI) -> i32 {
     if let Some(engine) = ptr.as_ref() {
@@ -1480,12 +1503,12 @@ pub struct MqttDatagramC {
 // Event Inspection API for C (Native Structs)
 
 // Actually, let's just use a dedicated "C Event List" object to manage the lifetime.
-#[derive(uniffi::Object)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Object))]
 pub struct MqttEventListFFI {
     events: Vec<MqttEventFFI>,
 }
 
-#[uniffi::export]
+#[cfg_attr(feature = "uniffi-bindings", uniffi::export)]
 impl MqttEventListFFI {
     pub fn len(&self) -> u32 {
         self.events.len() as u32
@@ -1677,6 +1700,7 @@ pub unsafe extern "C" fn mqtt_event_list_get_error_message(
 ///
 /// This function is unsafe because it dereferences a raw pointer to `QuicMqttEngineFFI`
 /// and returns an allocated `MqttEventListFFI` pointer that must be freed with `mqtt_event_list_free`.
+#[cfg(any(feature = "quic", feature = "quic-quiche"))]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_quic_engine_take_events_list(
     ptr: *mut QuicMqttEngineFFI,
@@ -1693,6 +1717,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_take_events_list(
 ///
 /// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`
 /// and returns an allocated `MqttEventListFFI` pointer that must be freed with `mqtt_event_list_free`.
+#[cfg(feature = "tls")]
 #[no_mangle]
 pub unsafe extern "C" fn mqtt_tls_engine_take_events_list(
     ptr: *mut TlsMqttEngineFFI,

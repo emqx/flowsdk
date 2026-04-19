@@ -14,16 +14,16 @@ members = [".", "mqtt_grpc_duality", "flowsdk_ffi"]
 exclude = ["fuzz"]
 
 [dependencies]
-tonic = "0.14.1"
-prost = "0.14"
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time"] }
-tonic-prost = "0.14.1"
+tonic = { version = "0.14.1", optional = true }
+prost = { version = "0.14", optional = true }
+tokio = { version = "1.0", features = ["sync", "time", "io-util", "net"] }
+tonic-prost = { version = "0.14.1", optional = true }
 serde = { version = "1.0.218", features = ["derive"] }
 hex = "0.4"
 bytes = { version = "1", features = ["serde"] }
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", optional = true }
 arbitrary = { version = "1", optional = true, features = ["derive"] }
-serde_json = "1.0"
+serde_json = { version = "1.0" }
 slab = "0.4.11"
 async-trait = "0.1"
 thiserror = "1.0"
@@ -40,24 +40,39 @@ rustls = { version = "0.23", optional = true, default-features = false, features
 rustls-native-certs = { version = "0.7", optional = true }
 rustls-pki-types = { version = "1", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
+# QUIC via quiche (uses system OpenSSL dynamically — no vendored crypto)
+quiche = { version = "0.28.0", default-features = false, features = ["openssl"], optional = true }
 
 [features]
-default = ["strict-protocol-compliance", "tls"]
-# TLS/SSL transport support
-tls = ["dep:tokio-native-tls", "dep:native-tls"]
-# QUIC transport support
-quic = ["dep:quinn", "dep:quinn-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
-# Rustls-based TLS over TCP (mqtts://) transport support
+default = ["strict-protocol-compliance", "tls", "async-client"]
+# TLS/SSL transport support (native-tls based, used by the async TCP client)
+tls = ["dep:tokio-native-tls", "dep:native-tls", "async-client"]
+# Sans-I/O QUIC protocol engine (no tokio runtime required)
+quic-proto = ["dep:quinn-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
+# Full async QUIC support (adds tokio transport on top of quic-proto)
+quic = ["quic-proto", "dep:quinn", "async-client"]
+# Rustls-based TLS over TCP — tls_engine is Sans-I/O, tokio-rustls needed only for transport
 rustls-tls = [
-	"dep:tokio-rustls",
 	"dep:rustls",
 	"dep:rustls-native-certs",
 	"dep:rustls-pki-types",
+	"dep:tokio-rustls",
 ]
+# Tokio-based async MQTT client (adds the high-throughput multi-threaded runtime)
+async-client = [
+	"tokio/macros",
+	"tokio/rt-multi-thread",
+	"tokio/net",
+	"dep:tokio-stream",
+]
+# gRPC support (only needed for mqtt_grpc_duality proxy)
+grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost"]
 strict-protocol-compliance = []
 # ⚠️ DANGEROUS: Enable raw packet API for protocol compliance testing
 # DO NOT enable in production builds
 protocol-testing = []
+# Quiche-backed QUIC (uses system OpenSSL via pkg-config, no vendored crypto)
+quic-quiche = ["dep:quiche"]
 
 # Force static linking of the C runtime
 # usage: cargo build --target aarch64-unknown-linux-musl --examples --features quic
@@ -82,3 +97,19 @@ required-features = ["quic"]
 [[example]]
 name = "tokio_async_mqtt_quic_example"
 required-features = ["quic"]
+
+# Release profile optimizations
+[profile.release]
+strip = true          # Strip debug symbols automatically
+lto = true            # Enable link-time optimization
+codegen-units = 1     # Better optimization (slower compile)
+opt-level = 3         # Maximum performance
+
+# Size-optimized profile for FFI and embedded use cases
+[profile.release-size]
+inherits = "release"
+opt-level = "z"       # Optimize aggressively for size
+lto = true
+strip = true
+codegen-units = 1
+panic = 'abort'       # Remove panic unwinding code

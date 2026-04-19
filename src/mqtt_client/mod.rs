@@ -12,10 +12,13 @@ pub mod opts;
 pub mod raw_packet;
 #[cfg(feature = "rustls-tls")]
 pub mod tls_engine;
+#[cfg(feature = "async-client")]
 pub mod tokio_async_client;
 #[cfg(feature = "quic")]
 pub mod tokio_quic_client;
 pub mod transport;
+#[cfg(feature = "quic-quiche")]
+pub mod quic_engine_quiche;
 
 // Re-exports
 pub use async_client::{AsyncClientConfig, AsyncMqttClient, MqttEventHandler};
@@ -33,6 +36,7 @@ pub use no_io_client::NoIoMqttClient;
 pub use opts::{MqttClientOptions, MqttClientOptionsBuilder};
 #[cfg(feature = "rustls-tls")]
 pub use tls_engine::TlsMqttEngine;
+#[cfg(feature = "async-client")]
 pub use tokio_async_client::{
     TokioAsyncClientConfig, TokioAsyncMqttClient, TokioMqttEvent, TokioMqttEventHandler,
 };
