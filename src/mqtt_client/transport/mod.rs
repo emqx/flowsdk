@@ -106,5 +106,5 @@ pub use tcp::TcpTransport;
 #[cfg(feature = "tls")]
 pub use tls::TlsTransport;
 
-#[cfg(feature = "rustls-tls")]
+#[cfg(all(feature = "rustls-tls", feature = "async-client"))]
 pub use rustls_tls::{RustlsTlsConfig, RustlsTlsTransport};
