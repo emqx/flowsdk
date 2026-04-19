@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
-#[derive(uniffi::Record, Clone, serde::Serialize)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+#[derive(Clone)]
 pub struct MqttMessageFFI {
     pub topic: String,
     pub payload: Vec<u8>,
@@ -8,32 +9,37 @@ pub struct MqttMessageFFI {
     pub retain: bool,
 }
 
-#[derive(uniffi::Record, Clone, serde::Serialize)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+#[derive(Clone)]
 pub struct ConnectionResultFFI {
     pub reason_code: u8,
     pub session_present: bool,
 }
 
-#[derive(uniffi::Record, Clone, serde::Serialize)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+#[derive(Clone)]
 pub struct PublishResultFFI {
     pub packet_id: Option<u16>,
     pub reason_code: Option<u8>,
     pub qos: u8,
 }
 
-#[derive(uniffi::Record, Clone, serde::Serialize)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+#[derive(Clone)]
 pub struct SubscribeResultFFI {
     pub packet_id: u16,
     pub reason_codes: Vec<u8>,
 }
 
-#[derive(uniffi::Record, Clone, serde::Serialize)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
+#[derive(Clone)]
 pub struct UnsubscribeResultFFI {
     pub packet_id: u16,
     pub reason_codes: Vec<u8>,
 }
 
-#[derive(uniffi::Enum, Clone, serde::Serialize)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Enum))]
+#[derive(Clone)]
 pub enum MqttEventFFI {
     Connected(ConnectionResultFFI),
     Disconnected { reason_code: Option<u8> },
@@ -47,7 +53,7 @@ pub enum MqttEventFFI {
     ReconnectScheduled { attempt: u32, delay_ms: u64 },
 }
 
-#[derive(uniffi::Record)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
 pub struct MqttOptionsFFI {
     pub client_id: String,
     pub mqtt_version: u8,
@@ -60,7 +66,7 @@ pub struct MqttOptionsFFI {
     pub max_reconnect_attempts: u32,
 }
 
-#[derive(uniffi::Record)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
 pub struct MqttTlsOptionsFFI {
     pub ca_cert_file: Option<String>,
     pub client_cert_file: Option<String>,
@@ -70,7 +76,7 @@ pub struct MqttTlsOptionsFFI {
     pub enable_key_log: bool,
 }
 
-#[derive(uniffi::Record)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]
 pub struct MqttDatagramFFI {
     pub addr: String,
     pub data: Vec<u8>,
