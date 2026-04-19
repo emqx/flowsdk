@@ -71,12 +71,11 @@ impl QuicMqttEngineQuiche {
         insecure_skip_verify: bool,
         alpn: Vec<Vec<u8>>,
     ) -> Result<(), MqttClientError> {
-        let mut config =
-            quiche::Config::new(quiche::PROTOCOL_VERSION).map_err(|e| {
-                MqttClientError::InternalError {
-                    message: format!("quiche Config::new failed: {e}"),
-                }
-            })?;
+        let mut config = quiche::Config::new(quiche::PROTOCOL_VERSION).map_err(|e| {
+            MqttClientError::InternalError {
+                message: format!("quiche Config::new failed: {e}"),
+            }
+        })?;
 
         // ALPN
         let alpn_refs: Vec<&[u8]> = if alpn.is_empty() {
@@ -93,11 +92,11 @@ impl QuicMqttEngineQuiche {
         // TLS verification
         config.verify_peer(!insecure_skip_verify);
         if let Some(path) = ca_cert_path {
-            config
-                .load_verify_locations_from_file(path)
-                .map_err(|e| MqttClientError::InternalError {
+            config.load_verify_locations_from_file(path).map_err(|e| {
+                MqttClientError::InternalError {
                     message: format!("quiche load_verify_locations_from_file failed: {e}"),
-                })?;
+                }
+            })?;
         }
 
         // Transport parameters — generous limits for MQTT workloads
@@ -124,10 +123,16 @@ impl QuicMqttEngineQuiche {
             "0.0.0.0:0".parse().unwrap()
         };
 
-        let conn = quiche::connect(Some(server_name), &scid, local_addr, server_addr, &mut config)
-            .map_err(|e| MqttClientError::InternalError {
-                message: format!("quiche::connect failed: {e}"),
-            })?;
+        let conn = quiche::connect(
+            Some(server_name),
+            &scid,
+            local_addr,
+            server_addr,
+            &mut config,
+        )
+        .map_err(|e| MqttClientError::InternalError {
+            message: format!("quiche::connect failed: {e}"),
+        })?;
 
         self.connection = Some(Box::new(conn));
         self.local_addr = Some(local_addr);
@@ -142,7 +147,9 @@ impl QuicMqttEngineQuiche {
 
     /// Feed an incoming UDP datagram.
     pub fn handle_datagram(&mut self, mut data: Vec<u8>, remote_addr: SocketAddr, _now: Instant) {
-        let local = self.local_addr.unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
+        let local = self
+            .local_addr
+            .unwrap_or_else(|| "0.0.0.0:0".parse().unwrap());
         if let Some(conn) = &mut self.connection {
             let recv_info = quiche::RecvInfo {
                 from: remote_addr,
@@ -220,7 +227,8 @@ impl QuicMqttEngineQuiche {
         loop {
             match conn.send(&mut out) {
                 Ok((len, _send_info)) => {
-                    self.outgoing_datagrams.push_back((peer, out[..len].to_vec()));
+                    self.outgoing_datagrams
+                        .push_back((peer, out[..len].to_vec()));
                 }
                 Err(quiche::Error::Done) => break,
                 Err(_) => break,

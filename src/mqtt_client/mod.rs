@@ -8,6 +8,8 @@ pub mod error;
 pub mod inflight;
 pub mod no_io_client;
 pub mod opts;
+#[cfg(feature = "quic-quiche")]
+pub mod quic_engine_quiche;
 #[cfg(feature = "protocol-testing")]
 pub mod raw_packet;
 #[cfg(feature = "rustls-tls")]
@@ -17,8 +19,6 @@ pub mod tokio_async_client;
 #[cfg(feature = "quic")]
 pub mod tokio_quic_client;
 pub mod transport;
-#[cfg(feature = "quic-quiche")]
-pub mod quic_engine_quiche;
 
 // Re-exports
 pub use async_client::{AsyncClientConfig, AsyncMqttClient, MqttEventHandler};
