@@ -998,13 +998,13 @@ impl QuicMqttEngine {
                     quinn_proto::Event::Stream(_stream_id) => {
                         // Stream event (readable/writable etc)
                     }
-                    quinn_proto::Event::Connected => {
+                    quinn_proto::Event::Connected
                         // QUIC Handshake done. Open a bidirectional stream for MQTT.
-                        if self.mqtt_stream.is_none() {
-                            if let Some(stream_id) = conn.streams().open(quinn_proto::Dir::Bi) {
-                                self.mqtt_stream = Some(stream_id);
-                                self.mqtt_engine.connect();
-                            }
+                        if self.mqtt_stream.is_none() =>
+                    {
+                        if let Some(stream_id) = conn.streams().open(quinn_proto::Dir::Bi) {
+                            self.mqtt_stream = Some(stream_id);
+                            self.mqtt_engine.connect();
                         }
                     }
                     quinn_proto::Event::ConnectionLost { .. } => {
