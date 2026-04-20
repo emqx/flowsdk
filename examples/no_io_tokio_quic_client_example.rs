@@ -44,20 +44,20 @@ async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
             event = client.next_event() => {
                 let Some(event) = event else { break; };
                 match event {
-                    MqttEvent::Connected(_) => {
-                        if !subscribed {
-                            let sub_cmd = SubscribeCommand::builder().add_topic("test/topic/wrapper", 1).build()?;
-                            client.subscribe(sub_cmd).await.map_err(|e| e.to_string())?;
-                            subscribed = true;
-                        }
+                    MqttEvent::Connected(_)
+                        if !subscribed =>
+                    {
+                        let sub_cmd = SubscribeCommand::builder().add_topic("test/topic/wrapper", 1).build()?;
+                        client.subscribe(sub_cmd).await.map_err(|e| e.to_string())?;
+                        subscribed = true;
                     }
-                    MqttEvent::Subscribed(res) => {
+                    MqttEvent::Subscribed(res)
+                        if !published =>
+                    {
                         println!("Subscribed: ID={:?}", res.packet_id);
-                        if !published {
-                            let pub_cmd = PublishCommand::builder().topic("test/topic/wrapper").payload("Hello!".to_string()).qos(1).build()?;
-                            client.publish(pub_cmd).await.map_err(|e| e.to_string())?;
-                            published = true;
-                        }
+                        let pub_cmd = PublishCommand::builder().topic("test/topic/wrapper").payload("Hello!".to_string()).qos(1).build()?;
+                        client.publish(pub_cmd).await.map_err(|e| e.to_string())?;
+                        published = true;
                     }
                     MqttEvent::Published(res) => {
                         println!("Published: ID={:?}", res.packet_id);
