@@ -5,11 +5,17 @@ set -e
 PROFILE="debug"
 CARGO_PROFILE="dev"
 TARGET_DIR="target/debug"
+COVERAGE=false
 
 if [[ "$1" == "--release" ]]; then
     PROFILE="release"
     CARGO_PROFILE="release"
     TARGET_DIR="target/release"
+    shift
+fi
+
+if [[ "$1" == "--coverage" ]]; then
+    COVERAGE=true
     shift
 fi
 
@@ -24,6 +30,11 @@ SWIFT_TARGET="swift/Sources/FlowSDK"
 SWIFT_LIB_DIR="swift/lib"
 
 echo "Building flowsdk_ffi ($PROFILE)..."
+if [[ "$COVERAGE" == true ]]; then
+    mkdir -p target/llvm-cov-target
+    export RUSTFLAGS="-C instrument-coverage"
+    export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/swift-%p-%m.profraw"
+fi
 cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features quic
 
 echo "Generating Swift bindings..."
@@ -106,6 +117,11 @@ fi
 if [[ "$1" == "--test" ]]; then
     echo "Running Swift build verification..."
     LIBRARY_PATH="$PWD/$SWIFT_LIB_DIR" swift build --package-path swift
+fi
+
+if [[ "$COVERAGE" == true ]]; then
+    echo "Running TcpClientExample to collect coverage data..."
+    LIBRARY_PATH="$PWD/$SWIFT_LIB_DIR" timeout 5s swift run --package-path swift TcpClientExample broker.emqx.io 1883 || true
 fi
 
 echo "Done!"
