@@ -65,8 +65,18 @@ private func sendAll(_ fd: Int32, data: Data) {
         var sent = 0
         while sent < data.count {
             let n = send(fd, ptr.baseAddress!.advanced(by: sent), data.count - sent, 0)
-            if n <= 0 { return }
-            sent += n
+            if n > 0 {
+                sent += n
+            } else if n < 0 {
+                if errno == EINTR {
+                    continue          // signal interrupted — retry immediately
+                } else if errno == EAGAIN || errno == EWOULDBLOCK {
+                    _ = waitWritable(fd, timeoutMs: 1000)   // wait for buffer space
+                    continue
+                } else {
+                    return            // unrecoverable error
+                }
+            }
         }
     }
 }
@@ -196,5 +206,5 @@ while nowMs(since: engineStartMs) < runDurationMs {
 print("Run time elapsed, disconnecting...")
 engine.disconnect()
 sendAll(fd, data: engine.takeOutgoing())
-Darwin.close(fd)
+close(fd)
 print("Done.")
