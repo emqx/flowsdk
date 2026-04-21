@@ -212,5 +212,5 @@ while nowMs(since: engineStartMs) < runDurationMs {
 print("Run time elapsed, disconnecting...")
 engine.disconnect()
 sendOutgoing(engine, fd: fd, to: &brokerAddr)
-Darwin.close(fd)
+close(fd)
 print("Done.")
