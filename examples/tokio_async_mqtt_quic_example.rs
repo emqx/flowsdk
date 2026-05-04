@@ -139,7 +139,7 @@ impl TokioMqttEventHandler for QuicExampleHandler {
 fn init_crypto() {
     #[cfg(feature = "quic")]
     {
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls_openssl::default_provider().install_default();
     }
 }
 

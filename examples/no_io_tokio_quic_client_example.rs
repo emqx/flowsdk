@@ -11,7 +11,7 @@ use std::time::Duration;
 /// in a more low-level, event-driven style where you manually drive the client's event loop.
 /// In most cases, users should prefer higher-level helpers, but this shows direct use of `TokioQuicMqttClient`.
 async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = rustls::crypto::ring::default_provider().install_default();
+    let _ = rustls_openssl::default_provider().install_default();
     let mqtt_opts = MqttClientOptions::builder()
         .client_id("quic-async-wrapper-client")
         .peer("broker.emqx.io:14567")

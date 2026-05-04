@@ -455,7 +455,18 @@ mod imp {
             quinn_crypto.transport_config(Arc::new(trpt_cfg));
 
             // Create an endpoint bound to an ephemeral UDP port
-            let mut endpoint = Endpoint::client("0.0.0.0:0".parse().unwrap()).map_err(|e| {
+            let socket = std::net::UdpSocket::bind("0.0.0.0:0").map_err(|e| {
+                TransportError::ConnectionFailed(format!("QUIC endpoint create failed: {}", e))
+            })?;
+            let runtime = quinn::default_runtime()
+                .ok_or_else(|| TransportError::ConnectionFailed("no tokio runtime".to_string()))?;
+            let endpoint = Endpoint::new(
+                quinn::EndpointConfig::default(),
+                None,
+                socket,
+                runtime,
+            )
+            .map_err(|e| {
                 TransportError::ConnectionFailed(format!("QUIC endpoint create failed: {}", e))
             })?;
 
