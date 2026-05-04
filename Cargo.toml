@@ -14,14 +14,14 @@ members = [".", "mqtt_grpc_duality", "flowsdk_ffi"]
 exclude = ["fuzz"]
 
 [dependencies]
-tonic = "0.14.1"
-prost = "0.14"
-tokio = { version = "1.0", features = ["macros", "rt-multi-thread", "net", "io-util", "sync", "time"] }
-tonic-prost = "0.14.1"
+tonic = { version = "0.14.1", optional = true }
+prost = { version = "0.14", optional = true }
+tokio = { version = "1.0", features = ["sync", "time", "io-util"] }
+tonic-prost = { version = "0.14.1", optional = true }
 serde = { version = "1.0.218", features = ["derive"] }
 hex = "0.4"
 bytes = { version = "1", features = ["serde"] }
-tokio-stream = "0.1"
+tokio-stream = { version = "0.1", optional = true }
 arbitrary = { version = "1", optional = true, features = ["derive"] }
 serde_json = "1.0"
 slab = "0.4.11"
@@ -42,18 +42,29 @@ rustls-pki-types = { version = "1", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
 
 [features]
-default = ["strict-protocol-compliance", "tls"]
+default = ["strict-protocol-compliance", "tls", "async-client"]
 # TLS/SSL transport support
-tls = ["dep:tokio-native-tls", "dep:native-tls"]
+tls = ["dep:tokio-native-tls", "dep:native-tls", "async-client"]
 # QUIC transport support
-quic = ["dep:quinn", "dep:quinn-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
+quic = ["quic-proto", "dep:quinn", "async-client"]
+# Sans-I/O QUIC protocol engine (no tokio runtime required)
+quic-proto = ["dep:quinn-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
 # Rustls-based TLS over TCP (mqtts://) transport support
 rustls-tls = [
-	"dep:tokio-rustls",
 	"dep:rustls",
 	"dep:rustls-native-certs",
 	"dep:rustls-pki-types",
+	"dep:tokio-rustls",
 ]
+# Tokio-based async MQTT client (adds the high-throughput multi-threaded runtime)
+async-client = [
+	"tokio/macros",
+	"tokio/rt-multi-thread",
+	"tokio/net",
+	"dep:tokio-stream",
+]
+# gRPC support (only needed for mqtt_grpc_duality proxy)
+grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost"]
 strict-protocol-compliance = []
 # ⚠️ DANGEROUS: Enable raw packet API for protocol compliance testing
 # DO NOT enable in production builds
