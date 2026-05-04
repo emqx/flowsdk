@@ -27,8 +27,7 @@ where
 
 impl<P, T> PriorityQueue<P, T>
 where
-    P: Ord + Clone + Serialize + DeserializeOwned,
-    T: Serialize + DeserializeOwned,
+    P: Ord + Clone,
 {
     /// Creates a new `PriorityQueue` with the specified capacity.
     pub fn new(capacity: usize) -> Self {
@@ -99,7 +98,11 @@ where
     }
 
     /// Saves the queue state to a file (JSON format).
-    pub fn save_to_file<Q: AsRef<Path>>(&self, path: Q) -> io::Result<()> {
+    pub fn save_to_file<Q: AsRef<Path>>(&self, path: Q) -> io::Result<()>
+    where
+        P: Serialize + DeserializeOwned,
+        T: Serialize + DeserializeOwned,
+    {
         let file = File::create(path)?;
         let writer = BufWriter::new(file);
         serde_json::to_writer(writer, self)?;
@@ -107,7 +110,11 @@ where
     }
 
     /// Restores the queue state from a file.
-    pub fn load_from_file<Q: AsRef<Path>>(path: Q) -> io::Result<Self> {
+    pub fn load_from_file<Q: AsRef<Path>>(path: Q) -> io::Result<Self>
+    where
+        P: Serialize + DeserializeOwned,
+        T: Serialize + DeserializeOwned,
+    {
         let file = File::open(path)?;
         let reader = BufReader::new(file);
         let queue: Self = serde_json::from_reader(reader)?;

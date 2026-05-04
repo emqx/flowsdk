@@ -11,7 +11,7 @@ use ffi_types::*;
 
 use std::sync::Mutex;
 
-#[derive(uniffi::Object)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Object))]
 pub struct MqttEngineFFI {
     engine: Mutex<MqttEngine>,
     start_time: Instant,
@@ -25,9 +25,9 @@ use flowsdk::mqtt_client::tls_engine::TlsMqttEngine;
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-#[uniffi::export]
+#[cfg_attr(feature = "uniffi-bindings", uniffi::export)]
 impl MqttEngineFFI {
-    #[uniffi::constructor]
+    #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
     pub fn new(client_id: Option<String>, mqtt_version: u8) -> Self {
         let client_id = client_id.unwrap_or_else(|| "mqtt_client".to_string());
         let options = MqttClientOptions::builder()
@@ -43,7 +43,7 @@ impl MqttEngineFFI {
         }
     }
 
-    #[uniffi::constructor]
+    #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
     pub fn new_with_opts(opts: MqttOptionsFFI) -> Self {
         let mut builder = MqttClientOptions::builder()
             .client_id(opts.client_id)
@@ -224,7 +224,7 @@ fn map_event(event: MqttEvent) -> MqttEventFFI {
 }
 
 #[cfg(feature = "tls")]
-#[derive(uniffi::Object)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Object))]
 pub struct TlsMqttEngineFFI {
     engine: Mutex<TlsMqttEngine>,
     start_time: Instant,
@@ -232,9 +232,9 @@ pub struct TlsMqttEngineFFI {
 }
 
 #[cfg(feature = "tls")]
-#[uniffi::export]
+#[cfg_attr(feature = "uniffi-bindings", uniffi::export)]
 impl TlsMqttEngineFFI {
-    #[uniffi::constructor]
+    #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
     pub fn new(opts: MqttOptionsFFI, tls_opts: MqttTlsOptionsFFI, server_name: String) -> Self {
         let options = MqttClientOptions::builder()
             .client_id(opts.client_id)
@@ -392,16 +392,16 @@ impl TlsMqttEngineFFI {
 }
 
 #[cfg(not(feature = "tls"))]
-#[derive(uniffi::Object)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Object))]
 pub struct TlsMqttEngineFFI {
     start_time: Instant,
     events: Mutex<Vec<MqttEventFFI>>,
 }
 
 #[cfg(not(feature = "tls"))]
-#[uniffi::export]
+#[cfg_attr(feature = "uniffi-bindings", uniffi::export)]
 impl TlsMqttEngineFFI {
-    #[uniffi::constructor]
+    #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
     pub fn new(_opts: MqttOptionsFFI, _tls_opts: MqttTlsOptionsFFI, _server_name: String) -> Self {
         TlsMqttEngineFFI {
             start_time: Instant::now(),
@@ -487,16 +487,16 @@ impl rustls::client::danger::ServerCertVerifier for InsecureServerCertVerifier {
     }
 }
 
-#[derive(uniffi::Object)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Object))]
 pub struct QuicMqttEngineFFI {
     engine: Mutex<QuicMqttEngine>,
     start_time: Instant,
     events: Mutex<Vec<MqttEventFFI>>,
 }
 
-#[uniffi::export]
+#[cfg_attr(feature = "uniffi-bindings", uniffi::export)]
 impl QuicMqttEngineFFI {
-    #[uniffi::constructor]
+    #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
     pub fn new(opts: MqttOptionsFFI) -> Self {
         let options = MqttClientOptions::builder()
             .client_id(opts.client_id)
@@ -1181,6 +1181,7 @@ pub unsafe extern "C" fn mqtt_tls_engine_is_connected(ptr: *mut TlsMqttEngineFFI
 /// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`
 /// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
 #[no_mangle]
+#[cfg(feature = "uniffi-bindings")]
 pub unsafe extern "C" fn mqtt_engine_take_events(ptr: *mut MqttEngineFFI) -> *mut c_char {
     if let Some(engine) = ptr.as_ref() {
         let events = engine.take_events();
@@ -1196,6 +1197,7 @@ pub unsafe extern "C" fn mqtt_engine_take_events(ptr: *mut MqttEngineFFI) -> *mu
 /// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`
 /// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
 #[no_mangle]
+#[cfg(feature = "uniffi-bindings")]
 pub unsafe extern "C" fn mqtt_tls_engine_take_events(ptr: *mut TlsMqttEngineFFI) -> *mut c_char {
     if let Some(engine) = ptr.as_ref() {
         let events = engine.take_events();
@@ -1414,6 +1416,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_handle_tick(ptr: *mut QuicMqttEngineFF
 /// This function is unsafe because it dereferences a raw pointer to `QuicMqttEngineFFI`
 /// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
 #[no_mangle]
+#[cfg(feature = "uniffi-bindings")]
 pub unsafe extern "C" fn mqtt_quic_engine_take_events(ptr: *mut QuicMqttEngineFFI) -> *mut c_char {
     if let Some(engine) = ptr.as_ref() {
         let events = engine.take_events();
@@ -1536,12 +1539,12 @@ pub struct MqttDatagramC {
 // Event Inspection API for C (Native Structs)
 
 // Actually, let's just use a dedicated "C Event List" object to manage the lifetime.
-#[derive(uniffi::Object)]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Object))]
 pub struct MqttEventListFFI {
     events: Vec<MqttEventFFI>,
 }
 
-#[uniffi::export]
+#[cfg_attr(feature = "uniffi-bindings", uniffi::export)]
 impl MqttEventListFFI {
     pub fn len(&self) -> u32 {
         self.events.len() as u32
