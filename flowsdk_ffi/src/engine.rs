@@ -246,7 +246,7 @@ impl TlsMqttEngineFFI {
             .max_reconnect_attempts(opts.max_reconnect_attempts)
             .build();
 
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = rustls_openssl::default_provider().install_default();
         let crypto_builder = rustls::ClientConfig::builder();
 
         let mut config = if tls_opts.insecure_skip_verify {
@@ -526,7 +526,7 @@ impl QuicMqttEngineFFI {
         let addr: SocketAddr = server_addr.parse().unwrap();
         let now = self.start_time + Duration::from_millis(now_ms);
 
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let _ = rustls_openssl::default_provider().install_default();
         let crypto_builder = rustls::ClientConfig::builder();
 
         let mut config = if tls_opts.insecure_skip_verify {

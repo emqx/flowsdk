@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
-#[cfg(feature = "quic")]
+#[cfg(feature = "quic-proto")]
 use quinn_proto::{ClientConfig, Connection, ConnectionHandle, Endpoint, EndpointConfig, StreamId};
 use std::collections::VecDeque;
-#[cfg(feature = "quic")]
+#[cfg(feature = "quic-proto")]
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -853,7 +853,7 @@ impl MqttEngine {
 ///
 /// This engine combines the `MqttEngine` (MQTT state machine) with `quinn_proto` (QUIC state machine)
 /// to provide a complete MQTT-over-QUIC implementation that does not perform any direct I/O.
-#[cfg(feature = "quic")]
+#[cfg(feature = "quic-proto")]
 pub struct QuicMqttEngine {
     mqtt_engine: MqttEngine,
     endpoint: Endpoint,
@@ -869,7 +869,7 @@ pub struct QuicMqttEngine {
     // stream_read_buffer removed
 }
 
-#[cfg(feature = "quic")]
+#[cfg(feature = "quic-proto")]
 impl QuicMqttEngine {
     pub fn new(options: MqttClientOptions) -> Result<Self, MqttClientError> {
         // Initialize MqttEngine
