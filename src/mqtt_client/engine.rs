@@ -878,7 +878,8 @@ impl QuicMqttEngine {
         // Initialize QUIC Endpoint (Client)
         let endpoint_config = EndpointConfig::default();
         // Endpoint::new(config, server_config, disable_stateless_retry, reset_token_key)
-        let endpoint = Endpoint::new(Arc::new(endpoint_config), None, true, None);
+        // quinn-proto 0.12 removed the reset_token_key parameter
+        let endpoint = Endpoint::new(Arc::new(endpoint_config), None, true);
 
         Ok(Self {
             mqtt_engine,

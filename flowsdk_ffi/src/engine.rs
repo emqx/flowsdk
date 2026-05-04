@@ -223,6 +223,7 @@ fn map_event(event: MqttEvent) -> MqttEventFFI {
     }
 }
 
+#[cfg(feature = "tls")]
 #[derive(uniffi::Object)]
 pub struct TlsMqttEngineFFI {
     engine: Mutex<TlsMqttEngine>,
@@ -230,6 +231,7 @@ pub struct TlsMqttEngineFFI {
     events: Mutex<Vec<MqttEventFFI>>,
 }
 
+#[cfg(feature = "tls")]
 #[uniffi::export]
 impl TlsMqttEngineFFI {
     #[uniffi::constructor]
@@ -244,7 +246,7 @@ impl TlsMqttEngineFFI {
             .max_reconnect_attempts(opts.max_reconnect_attempts)
             .build();
 
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let crypto_builder = rustls::ClientConfig::builder();
 
         let mut config = if tls_opts.insecure_skip_verify {
@@ -389,6 +391,60 @@ impl TlsMqttEngineFFI {
     }
 }
 
+#[cfg(not(feature = "tls"))]
+#[derive(uniffi::Object)]
+pub struct TlsMqttEngineFFI {
+    start_time: Instant,
+    events: Mutex<Vec<MqttEventFFI>>,
+}
+
+#[cfg(not(feature = "tls"))]
+#[uniffi::export]
+impl TlsMqttEngineFFI {
+    #[uniffi::constructor]
+    pub fn new(_opts: MqttOptionsFFI, _tls_opts: MqttTlsOptionsFFI, _server_name: String) -> Self {
+        TlsMqttEngineFFI {
+            start_time: Instant::now(),
+            events: Mutex::new(Vec::new()),
+        }
+    }
+
+    pub fn handle_socket_data(&self, _data: Vec<u8>) {}
+
+    pub fn take_socket_data(&self) -> Vec<u8> {
+        Vec::new()
+    }
+
+    pub fn handle_tick(&self, _now_ms: u64) -> Vec<MqttEventFFI> {
+        let _ = self.start_time;
+        Vec::new()
+    }
+
+    pub fn take_events(&self) -> Vec<MqttEventFFI> {
+        std::mem::take(&mut *self.events.lock().unwrap())
+    }
+
+    pub fn connect(&self) {}
+
+    pub fn publish(&self, _topic: String, _payload: Vec<u8>, _qos: u8) -> i32 {
+        -1
+    }
+
+    pub fn subscribe(&self, _topic_filter: String, _qos: u8) -> i32 {
+        -1
+    }
+
+    pub fn unsubscribe(&self, _topic_filter: String) -> i32 {
+        -1
+    }
+
+    pub fn disconnect(&self) {}
+
+    pub fn is_connected(&self) -> bool {
+        false
+    }
+}
+
 #[derive(Debug)]
 struct InsecureServerCertVerifier;
 
@@ -470,7 +526,7 @@ impl QuicMqttEngineFFI {
         let addr: SocketAddr = server_addr.parse().unwrap();
         let now = self.start_time + Duration::from_millis(now_ms);
 
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
         let crypto_builder = rustls::ClientConfig::builder();
 
         let mut config = if tls_opts.insecure_skip_verify {

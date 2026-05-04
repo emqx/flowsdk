@@ -34,9 +34,9 @@ tokio-native-tls = { version = "0.3", optional = true }
 native-tls = { version = "0.2", optional = true }
 
 # QUIC support (optional)
-quinn = { version = "0.11", optional = true }
-quinn-proto = { version = "0.11", optional = true }
-rustls = { version = "0.23", optional = true, default-features = false, features = ["ring", "std"] }
+quinn = { version = "0.12", optional = true, default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
+quinn-proto = { version = "0.12", optional = true, default-features = false }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["aws-lc-rs", "std"] }
 rustls-native-certs = { version = "0.7", optional = true }
 rustls-pki-types = { version = "1", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
@@ -64,6 +64,17 @@ protocol-testing = []
 [target.aarch64-unknown-linux-musl]
 rustflags = ["-C", "target-feature=+crt-static"]
 
+[patch.crates-io]
+quinn = { git = "https://github.com/qzhuyan/quinn.git", branch = "dev/william/ring-no-deps" }
+quinn-proto = { git = "https://github.com/qzhuyan/quinn.git", branch = "dev/william/ring-no-deps" }
+
+[profile.release-small]
+inherits = "release"
+opt-level = "z"
+lto = true
+codegen-units = 1
+strip = true
+panic = "abort"
 [dev-dependencies]
 futures = "0.3"
 
