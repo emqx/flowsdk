@@ -9,6 +9,7 @@ use async_trait::async_trait;
 use std::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+#[cfg(feature = "async-client")]
 pub mod tcp;
 
 #[cfg(feature = "tls")]
@@ -101,6 +102,7 @@ pub trait Transport: AsyncRead + AsyncWrite + Send + Sync + Unpin {
 pub type BoxedTransport = Box<dyn Transport>;
 
 // Re-export transport types
+#[cfg(feature = "async-client")]
 pub use tcp::TcpTransport;
 
 #[cfg(feature = "tls")]

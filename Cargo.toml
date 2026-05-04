@@ -34,9 +34,10 @@ tokio-native-tls = { version = "0.3", optional = true }
 native-tls = { version = "0.2", optional = true }
 
 # QUIC support (optional)
-quinn = { version = "0.12", optional = true, default-features = false, features = ["runtime-tokio", "rustls-aws-lc-rs"] }
-quinn-proto = { version = "0.12", optional = true, default-features = false }
-rustls = { version = "0.23", optional = true, default-features = false, features = ["aws-lc-rs", "std"] }
+quinn = { version = "0.12", optional = true, default-features = false, features = ["runtime-tokio", "rustls-openssl"] }
+quinn-proto = { version = "0.12", optional = true, default-features = false, features = ["rustls-openssl"] }
+rustls = { version = "0.23", optional = true, default-features = false, features = ["std"] }
+rustls-openssl = { version = "0.3", optional = true }
 rustls-native-certs = { version = "0.7", optional = true }
 rustls-pki-types = { version = "1", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
@@ -48,7 +49,7 @@ tls = ["dep:tokio-native-tls", "dep:native-tls", "async-client"]
 # QUIC transport support
 quic = ["quic-proto", "dep:quinn", "async-client"]
 # Sans-I/O QUIC protocol engine (no tokio runtime required)
-quic-proto = ["dep:quinn-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
+quic-proto = ["dep:quinn-proto", "dep:rustls", "dep:rustls-openssl", "dep:rustls-native-certs", "dep:rustls-pki-types"]
 # Rustls-based TLS over TCP (mqtts://) transport support
 rustls-tls = [
 	"dep:rustls",
