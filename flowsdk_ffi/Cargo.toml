@@ -35,6 +35,7 @@ rustls-pki-types = { version = "1", optional = true }
 default = ["tls", "quic", "uniffi-bindings"]
 quic = [
 	"flowsdk/quic-proto",
+	"flowsdk/async-client",
 	"flowsdk/strict-protocol-compliance",
 	"dep:quinn-proto",
 	"dep:rustls",

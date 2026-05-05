@@ -71,6 +71,25 @@ char *mqtt_event_list_get_message_topic(const MqttEventListFFI *ptr,
 uint8_t *mqtt_event_list_get_message_payload(const MqttEventListFFI *ptr,
                                              size_t index, size_t *out_len);
 
+static const char *mqtt_event_tag_name(uint8_t tag) {
+  switch (tag) {
+  case 1:
+    return "Connected";
+  case 2:
+    return "Disconnected";
+  case 3:
+    return "MessageReceived";
+  case 4:
+    return "Published";
+  case 5:
+    return "Subscribed";
+  case 6:
+    return "Unsubscribed";
+  default:
+    return "Unknown";
+  }
+}
+
 // Helper to get monotonic time in milliseconds
 uint64_t get_time_ms() {
   struct timespec ts;
@@ -89,12 +108,25 @@ int main(int argc, char **argv) {
    */
   const char *broker_host = "broker.emqx.io";
   const char *broker_port = "14567";
+  const char *server_name = NULL;
   const char *sslkeylogfile = getenv("SSLKEYLOGFILE");
 
   if (argc > 1)
     broker_host = argv[1];
   if (argc > 2)
     broker_port = argv[2];
+
+  if (argc > 3) {
+    server_name = argv[3];
+  } else {
+    struct in_addr ip4;
+    if (inet_pton(AF_INET, broker_host, &ip4) == 1) {
+      // If caller passes an IP, keep SNI on broker hostname by default.
+      server_name = "broker.emqx.io";
+    } else {
+      server_name = broker_host;
+    }
+  }
 
   printf("Resolving %s:%s...\n", broker_host, broker_port);
 
@@ -120,6 +152,7 @@ int main(int argc, char **argv) {
 
   printf("Connecting to MQTT-over-QUIC broker at %s (resolved from %s)...\n",
          server_addr_str, broker_host);
+  printf("Using TLS server name: %s\n", server_name);
 
   // 2. Create UDP socket
   int sock = socket(AF_INET, SOCK_DGRAM, 0);
@@ -151,13 +184,14 @@ int main(int argc, char **argv) {
     printf("TLS key logging enabled -> %s\n", sslkeylogfile);
   }
 
-  if (mqtt_quic_engine_connect(engine, server_addr_str, broker_host, &q_opts) !=
+  if (mqtt_quic_engine_connect(engine, server_addr_str, server_name, &q_opts) !=
       0) {
     fprintf(stderr, "Failed to initiate QUIC connection\n");
     return 1;
   }
 
   uint64_t start_time = get_time_ms();
+  uint64_t last_tick_ms = 0;
   int running = 1;
   uint32_t loop_without_activity = 0;
 
@@ -169,43 +203,11 @@ int main(int argc, char **argv) {
   while (running) {
     uint64_t now_ms = get_time_ms() - start_time;
 
-    // A. Handle Ticks
-    mqtt_quic_engine_handle_tick(engine, now_ms);
-
-    // B. Handle Outgoing Datagrams
-    size_t dg_count = 0;
-    MqttDatagramC *datagrams =
-        mqtt_quic_engine_take_outgoing_datagrams(engine, &dg_count);
-    if (datagrams) {
-      for (size_t i = 0; i < dg_count; i++) {
-        struct addrinfo hints, *res;
-        memset(&hints, 0, sizeof(hints));
-        hints.ai_family = AF_INET;
-        hints.ai_socktype = SOCK_DGRAM;
-
-        char host[256], port[16];
-        char *colon = strrchr(datagrams[i].addr, ':');
-        if (colon) {
-          size_t host_len = colon - datagrams[i].addr;
-          strncpy(host, datagrams[i].addr, host_len);
-          host[host_len] = '\0';
-          strcpy(port, colon + 1);
-
-          if (getaddrinfo(host, port, &hints, &res) == 0) {
-            sendto(sock, datagrams[i].data, datagrams[i].data_len, 0,
-                   res->ai_addr, res->ai_addrlen);
-            freeaddrinfo(res);
-          }
-        }
-      }
-      mqtt_quic_engine_free_datagrams(datagrams, dg_count);
-      loop_without_activity = 0;
-    }
-
-    // C. Handle Incoming Datagrams
-    ssize_t recvd = recvfrom(sock, read_buf, sizeof(read_buf), 0,
-                             (struct sockaddr *)&remote_addr, &addr_len);
-    if (recvd > 0) {
+    // A. Handle Incoming Datagrams first to avoid unnecessary retransmit bursts.
+    ssize_t recvd = 0;
+    addr_len = sizeof(remote_addr);
+    while ((recvd = recvfrom(sock, read_buf, sizeof(read_buf), 0,
+                             (struct sockaddr *)&remote_addr, &addr_len)) > 0) {
       char remote_ip[INET_ADDRSTRLEN];
       inet_ntop(AF_INET, &remote_addr.sin_addr, remote_ip, sizeof(remote_ip));
       char remote_str[INET_ADDRSTRLEN + 16];
@@ -213,6 +215,61 @@ int main(int argc, char **argv) {
                ntohs(remote_addr.sin_port));
 
       mqtt_quic_engine_handle_datagram(engine, read_buf, recvd, remote_str);
+      loop_without_activity = 0;
+
+      addr_len = sizeof(remote_addr);
+    }
+
+    if (recvd < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+      perror("recvfrom");
+    }
+
+    // B. Handle Ticks every 10ms to match quinn's expected pacing
+    if (now_ms - last_tick_ms >= 10) {
+      mqtt_quic_engine_handle_tick(engine, now_ms);
+      last_tick_ms = now_ms;
+    }
+
+    // C. Handle Outgoing Datagrams
+    size_t dg_count = 0;
+    MqttDatagramC *datagrams =
+        mqtt_quic_engine_take_outgoing_datagrams(engine, &dg_count);
+    if (datagrams) {
+      for (size_t i = 0; i < dg_count; i++) {
+        // Datagram destinations from the engine are always numeric IP:port
+        // strings — parse directly to avoid getaddrinfo overhead.
+        char host[INET_ADDRSTRLEN + 1] = {0};
+        char *colon = strrchr(datagrams[i].addr, ':');
+        if (!colon) {
+          fprintf(stderr, "Invalid datagram destination: %s\n",
+                  datagrams[i].addr);
+          continue;
+        }
+
+        size_t host_len = (size_t)(colon - datagrams[i].addr);
+        if (host_len == 0 || host_len >= sizeof(host)) {
+          fprintf(stderr, "Invalid datagram host: %s\n", datagrams[i].addr);
+          continue;
+        }
+        memcpy(host, datagrams[i].addr, host_len);
+        host[host_len] = '\0';
+
+        struct sockaddr_in dst;
+        memset(&dst, 0, sizeof(dst));
+        dst.sin_family = AF_INET;
+        if (inet_pton(AF_INET, host, &dst.sin_addr) != 1) {
+          fprintf(stderr, "Invalid datagram IP: %s\n", host);
+          continue;
+        }
+        dst.sin_port = htons((uint16_t)atoi(colon + 1));
+
+        ssize_t sent = sendto(sock, datagrams[i].data, datagrams[i].data_len, 0,
+                              (struct sockaddr *)&dst, sizeof(dst));
+        if (sent < 0) {
+          perror("sendto");
+        }
+      }
+      mqtt_quic_engine_free_datagrams(datagrams, dg_count);
       loop_without_activity = 0;
     }
 
@@ -233,8 +290,7 @@ int main(int argc, char **argv) {
               engine, "test/topic/quic",
               (const uint8_t *)"hello from C over QUIC native", 29, 1);
         } else if (tag == 4) { // Published
-          printf("Published! Disconnecting...\n");
-          mqtt_quic_engine_disconnect(engine);
+          printf("Published! Waiting for echo...\n");
         } else if (tag == 2) { // Disconnected
           printf("Disconnected gracefully.\n");
           running = 0;
@@ -247,14 +303,19 @@ int main(int argc, char **argv) {
                  (char *)payload);
           mqtt_engine_free_string(topic);
           mqtt_engine_free_bytes(payload, p_len);
+          printf("Disconnecting...\n");
+          mqtt_quic_engine_disconnect(engine);
+        } else {
+          printf("Unhandled MQTT event: %s (tag=%u)\n",
+                 mqtt_event_tag_name(tag), tag);
         }
       }
       mqtt_event_list_free(events);
     }
 
-    usleep(10000); // 10ms
+    usleep(1000); // 1ms
     loop_without_activity++;
-    if (loop_without_activity > 5000) {
+    if (loop_without_activity > 5000) { // 5s timeout
       printf("Timeout, exiting...\n");
       running = 0;
     }

@@ -577,6 +577,10 @@ impl QuicMqttEngineFFI {
             .ok();
     }
 
+    fn elapsed_ms(&self) -> u64 {
+        self.start_time.elapsed().as_millis() as u64
+    }
+
     pub fn handle_datagram(&self, data: Vec<u8>, remote_addr: String, now_ms: u64) {
         let addr: SocketAddr = remote_addr.parse().unwrap();
         let now = self.start_time + Duration::from_millis(now_ms);
@@ -1312,7 +1316,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_connect(
             }
         };
 
-        engine.connect(server_addr, server_name, tls_opts_v, 0);
+        engine.connect(server_addr, server_name, tls_opts_v, engine.elapsed_ms());
         0
     } else {
         -1
@@ -1332,7 +1336,7 @@ pub unsafe extern "C" fn mqtt_quic_engine_handle_datagram(
     if let (Some(engine), true, true) = (ptr.as_ref(), !data.is_null(), !remote_addr.is_null()) {
         let buf = std::slice::from_raw_parts(data, len);
         let remote_addr = CStr::from_ptr(remote_addr).to_string_lossy().into_owned();
-        engine.handle_datagram(buf.to_vec(), remote_addr, 0);
+        engine.handle_datagram(buf.to_vec(), remote_addr, engine.elapsed_ms());
     }
 }
 
