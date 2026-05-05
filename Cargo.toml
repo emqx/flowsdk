@@ -56,6 +56,7 @@ rustls-tls = [
 	"dep:rustls-native-certs",
 	"dep:rustls-pki-types",
 	"dep:tokio-rustls",
+	"async-client",
 ]
 # Tokio-based async MQTT client (adds the high-throughput multi-threaded runtime)
 async-client = [
