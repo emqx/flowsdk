@@ -246,7 +246,10 @@ impl TlsMqttEngineFFI {
             .max_reconnect_attempts(opts.max_reconnect_attempts)
             .build();
 
+        #[cfg(feature = "quic-openssl")]
         let _ = rustls_openssl::default_provider().install_default();
+        #[cfg(not(feature = "quic-openssl"))]
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let crypto_builder = rustls::ClientConfig::builder();
 
         let mut config = if tls_opts.insecure_skip_verify {
@@ -526,7 +529,10 @@ impl QuicMqttEngineFFI {
         let addr: SocketAddr = server_addr.parse().unwrap();
         let now = self.start_time + Duration::from_millis(now_ms);
 
+        #[cfg(feature = "quic-openssl")]
         let _ = rustls_openssl::default_provider().install_default();
+        #[cfg(not(feature = "quic-openssl"))]
+        let _ = rustls::crypto::ring::default_provider().install_default();
         let crypto_builder = rustls::ClientConfig::builder();
 
         let mut config = if tls_opts.insecure_skip_verify {

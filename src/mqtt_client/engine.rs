@@ -877,9 +877,12 @@ impl QuicMqttEngine {
 
         // Initialize QUIC Endpoint (Client)
         let endpoint_config = EndpointConfig::default();
-        // Endpoint::new(config, server_config, disable_stateless_retry, reset_token_key)
-        // quinn-proto 0.12 removed the reset_token_key parameter
+        // quinn-proto 0.11 (mainstream) has a 4th reset_token_key parameter;
+        // the fork (0.12) removed it.
+        #[cfg(feature = "quic-proto-openssl")]
         let endpoint = Endpoint::new(Arc::new(endpoint_config), None, true);
+        #[cfg(not(feature = "quic-proto-openssl"))]
+        let endpoint = Endpoint::new(Arc::new(endpoint_config), None, true, None);
 
         Ok(Self {
             mqtt_engine,

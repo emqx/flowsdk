@@ -460,13 +460,8 @@ mod imp {
             })?;
             let runtime = quinn::default_runtime()
                 .ok_or_else(|| TransportError::ConnectionFailed("no tokio runtime".to_string()))?;
-            let endpoint = Endpoint::new(
-                quinn::EndpointConfig::default(),
-                None,
-                socket,
-                runtime,
-            )
-            .map_err(|e| {
+            let endpoint = Endpoint::new(quinn::EndpointConfig::default(), None, socket, runtime)
+                .map_err(|e| {
                 TransportError::ConnectionFailed(format!("QUIC endpoint create failed: {}", e))
             })?;
 
