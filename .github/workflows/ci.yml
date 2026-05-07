@@ -118,6 +118,47 @@ jobs:
         timeout 30s cargo fuzz run fuzz_parser_funs || true
         timeout 30s cargo fuzz run fuzz_mqtt_packet_symmetric || true
 
+  quic-build-modes:
+    name: QUIC build modes
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Install OpenSSL (required for quic-openssl backend)
+      run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev
+
+    - name: Install protoc
+      uses: arduino/setup-protoc@v3
+      with:
+        version: '25.x'
+        repo-token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Cache dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-quic-build-${{ hashFiles('**/Cargo.lock') }}
+
+    # Mode 1: default build — quinn not in the dep tree at all
+    - name: Build (default, no QUIC)
+      run: cargo build
+
+    # Mode 2: mainstream quinn 0.11 (crates.io) + ring crypto
+    - name: Build flowsdk_ffi --features quic (mainstream quinn)
+      run: cargo build -p flowsdk_ffi --features quic --no-default-features
+
+    # Mode 3: git fork + OpenSSL crypto, optimised for binary size
+    - name: Build flowsdk_ffi --features quic-openssl --profile release-small (OpenSSL fork)
+      run: cargo build -p flowsdk_ffi --features quic-openssl --no-default-features --profile release-small
+
   security:
     name: Security Audit
     runs-on: ubuntu-latest
