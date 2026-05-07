@@ -11,6 +11,11 @@ mkdir -p target/llvm-cov-target
 # 1. Collect coverage from Rust tests and examples
 cargo +stable llvm-cov --workspace --no-report --tests
 cargo +stable llvm-cov --workspace --no-report --tests -- --ignored
+# Mainstream QUIC build mode (ring crypto, mainstream quinn): covers
+# #[cfg(not(feature = "quic-proto-openssl"))] branches
+cargo +stable llvm-cov --workspace --no-report --tests --features quic
+# All features (includes quic-openssl): covers
+# #[cfg(feature = "quic-proto-openssl"))] branches
 cargo +stable llvm-cov --workspace --no-report --examples --all-features
 cargo +stable llvm-cov report --lcov --output-path lcov.info
 
