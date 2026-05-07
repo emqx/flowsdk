@@ -1,0 +1,6 @@
+{
+    "chat.tools.terminal.autoApprove": {
+        "gradle wrapper": true,
+        "cargo build": true
+    }
+}

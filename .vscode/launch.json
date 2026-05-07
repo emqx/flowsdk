@@ -1,0 +1,44 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:flowsdk-ffi}/swift",
+            "name": "Debug TcpClientExample (swift)",
+            "target": "TcpClientExample",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug TcpClientExample (swift)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:flowsdk-ffi}/swift",
+            "name": "Release TcpClientExample (swift)",
+            "target": "TcpClientExample",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release TcpClientExample (swift)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:flowsdk-ffi}/swift",
+            "name": "Debug QuicClientExample (swift)",
+            "target": "QuicClientExample",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug QuicClientExample (swift)"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:flowsdk-ffi}/swift",
+            "name": "Release QuicClientExample (swift)",
+            "target": "QuicClientExample",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release QuicClientExample (swift)"
+        }
+    ]
+}
