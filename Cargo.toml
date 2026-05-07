@@ -11,7 +11,7 @@ categories = ["network-programming", "asynchronous"]
 
 [workspace]
 members = [".", "mqtt_grpc_duality", "flowsdk_ffi"]
-exclude = ["fuzz"]
+exclude = ["fuzz", "release-small"]
 
 [dependencies]
 tonic = { version = "0.14.1", optional = true }
@@ -33,9 +33,12 @@ ctrlc = "3.4"
 tokio-native-tls = { version = "0.3", optional = true }
 native-tls = { version = "0.2", optional = true }
 
-# QUIC support (optional)
-quinn = { version = "0.12", optional = true, default-features = false, features = ["runtime-tokio", "rustls-openssl"] }
-quinn-proto = { version = "0.12", optional = true, default-features = false, features = ["rustls-openssl"] }
+# QUIC support — mainstream quinn with ring crypto (regular builds)
+quinn = { version = "0.11", optional = true, default-features = false, features = ["runtime-tokio", "rustls", "ring"] }
+quinn-proto = { version = "0.11", optional = true, default-features = false, features = ["rustls", "ring"] }
+# QUIC support — OpenSSL crypto via fork (for release-small / size-optimised builds)
+quinn-openssl = { package = "quinn", git = "https://github.com/qzhuyan/quinn.git", branch = "dev/william/ring-no-deps", optional = true, default-features = false, features = ["runtime-tokio", "rustls-openssl"] }
+quinn-proto-openssl = { package = "quinn-proto", git = "https://github.com/qzhuyan/quinn.git", branch = "dev/william/ring-no-deps", optional = true, default-features = false, features = ["rustls-openssl"] }
 rustls = { version = "0.23", optional = true, default-features = false, features = ["std"] }
 rustls-openssl = { version = "0.3", optional = true }
 rustls-native-certs = { version = "0.7", optional = true }
@@ -46,10 +49,18 @@ tokio-rustls = { version = "0.26", optional = true }
 default = ["strict-protocol-compliance", "tls", "async-client"]
 # TLS/SSL transport support
 tls = ["dep:tokio-native-tls", "dep:native-tls", "async-client"]
-# QUIC transport support
+# QUIC transport support (mainstream quinn + ring crypto)
 quic = ["quic-proto", "dep:quinn", "async-client"]
-# Sans-I/O QUIC protocol engine (no tokio runtime required)
-quic-proto = ["dep:quinn-proto", "dep:rustls", "dep:rustls-openssl", "dep:rustls-native-certs", "dep:rustls-pki-types"]
+# QUIC transport support (OpenSSL backend via fork, for release-small builds)
+# Implies quic so all #[cfg(feature = "quic")] gates activate; the fork is aliased
+# over mainstream quinn via extern crate in lib.rs.  LTO strips unused mainstream
+# quinn symbols from the final binary.
+# NOTE: do not enable quic and quic-openssl at the same time.
+quic-openssl = ["quic", "quic-proto-openssl", "dep:quinn-openssl"]
+# Sans-I/O QUIC protocol engine — ring crypto (no tokio runtime required)
+quic-proto = ["dep:quinn-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
+# Sans-I/O QUIC protocol engine — OpenSSL crypto (for release-small builds)
+quic-proto-openssl = ["quic-proto", "dep:quinn-proto-openssl", "dep:rustls-openssl"]
 # Rustls-based TLS over TCP (mqtts://) transport support
 rustls-tls = [
 	"dep:rustls",
@@ -76,10 +87,6 @@ protocol-testing = []
 # usage: cargo build --target aarch64-unknown-linux-musl --examples --features quic
 [target.aarch64-unknown-linux-musl]
 rustflags = ["-C", "target-feature=+crt-static"]
-
-[patch.crates-io]
-quinn = { git = "https://github.com/qzhuyan/quinn.git", branch = "dev/william/ring-no-deps" }
-quinn-proto = { git = "https://github.com/qzhuyan/quinn.git", branch = "dev/william/ring-no-deps" }
 
 [profile.release-small]
 inherits = "release"
