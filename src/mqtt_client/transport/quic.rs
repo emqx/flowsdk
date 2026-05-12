@@ -460,6 +460,7 @@ mod imp {
             })?;
             let runtime = quinn::default_runtime()
                 .ok_or_else(|| TransportError::ConnectionFailed("no tokio runtime".to_string()))?;
+            #[allow(unused_mut)]
             let mut endpoint = Endpoint::new(
                 quinn::EndpointConfig::default(),
                 None,
