@@ -1,0 +1,24 @@
+[package]
+name = "mqtt_ring_bench"
+version = "0.1.0"
+edition = "2021"
+license = "MPL-2.0"
+description = "High-connection-count MQTT benchmarking tool using io_uring and sans-I/O client"
+
+[features]
+default = []
+quic = ["flowsdk/quic-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
+
+[dependencies]
+flowsdk = { path = "..", default-features = false, features = ["strict-protocol-compliance"] }
+io-uring = "0.7"
+socket2 = "0.5"
+libc = "0.2"
+slab = "0.4"
+ctrlc = "3.4"
+clap = { version = "4.5", features = ["derive"] }
+
+# QUIC support (optional)
+rustls = { version = "0.23", optional = true, default-features = false, features = ["std", "ring"] }
+rustls-native-certs = { version = "0.7", optional = true }
+rustls-pki-types = { version = "1", optional = true }

@@ -119,6 +119,13 @@ pub struct MqttClientOptions {
     /// - For outgoing: Limits how many QoS 1/2 messages can be inflight.
     /// - Default: 65535
     pub receive_maximum: u16,
+
+    /// Internal parser buffer size in bytes.
+    /// Controls the initial capacity of the MQTT packet parser's BytesMut buffer.
+    /// - Default: 16384 (16KB)
+    /// - For high-connection-count scenarios with small packets, use 1500 (1 MTU)
+    ///   to reduce per-connection memory overhead.
+    pub parser_buffer_size: usize,
 }
 
 impl Default for MqttClientOptions {
@@ -154,6 +161,7 @@ impl Default for MqttClientOptions {
             max_outgoing_packet_count: 1000,
             max_event_count: 1000,
             receive_maximum: 65535,
+            parser_buffer_size: 16384,
         }
     }
 }
@@ -571,6 +579,14 @@ impl MqttClientOptions {
     /// Set the Receive Maximum (MQTT v5)
     pub fn receive_maximum(mut self, max: u16) -> Self {
         self.receive_maximum = max;
+        self
+    }
+
+    /// Set the internal parser buffer size in bytes (default: 16384).
+    /// Use a smaller value (e.g., 1500 for 1 MTU) to reduce per-connection
+    /// memory in high-connection-count scenarios.
+    pub fn parser_buffer_size(mut self, size: usize) -> Self {
+        self.parser_buffer_size = size;
         self
     }
 }

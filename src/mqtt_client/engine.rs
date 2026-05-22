@@ -122,7 +122,7 @@ impl MqttEngine {
     pub fn new(options: MqttClientOptions) -> Self {
         let mqtt_version = options.mqtt_version;
         // Default buffer size 16KB
-        let parser = MqttParser::new(16384, mqtt_version);
+        let parser = MqttParser::new(options.parser_buffer_size, mqtt_version);
 
         // Cache timeout values for efficiency
         let retransmission_timeout = Duration::from_millis(options.retransmission_timeout_ms);
