@@ -201,6 +201,12 @@ impl Connection {
         drained
     }
 
+    /// Next deadline the engine wants us to wake up at, if any.
+    /// Used by the worker to size its io_uring wait timeout.
+    pub fn next_tick_at(&self) -> Option<Instant> {
+        self.mqtt.next_tick_at()
+    }
+
     pub fn handle_tick(&mut self) -> Vec<MqttEvent> {
         let now = Instant::now();
         if let Some(next) = self.mqtt.next_tick_at() {
