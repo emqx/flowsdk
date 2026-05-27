@@ -97,6 +97,7 @@ strip = true
 panic = "abort"
 [dev-dependencies]
 futures = "0.3"
+clap = { version = "4.5", features = ["derive"] }
 
 [[example]]
 name = "no_io_quic_async_client_example"
