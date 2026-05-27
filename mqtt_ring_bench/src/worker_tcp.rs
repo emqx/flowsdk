@@ -55,8 +55,10 @@ pub fn run_worker(
     pending_create.reverse();
 
     let mut done_count: usize = 0;
-    let mut last_timer_check = Instant::now();
     let mut ifaddr_idx: usize = 0;
+    // Upper bound on idle wait — keeps Ctrl+C / shutdown responsive even when
+    // no protocol timer is scheduled.
+    let max_idle_wait = Duration::from_secs(1);
 
     loop {
         if stats.stopped.load(Ordering::Relaxed) {
@@ -117,15 +119,31 @@ pub fn run_worker(
             }
         }
 
-        // Wait up to 100ms for completions so Ctrl+C is checked on each iteration.
-        let ts = Timespec::new().nsec(100_000_000); // 100ms
+        // Wait for the soonest of: next protocol deadline, a CQE arrival, or
+        // `max_idle_wait` (keeps shutdown responsive when nothing is scheduled).
+        let min_deadline = conns
+            .iter()
+            .filter(|(_, c)| {
+                c.state != ConnState::Done
+                    && c.state != ConnState::Failed
+                    && c.state != ConnState::TcpConnecting
+            })
+            .filter_map(|(_, c)| c.next_tick_at())
+            .min();
+        let wait_dur = match min_deadline {
+            Some(d) => d.saturating_duration_since(now).min(max_idle_wait),
+            None => max_idle_wait,
+        };
+        let wait_count = if conns.is_empty() || wait_dur.is_zero() { 0 } else { 1 };
+        let ts = Timespec::new()
+            .sec(wait_dur.as_secs())
+            .nsec(wait_dur.subsec_nanos());
         let args = SubmitArgs::new().timespec(&ts);
-        let wait_count = if conns.is_empty() { 0 } else { 1 };
         match ring.submitter().submit_with_args(wait_count, &args) {
             Ok(_) => {}
             Err(ref e) if e.raw_os_error() == Some(libc::EINTR) => continue,
             Err(ref e) if e.raw_os_error() == Some(libc::EBUSY) => continue,
-            Err(ref e) if e.raw_os_error() == Some(libc::ETIME) => continue, // timeout, loop back
+            Err(ref e) if e.raw_os_error() == Some(libc::ETIME) => {} // deadline hit, fall through to tick
             Err(e) => {
                 eprintln!("worker {}: io_uring submit error: {}", worker_id, e);
                 break;
@@ -192,35 +210,36 @@ pub fn run_worker(
             }
         }
 
-        // Periodic timer checks (~500ms)
-        if now.duration_since(last_timer_check) >= Duration::from_millis(500) {
-            last_timer_check = now;
-            let keys: Vec<usize> = conns
-                .iter()
-                .filter(|(_, c)| {
-                    c.state != ConnState::Done
-                        && c.state != ConnState::Failed
-                        && c.state != ConnState::TcpConnecting
-                })
-                .map(|(k, _)| k)
-                .collect();
-            for key in keys {
-                let conn = &mut conns[key];
-                let events = conn.handle_tick();
-                if !events.is_empty() {
-                    let outcome = conn.process_events(events);
-                    if outcome.error {
-                        stats.errors.fetch_add(1, Ordering::Relaxed);
-                    }
-                    if outcome.acked > 0 {
-                        stats
-                            .messages_acked
-                            .fetch_add(outcome.acked, Ordering::Relaxed);
-                    }
-                    if conn.has_pending_send() && !conn.send_pending {
-                        submit_send(&mut ring, key, conn);
-                    }
+        // Drive protocol timers. Connection::handle_tick is a cheap no-op if
+        // the per-connection deadline hasn't been reached, so iterating every
+        // loop pass is fine — and only happens when we either got a CQE or
+        // crossed the global min_deadline computed above.
+        let tick_keys: Vec<usize> = conns
+            .iter()
+            .filter(|(_, c)| {
+                c.state != ConnState::Done
+                    && c.state != ConnState::Failed
+                    && c.state != ConnState::TcpConnecting
+            })
+            .map(|(k, _)| k)
+            .collect();
+        for key in tick_keys {
+            let conn = &mut conns[key];
+            let events = conn.handle_tick();
+            if !events.is_empty() {
+                let outcome = conn.process_events(events);
+                if outcome.error {
+                    stats.errors.fetch_add(1, Ordering::Relaxed);
                 }
+                if outcome.acked > 0 {
+                    stats
+                        .messages_acked
+                        .fetch_add(outcome.acked, Ordering::Relaxed);
+                }
+            }
+            // PINGREQ / retransmits produce outgoing bytes without any event.
+            if conn.has_pending_send() && !conn.send_pending {
+                submit_send(&mut ring, key, conn);
             }
         }
 

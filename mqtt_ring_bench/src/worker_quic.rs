@@ -9,7 +9,7 @@ use std::os::fd::IntoRawFd;
 use std::os::fd::RawFd;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::Instant;
 
 use crate::config::BenchConfig;
 use crate::connection::{QuicConnState, QuicConnection};
@@ -50,7 +50,6 @@ pub fn run_quic_worker(
     pending_create.reverse();
 
     let mut done_count: usize = 0;
-    let mut last_timer_check = Instant::now();
     let mut ifaddr_idx: usize = 0;
 
     loop {
@@ -187,9 +186,10 @@ pub fn run_quic_worker(
             }
         }
 
-        // Try to publish on ready connections + handle ticks (~10ms)
-        if now.duration_since(last_timer_check) >= Duration::from_millis(10) {
-            last_timer_check = now;
+        // Drive QUIC + MQTT state machines. The io_uring wait timeout (10ms)
+        // provides the cadence; quinn-proto's loss detection and pacing need
+        // ticks at roughly that rate regardless of CQE arrivals.
+        {
             let keys: Vec<usize> = conns
                 .iter()
                 .filter(|(_, c)| {
