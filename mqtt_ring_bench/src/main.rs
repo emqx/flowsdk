@@ -1,18 +1,38 @@
 // SPDX-License-Identifier: MPL-2.0
 
+// Linux-only: this bench is built on io_uring. On non-Linux platforms we
+// fall through to a stub `main` below so workspace builds (e.g. macOS CI)
+// still succeed.
+
+#[cfg(target_os = "linux")]
 mod config;
+#[cfg(target_os = "linux")]
 mod connection;
+#[cfg(target_os = "linux")]
 mod stats;
+#[cfg(target_os = "linux")]
 mod worker_common;
+#[cfg(target_os = "linux")]
 mod worker_tcp;
-#[cfg(feature = "quic")]
+#[cfg(all(target_os = "linux", feature = "quic"))]
 mod worker_quic;
 
+#[cfg(target_os = "linux")]
 use std::sync::atomic::Ordering;
+#[cfg(target_os = "linux")]
 use std::sync::Arc;
+#[cfg(target_os = "linux")]
 use std::thread;
+#[cfg(target_os = "linux")]
 use std::time::Duration;
 
+#[cfg(not(target_os = "linux"))]
+fn main() {
+    eprintln!("mqtt_ring_bench is Linux-only (built on io_uring).");
+    std::process::exit(1);
+}
+
+#[cfg(target_os = "linux")]
 fn main() {
     let config = Arc::new(config::parse_args());
     let stats = Arc::new(stats::BenchStats::new());
@@ -100,6 +120,7 @@ fn main() {
     stats::print_final_summary(&config, &snap, &merged);
 }
 
+#[cfg(target_os = "linux")]
 fn print_banner(config: &config::BenchConfig) {
     let transport = if config.quic { "QUIC" } else { "TCP" };
     eprintln!("mqtt_ring_bench - io_uring MQTT publish benchmark");
@@ -142,7 +163,7 @@ fn print_banner(config: &config::BenchConfig) {
     eprintln!();
 }
 
-#[cfg(feature = "quic")]
+#[cfg(all(target_os = "linux", feature = "quic"))]
 fn build_quic_crypto(config: &config::BenchConfig) -> rustls::ClientConfig {
     if config.quic_insecure {
         rustls::ClientConfig::builder()
@@ -165,11 +186,11 @@ fn build_quic_crypto(config: &config::BenchConfig) -> rustls::ClientConfig {
 }
 
 /// Certificate verifier that accepts any server certificate (for --quic-insecure).
-#[cfg(feature = "quic")]
+#[cfg(all(target_os = "linux", feature = "quic"))]
 #[derive(Debug)]
 struct InsecureCertVerifier;
 
-#[cfg(feature = "quic")]
+#[cfg(all(target_os = "linux", feature = "quic"))]
 impl rustls::client::danger::ServerCertVerifier for InsecureCertVerifier {
     fn verify_server_cert(
         &self,
