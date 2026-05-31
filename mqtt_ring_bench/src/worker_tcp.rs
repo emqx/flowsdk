@@ -92,10 +92,9 @@ pub fn run_worker(
                         let conn = Box::new(Connection::new(fd, client_idx, &config));
                         let key = conns.insert(conn);
 
-                        let connect_e =
-                            opcode::Connect::new(Fd(fd), sa_ptr as *const _, sa_len)
-                                .build()
-                                .user_data(encode_user_data(key, OP_CONNECT));
+                        let connect_e = opcode::Connect::new(Fd(fd), sa_ptr as *const _, sa_len)
+                            .build()
+                            .user_data(encode_user_data(key, OP_CONNECT));
 
                         unsafe {
                             if ring.submission().push(&connect_e).is_err() {
@@ -134,7 +133,11 @@ pub fn run_worker(
             Some(d) => d.saturating_duration_since(now).min(max_idle_wait),
             None => max_idle_wait,
         };
-        let wait_count = if conns.is_empty() || wait_dur.is_zero() { 0 } else { 1 };
+        let wait_count = if conns.is_empty() || wait_dur.is_zero() {
+            0
+        } else {
+            1
+        };
         let ts = Timespec::new()
             .sec(wait_dur.as_secs())
             .nsec(wait_dur.subsec_nanos());

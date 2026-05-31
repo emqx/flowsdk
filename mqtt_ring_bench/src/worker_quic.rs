@@ -89,7 +89,9 @@ pub fn run_quic_worker(
                                 "worker {}: UDP connect failed for client {}: {}",
                                 worker_id, client_idx, e
                             );
-                            unsafe { libc::close(fd); }
+                            unsafe {
+                                libc::close(fd);
+                            }
                             stats.errors.fetch_add(1, Ordering::Relaxed);
                             stats.clients_done.fetch_add(1, Ordering::Relaxed);
                             done_count += 1;
@@ -112,7 +114,9 @@ pub fn run_quic_worker(
                                             "worker {}: QUIC connect failed for client {}: {}",
                                             worker_id, client_idx, e
                                         );
-                                        unsafe { libc::close(fd); }
+                                        unsafe {
+                                            libc::close(fd);
+                                        }
                                         stats.errors.fetch_add(1, Ordering::Relaxed);
                                         stats.clients_done.fetch_add(1, Ordering::Relaxed);
                                         done_count += 1;
@@ -124,7 +128,9 @@ pub fn run_quic_worker(
                                     "worker {}: QuicConnection::new failed for client {}: {}",
                                     worker_id, client_idx, e
                                 );
-                                unsafe { libc::close(fd); }
+                                unsafe {
+                                    libc::close(fd);
+                                }
                                 stats.errors.fetch_add(1, Ordering::Relaxed);
                                 stats.clients_done.fetch_add(1, Ordering::Relaxed);
                                 done_count += 1;
@@ -174,12 +180,23 @@ pub fn run_quic_worker(
             match op {
                 OP_SEND => {
                     handle_send_complete(
-                        &mut conns, conn_key, result, &mut ring, &stats, &mut done_count,
+                        &mut conns,
+                        conn_key,
+                        result,
+                        &mut ring,
+                        &stats,
+                        &mut done_count,
                     );
                 }
                 OP_RECV => {
                     handle_recv_complete(
-                        &mut conns, conn_key, result, &mut ring, &config, &stats, &mut done_count,
+                        &mut conns,
+                        conn_key,
+                        result,
+                        &mut ring,
+                        &config,
+                        &stats,
+                        &mut done_count,
                     );
                 }
                 _ => {}
@@ -192,9 +209,7 @@ pub fn run_quic_worker(
         {
             let keys: Vec<usize> = conns
                 .iter()
-                .filter(|(_, c)| {
-                    c.state != QuicConnState::Done && c.state != QuicConnState::Failed
-                })
+                .filter(|(_, c)| c.state != QuicConnState::Done && c.state != QuicConnState::Failed)
                 .map(|(k, _)| k)
                 .collect();
             for key in keys {
@@ -310,7 +325,13 @@ fn create_udp_socket(
 /// This sets the default peer so Send/Recv work like on a connected socket.
 fn udp_connect(fd: RawFd, addr: &std::net::SocketAddr) -> i32 {
     let sa = SockAddr::from(*addr);
-    unsafe { libc::connect(fd, sa.as_ptr() as *const libc::sockaddr, sa.len() as libc::socklen_t) }
+    unsafe {
+        libc::connect(
+            fd,
+            sa.as_ptr() as *const libc::sockaddr,
+            sa.len() as libc::socklen_t,
+        )
+    }
 }
 
 fn handle_send_complete(

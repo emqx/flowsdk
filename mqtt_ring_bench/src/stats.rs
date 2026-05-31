@@ -83,7 +83,10 @@ pub fn print_final_summary(
     println!("{:^60}", "MQTT Bench Results");
     println!("{sep}");
     let transport = if config.quic { "QUIC" } else { "TCP" };
-    println!("  Broker:          {}:{} ({})", config.host, config.port, transport);
+    println!(
+        "  Broker:          {}:{} ({})",
+        config.host, config.port, transport
+    );
     println!("  MQTT Version:    {}", config.mqtt_version);
     println!("  Clients:         {}", config.clients);
     println!("  Workers:         {}", config.workers);
@@ -109,8 +112,7 @@ pub fn print_final_summary(
             "Latency (send -> ACK)"
         };
         println!("  {}:", label);
-        let avg: Duration =
-            latency_samples.iter().sum::<Duration>() / latency_samples.len() as u32;
+        let avg: Duration = latency_samples.iter().sum::<Duration>() / latency_samples.len() as u32;
         println!("    Min:           {:.2} ms", ms(latency_samples[0]));
         println!(
             "    Max:           {:.2} ms",

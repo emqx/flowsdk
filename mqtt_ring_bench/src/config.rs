@@ -31,7 +31,10 @@ pub struct BenchConfig {
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "mqtt_ring_bench", about = "High-connection-count MQTT publish benchmark (io_uring)")]
+#[command(
+    name = "mqtt_ring_bench",
+    about = "High-connection-count MQTT publish benchmark (io_uring)"
+)]
 struct BenchArgs {
     #[arg(long, default_value = "localhost")]
     host: String,
@@ -212,9 +215,7 @@ fn parse_ifaddrs(val: &str) -> Vec<IpAddr> {
                     let prefix = &part[..dot_pos + 1]; // "a.b.c."
                     let start_str = &part[dot_pos + 1..dash_pos];
                     let end_str = &part[dash_pos + 1..];
-                    if let (Ok(start), Ok(end)) =
-                        (start_str.parse::<u8>(), end_str.parse::<u8>())
-                    {
+                    if let (Ok(start), Ok(end)) = (start_str.parse::<u8>(), end_str.parse::<u8>()) {
                         for i in start..=end {
                             let ip_str = format!("{}{}", prefix, i);
                             if let Ok(ip) = ip_str.parse::<IpAddr>() {
