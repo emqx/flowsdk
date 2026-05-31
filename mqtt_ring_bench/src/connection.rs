@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use flowsdk::mqtt_client::{MqttClientOptions, MqttEvent, NoIoMqttClient, PublishCommand};
 #[cfg(feature = "quic")]
 use flowsdk::mqtt_client::engine::QuicMqttEngine;
+use flowsdk::mqtt_client::{MqttClientOptions, MqttEvent, NoIoMqttClient, PublishCommand};
 use std::collections::VecDeque;
 #[cfg(feature = "quic")]
 use std::net::SocketAddr;
@@ -190,9 +190,7 @@ impl Connection {
             return false;
         }
         let drained = self.messages_acked >= self.messages_sent
-            || self
-                .drain_deadline
-                .map_or(false, |d| Instant::now() >= d);
+            || self.drain_deadline.map_or(false, |d| Instant::now() >= d);
         if drained {
             self.mqtt.disconnect();
             self.take_outgoing();
@@ -419,8 +417,7 @@ impl QuicConnection {
                 let _ = self.engine.handle_tick(now);
                 self.drain_outgoing_datagrams();
                 if config.interval_ms > 0 {
-                    self.next_publish_at =
-                        Some(now + Duration::from_millis(config.interval_ms));
+                    self.next_publish_at = Some(now + Duration::from_millis(config.interval_ms));
                 }
                 true
             }
@@ -475,9 +472,7 @@ impl QuicConnection {
     }
 
     pub fn check_publish_complete(&mut self) {
-        if self.state == QuicConnState::Publishing
-            && self.messages_sent >= self.messages_target
-        {
+        if self.state == QuicConnState::Publishing && self.messages_sent >= self.messages_target {
             self.state = QuicConnState::Draining;
             self.drain_deadline = Some(Instant::now() + Duration::from_secs(10));
         }

@@ -12,10 +12,10 @@ mod connection;
 mod stats;
 #[cfg(target_os = "linux")]
 mod worker_common;
-#[cfg(target_os = "linux")]
-mod worker_tcp;
 #[cfg(all(target_os = "linux", feature = "quic"))]
 mod worker_quic;
+#[cfg(target_os = "linux")]
+mod worker_tcp;
 
 #[cfg(target_os = "linux")]
 use std::sync::atomic::Ordering;
@@ -79,7 +79,9 @@ fn main() {
             continue;
         }
 
-        handles.push(thread::spawn(move || worker_tcp::run_worker(w, range, cfg, st)));
+        handles.push(thread::spawn(move || {
+            worker_tcp::run_worker(w, range, cfg, st)
+        }));
     }
 
     // Stats reporter thread
@@ -147,7 +149,8 @@ fn print_banner(config: &config::BenchConfig) {
     if config.ifaddrs.is_empty() {
         eprintln!("  Bind addrs: (OS default)");
     } else {
-        eprintln!("  Bind addrs: {} IPs ({}..{})",
+        eprintln!(
+            "  Bind addrs: {} IPs ({}..{})",
             config.ifaddrs.len(),
             config.ifaddrs.first().unwrap(),
             config.ifaddrs.last().unwrap(),
