@@ -166,11 +166,11 @@ impl Connection {
                 MqttEvent::Error(_) => {
                     outcome.error = true;
                 }
-                MqttEvent::Disconnected(_) | MqttEvent::ReconnectNeeded => {
-                    if self.state != ConnState::Disconnecting && self.state != ConnState::Done {
-                        self.state = ConnState::Failed;
-                        outcome.error = true;
-                    }
+                MqttEvent::Disconnected(_) | MqttEvent::ReconnectNeeded
+                    if self.state != ConnState::Disconnecting && self.state != ConnState::Done =>
+                {
+                    self.state = ConnState::Failed;
+                    outcome.error = true;
                 }
                 _ => {}
             }
@@ -190,7 +190,7 @@ impl Connection {
             return false;
         }
         let drained = self.messages_acked >= self.messages_sent
-            || self.drain_deadline.map_or(false, |d| Instant::now() >= d);
+            || self.drain_deadline.is_some_and(|d| Instant::now() >= d);
         if drained {
             self.mqtt.disconnect();
             self.take_outgoing();
@@ -457,14 +457,14 @@ impl QuicConnection {
                 MqttEvent::Error(_) => {
                     outcome.error = true;
                 }
-                MqttEvent::Disconnected(_) | MqttEvent::ReconnectNeeded => {
+                MqttEvent::Disconnected(_) | MqttEvent::ReconnectNeeded
                     if self.state != QuicConnState::Disconnecting
-                        && self.state != QuicConnState::Done
-                    {
-                        self.state = QuicConnState::Failed;
-                        outcome.error = true;
-                    }
+                        && self.state != QuicConnState::Done =>
+                {
+                    self.state = QuicConnState::Failed;
+                    outcome.error = true;
                 }
+
                 _ => {}
             }
         }
@@ -483,7 +483,7 @@ impl QuicConnection {
             return false;
         }
         let drained = self.messages_acked >= self.messages_sent
-            || self.drain_deadline.map_or(false, |d| now >= d);
+            || self.drain_deadline.is_some_and(|d| now >= d);
         if drained {
             self.engine.disconnect();
             let _ = self.engine.handle_tick(now);

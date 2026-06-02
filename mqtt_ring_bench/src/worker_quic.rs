@@ -325,13 +325,7 @@ fn create_udp_socket(
 /// This sets the default peer so Send/Recv work like on a connected socket.
 fn udp_connect(fd: RawFd, addr: &std::net::SocketAddr) -> i32 {
     let sa = SockAddr::from(*addr);
-    unsafe {
-        libc::connect(
-            fd,
-            sa.as_ptr() as *const libc::sockaddr,
-            sa.len() as libc::socklen_t,
-        )
-    }
+    unsafe { libc::connect(fd, sa.as_ptr(), sa.len() as libc::socklen_t) }
 }
 
 fn handle_send_complete(
