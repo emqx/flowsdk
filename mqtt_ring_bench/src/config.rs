@@ -188,7 +188,7 @@ pub fn parse_args() -> BenchConfig {
         eprintln!("Error: --qos must be 0, 1, or 2");
         std::process::exit(1);
     }
-    if !matches!(config.mqtt_version, 3 | 4 | 5) {
+    if !matches!(config.mqtt_version, 3..=5) {
         eprintln!("Error: --mqtt-version must be 3, 4, or 5");
         std::process::exit(1);
     }

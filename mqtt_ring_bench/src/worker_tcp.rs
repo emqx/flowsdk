@@ -206,10 +206,11 @@ pub fn run_worker(
                 submit_send(&mut ring, key, conn);
             }
             conn.check_publish_complete();
-            if conn.state == ConnState::Draining && !conn.send_pending {
-                if conn.check_drain_complete() {
-                    submit_send(&mut ring, key, conn);
-                }
+            if conn.state == ConnState::Draining
+                && !conn.send_pending
+                && conn.check_drain_complete()
+            {
+                submit_send(&mut ring, key, conn);
             }
         }
 
@@ -419,6 +420,8 @@ fn handle_recv_complete(
         }
     }
 
+    let drain_complete = matches!(conn.state, ConnState::Draining) && conn.check_drain_complete();
+
     match conn.state {
         ConnState::Publishing => {
             if conn.has_pending_send() && !conn.send_pending {
@@ -436,18 +439,17 @@ fn handle_recv_complete(
             }
             submit_recv(ring, key, conn);
         }
-        ConnState::Draining => {
-            if conn.check_drain_complete() {
-                if conn.has_pending_send() && !conn.send_pending {
-                    submit_send(ring, key, conn);
-                } else if !conn.has_pending_send() {
-                    conn.state = ConnState::Done;
-                    stats.clients_done.fetch_add(1, Ordering::Relaxed);
-                    *done_count += 1;
-                }
-            } else {
-                submit_recv(ring, key, conn);
+        ConnState::Draining if drain_complete => {
+            if conn.has_pending_send() && !conn.send_pending {
+                submit_send(ring, key, conn);
+            } else if !conn.has_pending_send() {
+                conn.state = ConnState::Done;
+                stats.clients_done.fetch_add(1, Ordering::Relaxed);
+                *done_count += 1;
             }
+        }
+        ConnState::Draining => {
+            submit_recv(ring, key, conn);
         }
         ConnState::Failed | ConnState::Done => {}
         _ => {
