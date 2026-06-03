@@ -122,7 +122,7 @@
 <a href=#122 id=122 data-nosnippet>122</a>    </span><span class="kw">pub fn </span>new(options: MqttClientOptions) -&gt; <span class="self">Self </span>{
 <a href=#123 id=123 data-nosnippet>123</a>        <span class="kw">let </span>mqtt_version = options.mqtt_version;
 <a href=#124 id=124 data-nosnippet>124</a>        <span class="comment">// Default buffer size 16KB
-<a href=#125 id=125 data-nosnippet>125</a>        </span><span class="kw">let </span>parser = MqttParser::new(<span class="number">16384</span>, mqtt_version);
+<a href=#125 id=125 data-nosnippet>125</a>        </span><span class="kw">let </span>parser = MqttParser::new(options.parser_buffer_size, mqtt_version);
 <a href=#126 id=126 data-nosnippet>126</a>
 <a href=#127 id=127 data-nosnippet>127</a>        <span class="comment">// Cache timeout values for efficiency
 <a href=#128 id=128 data-nosnippet>128</a>        </span><span class="kw">let </span>retransmission_timeout = Duration::from_millis(options.retransmission_timeout_ms);
