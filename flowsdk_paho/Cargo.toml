@@ -1,0 +1,21 @@
+[package]
+name = "flowsdk_paho"
+version = "0.1.0"
+edition = "2021"
+description = "Paho C/C++ compatible API for FlowSDK MQTT client"
+license = "MPL-2.0"
+repository = "https://github.com/emqx/flowsdk"
+
+[lib]
+crate-type = ["cdylib", "staticlib"]
+
+[dependencies]
+flowsdk = { path = "..", default-features = false, features = ["strict-protocol-compliance"] }
+libc = "0.2"
+parking_lot = "0.12"
+crossbeam-channel = "0.5"
+native-tls = { version = "0.2", optional = true }
+
+[features]
+default = ["tls"]
+tls = ["dep:native-tls"]

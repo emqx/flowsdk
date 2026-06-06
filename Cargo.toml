@@ -10,7 +10,7 @@ keywords = ["mqtt", "async", "tokio", "network", "mqtt_over_quic"]
 categories = ["network-programming", "asynchronous"]
 
 [workspace]
-members = [".", "mqtt_grpc_duality", "flowsdk_ffi"]
+members = [".", "mqtt_grpc_duality", "flowsdk_ffi", "flowsdk_paho"]
 exclude = ["fuzz", "release-small"]
 
 [dependencies]
