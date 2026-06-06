@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::thread::JoinHandle;
 
 use crossbeam_channel::{Receiver, Sender};
+use libc::c_void;
 use parking_lot::Mutex;
 
 use std::collections::HashMap;
@@ -19,7 +20,53 @@ use flowsdk::mqtt_client::error::MqttClientError;
 
 use super::event_dispatch::{CallbackState, ReceivedMessage};
 use super::token_tracker::TokenTracker;
+use crate::common::async_structs::{
+    MQTTAsync_connected, MQTTAsync_disconnected, MQTTAsync_onFailure, MQTTAsync_onFailure5,
+    MQTTAsync_onSuccess, MQTTAsync_onSuccess5,
+};
 use crate::common::uri_parser::ParsedUri;
+
+// ─── Async response callbacks ────────────────────────────────────────────
+
+/// Captured response callbacks for a single async operation, stored until the
+/// corresponding ACK (CONNACK/SUBACK/UNSUBACK/PUBACK) arrives.
+#[derive(Clone, Copy)]
+pub struct AsyncResponse {
+    pub context: *mut c_void,
+    pub on_success: MQTTAsync_onSuccess,
+    pub on_failure: MQTTAsync_onFailure,
+    pub on_success5: MQTTAsync_onSuccess5,
+    pub on_failure5: MQTTAsync_onFailure5,
+    /// Operation token (= packet id once assigned by the engine).
+    pub token: i32,
+}
+
+// SAFETY: the callbacks and context originate from the C caller and are only
+// invoked on the I/O thread. The caller guarantees their validity.
+unsafe impl Send for AsyncResponse {}
+
+/// Persistent async callbacks set via `MQTTAsync_setConnected` / `_setDisconnected`.
+pub struct AsyncCallbackState {
+    pub connected_context: *mut c_void,
+    pub connected: MQTTAsync_connected,
+    pub disconnected_context: *mut c_void,
+    pub disconnected: MQTTAsync_disconnected,
+}
+
+impl Default for AsyncCallbackState {
+    fn default() -> Self {
+        Self {
+            connected_context: std::ptr::null_mut(),
+            connected: None,
+            disconnected_context: std::ptr::null_mut(),
+            disconnected: None,
+        }
+    }
+}
+
+// SAFETY: see AsyncResponse.
+unsafe impl Send for AsyncCallbackState {}
+unsafe impl Sync for AsyncCallbackState {}
 
 // ─── Commands sent from C caller thread to I/O thread ────────────────────
 
@@ -59,6 +106,37 @@ pub enum PahoCommand {
     },
     /// Disconnect from the broker.
     Disconnect,
+
+    // ─── Async (MQTTAsync_*) variants ────────────────────────────────────
+    /// Establish a connection; fire the response callbacks on completion.
+    ConnectAsync {
+        uri: ParsedUri,
+        connect_timeout_secs: u64,
+        response: AsyncResponse,
+    },
+    /// Publish; return the assigned token and fire callbacks on completion.
+    PublishAsync {
+        command: PublishCommand,
+        response: AsyncResponse,
+        token_tx: std::sync::mpsc::Sender<i32>,
+    },
+    /// Subscribe; return the assigned token and fire callbacks on SUBACK.
+    SubscribeAsync {
+        command: SubscribeCommand,
+        response: AsyncResponse,
+        token_tx: std::sync::mpsc::Sender<i32>,
+    },
+    /// Unsubscribe; return the assigned token and fire callbacks on UNSUBACK.
+    UnsubscribeAsync {
+        command: UnsubscribeCommand,
+        response: AsyncResponse,
+        token_tx: std::sync::mpsc::Sender<i32>,
+    },
+    /// Disconnect; fire the response callbacks on completion.
+    DisconnectAsync {
+        response: AsyncResponse,
+    },
+
     /// Shutdown the I/O thread and exit.
     Shutdown,
 }
@@ -100,6 +178,17 @@ pub struct SharedState {
     /// Pending UNSUBACK waiters: packet_id → response channel.
     pub unsubscribe_waiters:
         Mutex<HashMap<u16, std::sync::mpsc::Sender<Result<(), MqttClientError>>>>,
+
+    // ─── Async API state ─────────────────────────────────────────────────
+    /// Persistent async connected/disconnected callbacks.
+    pub async_callbacks: Mutex<AsyncCallbackState>,
+
+    /// Pending async response callbacks keyed by operation token (packet id).
+    /// Used for subscribe/unsubscribe/publish onSuccess/onFailure.
+    pub async_responses: Mutex<HashMap<i32, AsyncResponse>>,
+
+    /// Pending async connect response callbacks (no packet id).
+    pub async_connect_response: Mutex<Option<AsyncResponse>>,
 }
 
 impl SharedState {
@@ -113,6 +202,9 @@ impl SharedState {
             connect_waiter: Mutex::new(None),
             subscribe_waiters: Mutex::new(HashMap::new()),
             unsubscribe_waiters: Mutex::new(HashMap::new()),
+            async_callbacks: Mutex::new(AsyncCallbackState::default()),
+            async_responses: Mutex::new(HashMap::new()),
+            async_connect_response: Mutex::new(None),
         }
     }
 }

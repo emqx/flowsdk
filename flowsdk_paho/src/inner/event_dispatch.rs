@@ -8,8 +8,12 @@ use flowsdk::mqtt_client::engine::{MqttEvent, MqttMessage};
 use libc::{c_char, c_int, c_void};
 use std::sync::Arc;
 
-use super::client_state::SharedState;
+use super::client_state::{AsyncResponse, SharedState};
 use super::token_tracker::CompletionResult;
+use crate::common::async_structs::{
+    MQTTAsync_failureData, MQTTAsync_successData, MQTTAsync_successData_alt,
+    MQTTAsync_successData_connect, MQTTAsync_successData_pub,
+};
 use crate::common::return_codes::*;
 use crate::common::structs;
 
@@ -77,11 +81,37 @@ fn dispatch_event(event: MqttEvent, shared: &Arc<SharedState>) {
 }
 
 fn handle_connected(result: ConnectionResult, shared: &Arc<SharedState>) {
-    shared
-        .connected
-        .store(true, std::sync::atomic::Ordering::SeqCst);
+    let success = result.is_success();
+    let session_present = result.session_present;
 
-    // Signal any waiting connect_sync call
+    if success {
+        shared
+            .connected
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+
+    // Async: fire the connect response callback.
+    if let Some(resp) = shared.async_connect_response.lock().take() {
+        if success {
+            fire_success_connect(&resp, session_present);
+        } else {
+            fire_failure(&resp, MQTTCLIENT_FAILURE, "Connection refused");
+        }
+    }
+
+    // Async: fire the persistent `connected` callback on a successful connect.
+    if success {
+        let cb = shared.async_callbacks.lock();
+        if let Some(connected) = cb.connected {
+            let ctx = cb.connected_context;
+            drop(cb);
+            let cause = unsafe { structs::alloc_c_string("connect") };
+            unsafe { connected(ctx, cause) };
+            unsafe { libc::free(cause as *mut c_void) };
+        }
+    }
+
+    // Signal any waiting sync connect call.
     if let Some(tx) = shared.connect_waiter.lock().take() {
         let _ = tx.send(Ok(result));
     }
@@ -92,7 +122,10 @@ fn handle_disconnected(reason: Option<u8>, shared: &Arc<SharedState>) {
         .connected
         .store(false, std::sync::atomic::Ordering::SeqCst);
 
-    // Invoke connectionLost callback
+    // Async: fail any outstanding operations and connect attempt.
+    fail_pending_async(shared, "Disconnected by server");
+
+    // Invoke connectionLost callback (shared by sync + async cl callbacks)
     let callbacks = shared.callbacks.lock();
     if let Some(cb) = callbacks.connection_lost {
         let cause = reason
@@ -106,6 +139,28 @@ fn handle_disconnected(reason: Option<u8>, shared: &Arc<SharedState>) {
         unsafe { cb(ctx, cause_cstr) };
         // Note: Paho's contract says the library frees the cause string
         unsafe { libc::free(cause_cstr as *mut c_void) };
+    } else {
+        drop(callbacks);
+    }
+
+    // Async: fire the persistent `disconnected` (v5) callback if set.
+    let acb = shared.async_callbacks.lock();
+    if let Some(disconnected) = acb.disconnected {
+        let ctx = acb.disconnected_context;
+        drop(acb);
+        unsafe { disconnected(ctx, std::ptr::null_mut(), reason.unwrap_or(0) as c_int) };
+    }
+}
+
+/// Fire `onFailure` for every outstanding async operation (connect + ops).
+fn fail_pending_async(shared: &Arc<SharedState>, reason: &str) {
+    if let Some(resp) = shared.async_connect_response.lock().take() {
+        fire_failure(&resp, MQTTCLIENT_FAILURE, reason);
+    }
+    let pending: Vec<AsyncResponse> =
+        shared.async_responses.lock().drain().map(|(_, r)| r).collect();
+    for resp in pending {
+        fire_failure(&resp, MQTTCLIENT_FAILURE, reason);
     }
 }
 
@@ -127,6 +182,11 @@ fn handle_published(result: PublishResult, shared: &Arc<SharedState>) {
             drop(callbacks);
             unsafe { cb(ctx, token) };
         }
+
+        // Async: fire the per-token onSuccess for this publish.
+        if let Some(resp) = shared.async_responses.lock().remove(&token) {
+            fire_success_publish(&resp, "");
+        }
     }
 }
 
@@ -146,6 +206,16 @@ fn handle_subscribed(result: SubscribeResult, shared: &Arc<SharedState>) {
     {
         let _ = tx.send(Ok(()));
     }
+
+    // Async: fire the per-token onSuccess/onFailure for this subscribe.
+    if let Some(resp) = shared.async_responses.lock().remove(&token) {
+        if result.is_success() {
+            let granted_qos = result.reason_codes.first().copied().unwrap_or(0) as c_int;
+            fire_success_subscribe(&resp, granted_qos);
+        } else {
+            fire_failure(&resp, MQTTCLIENT_FAILURE, "Subscription rejected");
+        }
+    }
 }
 
 fn handle_unsubscribed(result: UnsubscribeResult, shared: &Arc<SharedState>) {
@@ -163,6 +233,11 @@ fn handle_unsubscribed(result: UnsubscribeResult, shared: &Arc<SharedState>) {
         .remove(&(result.packet_id as u16))
     {
         let _ = tx.send(Ok(()));
+    }
+
+    // Async: fire the per-token onSuccess for this unsubscribe.
+    if let Some(resp) = shared.async_responses.lock().remove(&token) {
+        fire_success_simple(&resp);
     }
 }
 
@@ -223,4 +298,84 @@ pub struct ReceivedMessage {
     pub retained: bool,
     pub dup: bool,
     pub msgid: i32,
+}
+
+// ─── Async callback firing helpers ───────────────────────────────────────
+
+/// Invoke `onFailure` for an async operation. `message` is copied into a
+/// freshly-allocated C string that is freed once the callback returns.
+pub fn fire_failure(resp: &AsyncResponse, code: c_int, message: &str) {
+    if let Some(on_failure) = resp.on_failure {
+        let msg_cstr = unsafe { structs::alloc_c_string(message) };
+        let mut data = MQTTAsync_failureData {
+            token: resp.token,
+            code,
+            message: msg_cstr as *const c_char,
+        };
+        unsafe { on_failure(resp.context, &mut data) };
+        unsafe { libc::free(msg_cstr as *mut c_void) };
+    }
+}
+
+/// Invoke `onSuccess` with no operation-specific data (e.g. disconnect, unsubscribe).
+pub fn fire_success_simple(resp: &AsyncResponse) {
+    if let Some(on_success) = resp.on_success {
+        let mut data = MQTTAsync_successData {
+            token: resp.token,
+            alt: unsafe { std::mem::zeroed() },
+        };
+        unsafe { on_success(resp.context, &mut data) };
+    }
+}
+
+/// Invoke `onSuccess` for a completed publish.
+pub fn fire_success_publish(resp: &AsyncResponse, destination: &str) {
+    if let Some(on_success) = resp.on_success {
+        let dest_cstr = if destination.is_empty() {
+            std::ptr::null_mut()
+        } else {
+            unsafe { structs::alloc_c_string(destination) }
+        };
+        let mut data = MQTTAsync_successData {
+            token: resp.token,
+            alt: MQTTAsync_successData_alt {
+                pub_: MQTTAsync_successData_pub {
+                    message: unsafe { std::mem::zeroed() },
+                    destinationName: dest_cstr,
+                },
+            },
+        };
+        unsafe { on_success(resp.context, &mut data) };
+        if !dest_cstr.is_null() {
+            unsafe { libc::free(dest_cstr as *mut c_void) };
+        }
+    }
+}
+
+/// Invoke `onSuccess` for a completed subscribe (granted QoS in `alt.qos`).
+pub fn fire_success_subscribe(resp: &AsyncResponse, granted_qos: c_int) {
+    if let Some(on_success) = resp.on_success {
+        let mut data = MQTTAsync_successData {
+            token: resp.token,
+            alt: MQTTAsync_successData_alt { qos: granted_qos },
+        };
+        unsafe { on_success(resp.context, &mut data) };
+    }
+}
+
+/// Invoke `onSuccess` for a completed connect.
+pub fn fire_success_connect(resp: &AsyncResponse, session_present: bool) {
+    if let Some(on_success) = resp.on_success {
+        let mut data = MQTTAsync_successData {
+            token: resp.token,
+            alt: MQTTAsync_successData_alt {
+                connect: MQTTAsync_successData_connect {
+                    serverURI: std::ptr::null_mut(),
+                    MQTTVersion: 0,
+                    sessionPresent: session_present as c_int,
+                },
+            },
+        };
+        unsafe { on_success(resp.context, &mut data) };
+    }
 }

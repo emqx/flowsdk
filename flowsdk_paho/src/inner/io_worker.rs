@@ -18,9 +18,10 @@ use flowsdk::mqtt_client::engine::MqttEngine;
 use flowsdk::mqtt_client::error::MqttClientError;
 use flowsdk::mqtt_client::opts::MqttClientOptions;
 
-use super::client_state::{PahoCommand, SharedState};
+use super::client_state::{AsyncResponse, PahoCommand, SharedState};
 use super::event_dispatch;
 use super::transport::BlockingTransport;
+use crate::common::return_codes::MQTTCLIENT_FAILURE;
 use crate::common::uri_parser::ParsedUri;
 
 /// The I/O worker that runs on a dedicated thread.
@@ -250,6 +251,105 @@ impl IoWorker {
                 self.shared.token_tracker.clear();
                 true
             }
+            PahoCommand::ConnectAsync {
+                uri,
+                connect_timeout_secs,
+                response,
+            } => {
+                *self.shared.async_connect_response.lock() = Some(response);
+                self.do_connect(&uri, connect_timeout_secs);
+                // If the transport failed to connect, fire onFailure right away.
+                if self.stream.is_none() {
+                    if let Some(resp) = self.shared.async_connect_response.lock().take() {
+                        event_dispatch::fire_failure(
+                            &resp,
+                            MQTTCLIENT_FAILURE,
+                            "Transport connection failed",
+                        );
+                    }
+                }
+                true
+            }
+            PahoCommand::PublishAsync {
+                command,
+                mut response,
+                token_tx,
+            } => {
+                match self.engine.publish(command) {
+                    Ok(Some(pid)) => {
+                        let token = pid as i32;
+                        response.token = token;
+                        self.shared.token_tracker.mark_pending(token);
+                        self.shared.async_responses.lock().insert(token, response);
+                        let _ = token_tx.send(token);
+                    }
+                    Ok(None) => {
+                        // QoS 0: no packet id. Token 0; onSuccess fires once written.
+                        response.token = 0;
+                        let _ = token_tx.send(0);
+                        self.flush_outgoing();
+                        event_dispatch::fire_success_publish(&response, "");
+                    }
+                    Err(_e) => {
+                        let _ = token_tx.send(0);
+                    }
+                }
+                self.flush_outgoing();
+                true
+            }
+            PahoCommand::SubscribeAsync {
+                command,
+                mut response,
+                token_tx,
+            } => {
+                match self.engine.subscribe(command) {
+                    Ok(packet_id) => {
+                        let token = packet_id as i32;
+                        response.token = token;
+                        self.shared.token_tracker.mark_pending(token);
+                        self.shared.async_responses.lock().insert(token, response);
+                        let _ = token_tx.send(token);
+                    }
+                    Err(_e) => {
+                        let _ = token_tx.send(0);
+                    }
+                }
+                self.flush_outgoing();
+                true
+            }
+            PahoCommand::UnsubscribeAsync {
+                command,
+                mut response,
+                token_tx,
+            } => {
+                match self.engine.unsubscribe(command) {
+                    Ok(packet_id) => {
+                        let token = packet_id as i32;
+                        response.token = token;
+                        self.shared.token_tracker.mark_pending(token);
+                        self.shared.async_responses.lock().insert(token, response);
+                        let _ = token_tx.send(token);
+                    }
+                    Err(_e) => {
+                        let _ = token_tx.send(0);
+                    }
+                }
+                self.flush_outgoing();
+                true
+            }
+            PahoCommand::DisconnectAsync { response } => {
+                self.engine.disconnect();
+                self.flush_outgoing();
+                if let Some(ref stream) = self.stream {
+                    let _ = stream.shutdown();
+                }
+                self.stream = None;
+                self.shared.connected.store(false, Ordering::SeqCst);
+                self.fail_pending_async("Disconnected");
+                self.shared.token_tracker.clear();
+                event_dispatch::fire_success_simple(&response);
+                true
+            }
             PahoCommand::Shutdown => {
                 // Disconnect if connected
                 if self.stream.is_some() {
@@ -322,6 +422,19 @@ impl IoWorker {
         let events = self.engine.take_events();
         event_dispatch::dispatch_events(events, &self.shared);
         self.shared.connected.store(false, Ordering::SeqCst);
+        self.fail_pending_async("Connection lost");
+    }
+
+    /// Fire `onFailure` for every outstanding async operation (connect + ops).
+    fn fail_pending_async(&self, reason: &str) {
+        if let Some(resp) = self.shared.async_connect_response.lock().take() {
+            event_dispatch::fire_failure(&resp, MQTTCLIENT_FAILURE, reason);
+        }
+        let pending: Vec<AsyncResponse> =
+            self.shared.async_responses.lock().drain().map(|(_, r)| r).collect();
+        for resp in pending {
+            event_dispatch::fire_failure(&resp, MQTTCLIENT_FAILURE, reason);
+        }
     }
 
     /// Calculate the timeout for the next poll iteration.

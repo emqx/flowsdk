@@ -39,7 +39,10 @@ pub const MQTTCLIENT_SSL_STRUCT_ID: [c_char; 4] = [
 /// Matches the Paho `MQTTClient_message` struct layout.
 ///
 /// struct_id = "MQTM", struct_version = 1
+///
+/// `MQTTAsync_message` has the identical layout, so the async API aliases this type.
 #[repr(C)]
+#[derive(Clone, Copy)]
 pub struct MQTTClient_message {
     /// Must be "MQTM"
     pub struct_id: [c_char; 4],
