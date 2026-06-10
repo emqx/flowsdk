@@ -5,15 +5,17 @@ use flowsdk::mqtt_client::client::{
     ConnectionResult, PublishResult, SubscribeResult, UnsubscribeResult,
 };
 use flowsdk::mqtt_client::engine::{MqttEvent, MqttMessage};
+use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
 use libc::{c_char, c_int, c_void};
 use std::sync::Arc;
 
 use super::client_state::{AsyncResponse, SharedState};
 use super::token_tracker::CompletionResult;
 use crate::common::async_structs::{
-    MQTTAsync_failureData, MQTTAsync_successData, MQTTAsync_successData_alt,
-    MQTTAsync_successData_connect, MQTTAsync_successData_pub,
+    MQTTAsync_failureData, MQTTAsync_failureData5, MQTTAsync_successData, MQTTAsync_successData5,
+    MQTTAsync_successData_alt, MQTTAsync_successData_connect, MQTTAsync_successData_pub,
 };
+use crate::common::properties;
 use crate::common::return_codes::*;
 use crate::common::structs;
 
@@ -83,6 +85,8 @@ fn dispatch_event(event: MqttEvent, shared: &Arc<SharedState>) {
 fn handle_connected(result: ConnectionResult, shared: &Arc<SharedState>) {
     let success = result.is_success();
     let session_present = result.session_present;
+    let reason_code = result.reason_code;
+    let props: Vec<Property> = result.properties.clone().unwrap_or_default();
 
     if success {
         shared
@@ -93,9 +97,15 @@ fn handle_connected(result: ConnectionResult, shared: &Arc<SharedState>) {
     // Async: fire the connect response callback.
     if let Some(resp) = shared.async_connect_response.lock().take() {
         if success {
-            fire_success_connect(&resp, session_present);
+            fire_success_connect(&resp, reason_code, &props, session_present);
         } else {
-            fire_failure(&resp, MQTTCLIENT_FAILURE, "Connection refused");
+            fire_failure_with(
+                &resp,
+                MQTTCLIENT_FAILURE,
+                reason_code,
+                &props,
+                "Connection refused",
+            );
         }
     }
 
@@ -167,6 +177,8 @@ fn fail_pending_async(shared: &Arc<SharedState>, reason: &str) {
 fn handle_published(result: PublishResult, shared: &Arc<SharedState>) {
     if let Some(pid) = result.packet_id {
         let token = pid as i32;
+        let reason_code = result.reason_code.unwrap_or(0);
+        let props: Vec<Property> = result.properties.clone().unwrap_or_default();
 
         // Mark token as completed
         shared.token_tracker.mark_completed(CompletionResult {
@@ -185,7 +197,7 @@ fn handle_published(result: PublishResult, shared: &Arc<SharedState>) {
 
         // Async: fire the per-token onSuccess for this publish.
         if let Some(resp) = shared.async_responses.lock().remove(&token) {
-            fire_success_publish(&resp, "");
+            fire_success_publish(&resp, reason_code, &props, "");
         }
     }
 }
@@ -209,11 +221,17 @@ fn handle_subscribed(result: SubscribeResult, shared: &Arc<SharedState>) {
 
     // Async: fire the per-token onSuccess/onFailure for this subscribe.
     if let Some(resp) = shared.async_responses.lock().remove(&token) {
+        let granted = result.reason_codes.first().copied().unwrap_or(0);
         if result.is_success() {
-            let granted_qos = result.reason_codes.first().copied().unwrap_or(0) as c_int;
-            fire_success_subscribe(&resp, granted_qos);
+            fire_success_subscribe(&resp, granted, &result.properties, granted as c_int);
         } else {
-            fire_failure(&resp, MQTTCLIENT_FAILURE, "Subscription rejected");
+            fire_failure_with(
+                &resp,
+                MQTTCLIENT_FAILURE,
+                granted,
+                &result.properties,
+                "Subscription rejected",
+            );
         }
     }
 }
@@ -237,7 +255,8 @@ fn handle_unsubscribed(result: UnsubscribeResult, shared: &Arc<SharedState>) {
 
     // Async: fire the per-token onSuccess for this unsubscribe.
     if let Some(resp) = shared.async_responses.lock().remove(&token) {
-        fire_success_simple(&resp);
+        let reason = result.reason_codes.first().copied().unwrap_or(0);
+        fire_success_simple(&resp, reason, &result.properties);
     }
 }
 
@@ -245,7 +264,7 @@ fn handle_message_received(msg: MqttMessage, shared: &Arc<SharedState>) {
     let callbacks = shared.callbacks.lock();
 
     if let Some(cb) = callbacks.message_arrived {
-        // Allocate Paho-compatible message and topic
+        // Allocate Paho-compatible message and topic (carrying any v5 properties)
         let paho_msg = unsafe {
             structs::alloc_paho_message(
                 &msg.payload,
@@ -253,6 +272,7 @@ fn handle_message_received(msg: MqttMessage, shared: &Arc<SharedState>) {
                 msg.retain,
                 msg.dup,
                 msg.packet_id.unwrap_or(0) as i32,
+                &msg.properties,
             )
         };
 
@@ -301,25 +321,75 @@ pub struct ReceivedMessage {
 }
 
 // ─── Async callback firing helpers ───────────────────────────────────────
+//
+// Each helper prefers the MQTT v5 callback variant (`onSuccess5`/`onFailure5`)
+// when the caller registered one, falling back to the v3/v4 variant otherwise.
+// v5 callbacks additionally receive the ACK reason code and any properties the
+// broker returned.
 
-/// Invoke `onFailure` for an async operation. `message` is copied into a
-/// freshly-allocated C string that is freed once the callback returns.
+/// Invoke `onFailure` / `onFailure5` for an async operation. `message` is copied
+/// into a freshly-allocated C string that is freed once the callback returns.
+///
+/// This 3-argument form carries no broker reason code or properties (used for
+/// transport-level failures); ACK-driven failures use [`fire_failure_with`].
 pub fn fire_failure(resp: &AsyncResponse, code: c_int, message: &str) {
-    if let Some(on_failure) = resp.on_failure {
-        let msg_cstr = unsafe { structs::alloc_c_string(message) };
-        let mut data = MQTTAsync_failureData {
-            token: resp.token,
-            code,
-            message: msg_cstr as *const c_char,
-        };
-        unsafe { on_failure(resp.context, &mut data) };
-        unsafe { libc::free(msg_cstr as *mut c_void) };
+    fire_failure_with(resp, code, 0, &[], message);
+}
+
+/// Like [`fire_failure`] but also carries the MQTT v5 reason code and properties.
+pub fn fire_failure_with(
+    resp: &AsyncResponse,
+    code: c_int,
+    reason_code: u8,
+    props: &[Property],
+    message: &str,
+) {
+    if let Some(on_failure5) = resp.on_failure5 {
+        unsafe {
+            let msg_cstr = structs::alloc_c_string(message);
+            let mut c_props = properties::props_to_c(props);
+            let mut data = MQTTAsync_failureData5 {
+                token: resp.token,
+                reasonCode: reason_code as c_int,
+                properties: c_props,
+                code,
+                message: msg_cstr as *const c_char,
+                packet_type: 0,
+            };
+            on_failure5(resp.context, &mut data);
+            properties::MQTTProperties_free(&mut c_props);
+            libc::free(msg_cstr as *mut c_void);
+        }
+    } else if let Some(on_failure) = resp.on_failure {
+        unsafe {
+            let msg_cstr = structs::alloc_c_string(message);
+            let mut data = MQTTAsync_failureData {
+                token: resp.token,
+                code,
+                message: msg_cstr as *const c_char,
+            };
+            on_failure(resp.context, &mut data);
+            libc::free(msg_cstr as *mut c_void);
+        }
     }
 }
 
-/// Invoke `onSuccess` with no operation-specific data (e.g. disconnect, unsubscribe).
-pub fn fire_success_simple(resp: &AsyncResponse) {
-    if let Some(on_success) = resp.on_success {
+/// Invoke `onSuccess` / `onSuccess5` with no operation-specific union data
+/// (e.g. disconnect, unsubscribe).
+pub fn fire_success_simple(resp: &AsyncResponse, reason_code: u8, props: &[Property]) {
+    if let Some(on_success5) = resp.on_success5 {
+        unsafe {
+            let mut c_props = properties::props_to_c(props);
+            let mut data = MQTTAsync_successData5 {
+                token: resp.token,
+                reasonCode: reason_code as c_int,
+                properties: c_props,
+                alt: std::mem::zeroed(),
+            };
+            on_success5(resp.context, &mut data);
+            properties::MQTTProperties_free(&mut c_props);
+        }
+    } else if let Some(on_success) = resp.on_success {
         let mut data = MQTTAsync_successData {
             token: resp.token,
             alt: unsafe { std::mem::zeroed() },
@@ -328,33 +398,68 @@ pub fn fire_success_simple(resp: &AsyncResponse) {
     }
 }
 
-/// Invoke `onSuccess` for a completed publish.
-pub fn fire_success_publish(resp: &AsyncResponse, destination: &str) {
-    if let Some(on_success) = resp.on_success {
-        let dest_cstr = if destination.is_empty() {
-            std::ptr::null_mut()
-        } else {
-            unsafe { structs::alloc_c_string(destination) }
-        };
+/// Invoke `onSuccess` / `onSuccess5` for a completed publish.
+pub fn fire_success_publish(
+    resp: &AsyncResponse,
+    reason_code: u8,
+    props: &[Property],
+    destination: &str,
+) {
+    let dest_cstr = if destination.is_empty() {
+        std::ptr::null_mut()
+    } else {
+        unsafe { structs::alloc_c_string(destination) }
+    };
+    let alt = MQTTAsync_successData_alt {
+        pub_: MQTTAsync_successData_pub {
+            message: unsafe { std::mem::zeroed() },
+            destinationName: dest_cstr,
+        },
+    };
+    if let Some(on_success5) = resp.on_success5 {
+        unsafe {
+            let mut c_props = properties::props_to_c(props);
+            let mut data = MQTTAsync_successData5 {
+                token: resp.token,
+                reasonCode: reason_code as c_int,
+                properties: c_props,
+                alt,
+            };
+            on_success5(resp.context, &mut data);
+            properties::MQTTProperties_free(&mut c_props);
+        }
+    } else if let Some(on_success) = resp.on_success {
         let mut data = MQTTAsync_successData {
             token: resp.token,
-            alt: MQTTAsync_successData_alt {
-                pub_: MQTTAsync_successData_pub {
-                    message: unsafe { std::mem::zeroed() },
-                    destinationName: dest_cstr,
-                },
-            },
+            alt,
         };
         unsafe { on_success(resp.context, &mut data) };
-        if !dest_cstr.is_null() {
-            unsafe { libc::free(dest_cstr as *mut c_void) };
-        }
+    }
+    if !dest_cstr.is_null() {
+        unsafe { libc::free(dest_cstr as *mut c_void) };
     }
 }
 
-/// Invoke `onSuccess` for a completed subscribe (granted QoS in `alt.qos`).
-pub fn fire_success_subscribe(resp: &AsyncResponse, granted_qos: c_int) {
-    if let Some(on_success) = resp.on_success {
+/// Invoke `onSuccess` / `onSuccess5` for a completed subscribe (granted QoS in `alt.qos`).
+pub fn fire_success_subscribe(
+    resp: &AsyncResponse,
+    reason_code: u8,
+    props: &[Property],
+    granted_qos: c_int,
+) {
+    if let Some(on_success5) = resp.on_success5 {
+        unsafe {
+            let mut c_props = properties::props_to_c(props);
+            let mut data = MQTTAsync_successData5 {
+                token: resp.token,
+                reasonCode: reason_code as c_int,
+                properties: c_props,
+                alt: MQTTAsync_successData_alt { qos: granted_qos },
+            };
+            on_success5(resp.context, &mut data);
+            properties::MQTTProperties_free(&mut c_props);
+        }
+    } else if let Some(on_success) = resp.on_success {
         let mut data = MQTTAsync_successData {
             token: resp.token,
             alt: MQTTAsync_successData_alt { qos: granted_qos },
@@ -363,18 +468,36 @@ pub fn fire_success_subscribe(resp: &AsyncResponse, granted_qos: c_int) {
     }
 }
 
-/// Invoke `onSuccess` for a completed connect.
-pub fn fire_success_connect(resp: &AsyncResponse, session_present: bool) {
-    if let Some(on_success) = resp.on_success {
+/// Invoke `onSuccess` / `onSuccess5` for a completed connect.
+pub fn fire_success_connect(
+    resp: &AsyncResponse,
+    reason_code: u8,
+    props: &[Property],
+    session_present: bool,
+) {
+    let alt = MQTTAsync_successData_alt {
+        connect: MQTTAsync_successData_connect {
+            serverURI: std::ptr::null_mut(),
+            MQTTVersion: 0,
+            sessionPresent: session_present as c_int,
+        },
+    };
+    if let Some(on_success5) = resp.on_success5 {
+        unsafe {
+            let mut c_props = properties::props_to_c(props);
+            let mut data = MQTTAsync_successData5 {
+                token: resp.token,
+                reasonCode: reason_code as c_int,
+                properties: c_props,
+                alt,
+            };
+            on_success5(resp.context, &mut data);
+            properties::MQTTProperties_free(&mut c_props);
+        }
+    } else if let Some(on_success) = resp.on_success {
         let mut data = MQTTAsync_successData {
             token: resp.token,
-            alt: MQTTAsync_successData_alt {
-                connect: MQTTAsync_successData_connect {
-                    serverURI: std::ptr::null_mut(),
-                    MQTTVersion: 0,
-                    sessionPresent: session_present as c_int,
-                },
-            },
+            alt,
         };
         unsafe { on_success(resp.context, &mut data) };
     }

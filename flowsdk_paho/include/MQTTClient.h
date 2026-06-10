@@ -11,6 +11,8 @@
 #ifndef FLOWSDK_PAHO_MQTTCLIENT_H
 #define FLOWSDK_PAHO_MQTTCLIENT_H
 
+#include "MQTTProperties.h"
+
 #if defined(__cplusplus)
 extern "C" {
 #endif
@@ -64,9 +66,11 @@ typedef struct MQTTClient_message
     int retained;           /**< The retained flag */
     int dup;                /**< The dup (duplicate) flag */
     int msgid;              /**< The message identifier */
+    MQTTProperties properties; /**< The MQTT v5 properties (struct_version >= 1) */
 } MQTTClient_message;
 
-#define MQTTClient_message_initializer { {'M', 'Q', 'T', 'M'}, 1, 0, NULL, 0, 0, 0, 0 }
+#define MQTTClient_message_initializer \
+    { {'M', 'Q', 'T', 'M'}, 1, 0, NULL, 0, 0, 0, 0, MQTTProperties_initializer }
 
 /* ─── MQTTClient_willOptions ────────────────────────────────────────── */
 

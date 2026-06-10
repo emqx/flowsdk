@@ -288,7 +288,7 @@ impl IoWorker {
                         response.token = 0;
                         let _ = token_tx.send(0);
                         self.flush_outgoing();
-                        event_dispatch::fire_success_publish(&response, "");
+                        event_dispatch::fire_success_publish(&response, 0, &[], "");
                     }
                     Err(_e) => {
                         let _ = token_tx.send(0);
@@ -347,7 +347,7 @@ impl IoWorker {
                 self.shared.connected.store(false, Ordering::SeqCst);
                 self.fail_pending_async("Disconnected");
                 self.shared.token_tracker.clear();
-                event_dispatch::fire_success_simple(&response);
+                event_dispatch::fire_success_simple(&response, 0, &[]);
                 true
             }
             PahoCommand::Shutdown => {

@@ -57,34 +57,11 @@ pub const MQTTASYNC_CREATE_OPTIONS_STRUCT_ID: [c_char; 4] = [
     b'O' as c_char,
 ];
 
-// ─── MQTT v5 property containers (layout only — Phase 4 populates these) ──
+// ─── MQTT v5 property containers ─────────────────────────────────────────
 
-/// Opaque MQTT v5 property. Only referenced via pointer in Phase 2.
-#[repr(C)]
-pub struct MQTTProperty {
-    _private: [u8; 0],
-}
-
-/// MQTT v5 property collection container. Matches Paho's `MQTTProperties`.
-#[repr(C)]
-#[derive(Clone, Copy)]
-pub struct MQTTProperties {
-    pub count: c_int,
-    pub max_count: c_int,
-    pub length: c_int,
-    pub array: *mut MQTTProperty,
-}
-
-impl Default for MQTTProperties {
-    fn default() -> Self {
-        Self {
-            count: 0,
-            max_count: 0,
-            length: 0,
-            array: std::ptr::null_mut(),
-        }
-    }
-}
+// The real `MQTTProperty` / `MQTTProperties` layouts and their C API live in
+// `common::properties`; re-export them so existing `async_structs::` paths work.
+pub use super::properties::{MQTTProperties, MQTTProperty};
 
 /// Per-subscription options (MQTT v5). Matches Paho's `MQTTSubscribe_options`.
 #[repr(C)]

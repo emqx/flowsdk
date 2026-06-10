@@ -7,6 +7,10 @@
 use libc::{c_char, c_int, c_void};
 use std::ffi::CStr;
 
+use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
+
+use super::properties::{self, MQTTProperties};
+
 // ─── Magic byte constants ────────────────────────────────────────────────
 
 pub const MQTTCLIENT_MESSAGE_STRUCT_ID: [c_char; 4] = [
@@ -60,7 +64,8 @@ pub struct MQTTClient_message {
     pub dup: c_int,
     /// MQTT message/packet identifier
     pub msgid: c_int,
-    // Note: MQTTProperties omitted for Phase 1 (v5 support in Phase 4)
+    /// MQTT v5 properties (struct_version >= 1). Empty for v3.x messages.
+    pub properties: MQTTProperties,
 }
 
 impl MQTTClient_message {
@@ -313,6 +318,7 @@ pub unsafe fn alloc_paho_message(
     retained: bool,
     dup: bool,
     msgid: i32,
+    props: &[Property],
 ) -> *mut MQTTClient_message {
     let msg_ptr =
         libc::malloc(std::mem::size_of::<MQTTClient_message>()) as *mut MQTTClient_message;
@@ -342,6 +348,7 @@ pub unsafe fn alloc_paho_message(
         retained: retained as c_int,
         dup: dup as c_int,
         msgid: msgid as c_int,
+        properties: properties::props_to_c(props),
     };
 
     msg_ptr
@@ -356,6 +363,7 @@ pub unsafe fn free_paho_message(msg: *mut *mut MQTTClient_message) {
     if !(*m).payload.is_null() {
         libc::free((*m).payload);
     }
+    properties::MQTTProperties_free(&mut (*m).properties);
     libc::free(m as *mut c_void);
     *msg = std::ptr::null_mut();
 }

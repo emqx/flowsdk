@@ -46,13 +46,14 @@ pub unsafe extern "C" fn MQTTClient_receive(
             *topic_name = structs::alloc_c_string(&msg.topic);
             *topic_len = msg.topic.len() as c_int;
 
-            // Allocate message
+            // Allocate message (queued messages carry no v5 properties)
             *message = structs::alloc_paho_message(
                 &msg.payload,
                 msg.qos,
                 msg.retained,
                 msg.dup,
                 msg.msgid,
+                &[],
             );
 
             MQTTCLIENT_SUCCESS

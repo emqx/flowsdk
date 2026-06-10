@@ -56,13 +56,18 @@ pub unsafe extern "C" fn MQTTAsync_send(
         Vec::new()
     };
 
-    let cmd = match PublishCommand::builder()
+    // MQTT v5 properties supplied via response->properties.
+    let mut builder = PublishCommand::builder()
         .topic(topic)
         .payload(payload_bytes)
         .qos(qos as u8)
-        .retain(retained != 0)
-        .build()
-    {
+        .retain(retained != 0);
+    if !response.is_null() {
+        for prop in crate::common::properties::props_from_c(&(*response).properties) {
+            builder = builder.add_property(prop);
+        }
+    }
+    let cmd = match builder.build() {
         Ok(cmd) => cmd,
         Err(_) => return MQTTASYNC_FAILURE,
     };

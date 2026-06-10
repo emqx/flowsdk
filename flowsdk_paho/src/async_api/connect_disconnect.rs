@@ -147,6 +147,27 @@ pub unsafe extern "C" fn MQTTAsync_connect(
     if let Some(w) = will {
         builder = builder.will(w);
     }
+    // MQTT v5 CONNECT properties.
+    if mqtt_version == 5 && !opts.connectProperties.is_null() {
+        use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
+        for prop in crate::common::properties::props_from_c(opts.connectProperties) {
+            match prop {
+                Property::SessionExpiryInterval(v) => {
+                    builder = builder.session_expiry_interval(v);
+                }
+                Property::MaximumPacketSize(v) if v > 0 => {
+                    builder = builder.maximum_packet_size(v);
+                }
+                Property::RequestResponseInformation(v) => {
+                    builder = builder.request_response_information(v != 0);
+                }
+                Property::RequestProblemInformation(v) => {
+                    builder = builder.request_problem_information(v != 0);
+                }
+                _ => { /* other connect properties not yet mapped to engine opts */ }
+            }
+        }
+    }
     let new_options = builder.build();
     inner.mqtt_version = mqtt_version;
 

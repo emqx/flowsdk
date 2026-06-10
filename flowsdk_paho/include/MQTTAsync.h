@@ -51,19 +51,10 @@ typedef MQTTClient_nameValue MQTTAsync_nameValue;
 #define MQTTAsync_willOptions_initializer MQTTClient_willOptions_initializer
 #define MQTTAsync_SSLOptions_initializer MQTTClient_SSLOptions_initializer
 
-/* ─── MQTT v5 property containers (layout only) ──────────────────────── */
+/* ─── MQTT v5 property containers ─────────────────────────────────────── */
 
-typedef struct MQTTProperty MQTTProperty;
-
-typedef struct MQTTProperties
-{
-    int count;
-    int max_count;
-    int length;
-    MQTTProperty* array;
-} MQTTProperties;
-
-#define MQTTProperties_initializer { 0, 0, 0, NULL }
+/* MQTTProperty / MQTTProperties and their API come from MQTTProperties.h,
+ * pulled in transitively via MQTTClient.h above. */
 
 typedef struct MQTTSubscribe_options
 {

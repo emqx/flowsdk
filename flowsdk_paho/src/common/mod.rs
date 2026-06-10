@@ -2,6 +2,7 @@
 
 pub mod async_structs;
 pub mod error_mapping;
+pub mod properties;
 pub mod return_codes;
 pub mod structs;
 pub mod uri_parser;

@@ -6,15 +6,52 @@ use libc::{c_char, c_int};
 use std::ffi::CStr;
 use std::time::Duration;
 
-use flowsdk::mqtt_client::commands::{SubscribeCommand, UnsubscribeCommand};
+use flowsdk::mqtt_client::commands::{SubscribeCommand, SubscribeCommandBuilder, UnsubscribeCommand};
 
 use crate::common::async_structs::{MQTTAsync, MQTTAsync_responseOptions};
+use crate::common::properties;
 use crate::common::return_codes::*;
 use crate::inner::client_state::{PahoClientInner, PahoCommand};
 
 use super::send::build_response;
 
 const TOKEN_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Resolve the per-topic subscribe options (noLocal, retainAsPublished,
+/// retainHandling) for topic `index` from a `MQTTAsync_responseOptions`.
+///
+/// If a `subscribeOptionsList` is present it is indexed per-topic; otherwise the
+/// single `subscribeOptions` applies to every topic.
+unsafe fn subscribe_options(
+    response: *const MQTTAsync_responseOptions,
+    index: usize,
+) -> (bool, bool, u8) {
+    if response.is_null() {
+        return (false, false, 0);
+    }
+    let opts = &*response;
+    let so = if !opts.subscribeOptionsList.is_null()
+        && (index as c_int) < opts.subscribeOptionsCount
+    {
+        &*opts.subscribeOptionsList.add(index)
+    } else {
+        &opts.subscribeOptions
+    };
+    (so.noLocal != 0, so.retainAsPublished != 0, so.retainHandling)
+}
+
+/// Fold any MQTT v5 properties from a `MQTTAsync_responseOptions` into the builder.
+unsafe fn apply_response_properties(
+    mut builder: SubscribeCommandBuilder,
+    response: *const MQTTAsync_responseOptions,
+) -> SubscribeCommandBuilder {
+    if !response.is_null() {
+        for prop in properties::props_from_c(&(*response).properties) {
+            builder = builder.add_property(prop);
+        }
+    }
+    builder
+}
 
 /// Subscribe to a single topic asynchronously.
 ///
@@ -47,10 +84,11 @@ pub unsafe extern "C" fn MQTTAsync_subscribe(
         Err(_) => return MQTTASYNC_BAD_UTF8_STRING,
     };
 
-    let cmd = match SubscribeCommand::builder()
-        .add_topic(&topic_str, qos as u8)
-        .build()
-    {
+    let (no_local, rap, rh) = subscribe_options(response, 0);
+    let mut builder = SubscribeCommand::builder()
+        .add_topic_with_options(&topic_str, qos as u8, no_local, rap, rh);
+    builder = apply_response_properties(builder, response);
+    let cmd = match builder.build() {
         Ok(cmd) => cmd,
         Err(_) => return MQTTASYNC_FAILURE,
     };
@@ -113,8 +151,10 @@ pub unsafe extern "C" fn MQTTAsync_subscribeMany(
         if q < 0 || q > 2 {
             return MQTTASYNC_BAD_QOS;
         }
-        builder = builder.add_topic(topic_str, q as u8);
+        let (no_local, rap, rh) = subscribe_options(response, i);
+        builder = builder.add_topic_with_options(topic_str, q as u8, no_local, rap, rh);
     }
+    builder = apply_response_properties(builder, response);
 
     let cmd = match builder.build() {
         Ok(cmd) => cmd,
