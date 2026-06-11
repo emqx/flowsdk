@@ -26,6 +26,18 @@ use crate::common::async_structs::{
 };
 use crate::common::uri_parser::ParsedUri;
 
+// ─── TLS configuration handle ────────────────────────────────────────────
+
+/// A ready-to-use TLS connector, built on the C caller thread from the Paho
+/// `MQTTClient_SSLOptions` and consumed by the I/O thread at connect time.
+///
+/// When the `tls` feature is disabled this degrades to `()` so the surrounding
+/// plumbing compiles unchanged.
+#[cfg(feature = "tls")]
+pub type TlsConnectorHandle = Arc<native_tls::TlsConnector>;
+#[cfg(not(feature = "tls"))]
+pub type TlsConnectorHandle = ();
+
 // ─── Async response callbacks ────────────────────────────────────────────
 
 /// Captured response callbacks for a single async operation, stored until the
@@ -189,6 +201,11 @@ pub struct SharedState {
 
     /// Pending async connect response callbacks (no packet id).
     pub async_connect_response: Mutex<Option<AsyncResponse>>,
+
+    /// TLS connector built from `MQTTClient_SSLOptions`, consumed by the I/O
+    /// thread when establishing a TLS transport. `None` → use a default
+    /// connector (or plain TCP for non-TLS schemes).
+    pub tls_connector: Mutex<Option<TlsConnectorHandle>>,
 }
 
 impl SharedState {
@@ -205,6 +222,7 @@ impl SharedState {
             async_callbacks: Mutex::new(AsyncCallbackState::default()),
             async_responses: Mutex::new(HashMap::new()),
             async_connect_response: Mutex::new(None),
+            tls_connector: Mutex::new(None),
         }
     }
 }

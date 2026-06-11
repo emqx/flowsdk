@@ -62,6 +62,18 @@ pub unsafe extern "C" fn MQTTClient_connect(
         None => return MQTTCLIENT_FAILURE,
     };
 
+    // Build a TLS connector from any SSL options before tearing down the worker.
+    let tls_handle = match crate::inner::transport::tls_handle_from_options(opts.ssl) {
+        Ok(h) => h,
+        Err(crate::inner::transport::TlsSetupError::NotSupported) => {
+            return MQTTCLIENT_SSL_NOT_SUPPORTED
+        }
+        Err(crate::inner::transport::TlsSetupError::BadStructure) => {
+            return MQTTCLIENT_BAD_STRUCTURE
+        }
+        Err(crate::inner::transport::TlsSetupError::Failed(_)) => return MQTTCLIENT_FAILURE,
+    };
+
     // Read optional fields
     let username = opts.get_username();
     let password = opts.get_password();
@@ -156,6 +168,7 @@ pub unsafe extern "C" fn MQTTClient_connect(
         let mut cb = shared.callbacks.lock();
         *cb = old_callbacks;
     }
+    *shared.tls_connector.lock() = tls_handle;
 
     // Set up synchronous connect: create a channel to wait for CONNACK
     let (response_tx, response_rx) = std::sync::mpsc::channel();

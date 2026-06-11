@@ -374,8 +374,9 @@ impl IoWorker {
         }
         self.stream = None;
 
-        // Establish transport connection
-        match BlockingTransport::connect(uri, timeout) {
+        // Establish transport connection (with any caller-configured TLS connector).
+        let tls_connector = self.shared.tls_connector.lock().clone();
+        match BlockingTransport::connect(uri, timeout, tls_connector) {
             Ok(transport) => {
                 self.stream = Some(transport);
 

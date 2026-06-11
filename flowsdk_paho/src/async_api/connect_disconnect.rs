@@ -72,6 +72,18 @@ pub unsafe extern "C" fn MQTTAsync_connect(
         None => return MQTTASYNC_FAILURE,
     };
 
+    // Build a TLS connector from any SSL options before rebuilding the worker.
+    let tls_handle = match crate::inner::transport::tls_handle_from_options(opts.ssl) {
+        Ok(h) => h,
+        Err(crate::inner::transport::TlsSetupError::NotSupported) => {
+            return MQTTASYNC_SSL_NOT_SUPPORTED
+        }
+        Err(crate::inner::transport::TlsSetupError::BadStructure) => {
+            return MQTTASYNC_BAD_STRUCTURE
+        }
+        Err(crate::inner::transport::TlsSetupError::Failed(_)) => return MQTTASYNC_FAILURE,
+    };
+
     // Username / password
     let username = if opts.username.is_null() {
         None
@@ -193,6 +205,7 @@ pub unsafe extern "C" fn MQTTAsync_connect(
     let shared = Arc::new(SharedState::new(message_tx));
     *shared.callbacks.lock() = old_callbacks;
     *shared.async_callbacks.lock() = old_async_callbacks;
+    *shared.tls_connector.lock() = tls_handle;
 
     let shared_clone = shared.clone();
     let client_id_str = inner.client_id.clone();

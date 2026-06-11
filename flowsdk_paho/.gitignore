@@ -3,3 +3,4 @@
 /tests/paho_smoke
 /tests/paho_async_smoke
 /tests/paho_v5_props_smoke
+/tests/paho_tls_smoke

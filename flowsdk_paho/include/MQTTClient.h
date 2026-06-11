@@ -93,6 +93,12 @@ typedef struct MQTTClient_willOptions
 
 /* ─── MQTTClient_SSLOptions ─────────────────────────────────────────── */
 
+/* SSL/TLS protocol version selectors for MQTTClient_SSLOptions.sslVersion */
+#define MQTT_SSL_VERSION_DEFAULT 0
+#define MQTT_SSL_VERSION_TLS_1_0 1
+#define MQTT_SSL_VERSION_TLS_1_1 2
+#define MQTT_SSL_VERSION_TLS_1_2 3
+
 typedef struct MQTTClient_SSLOptions
 {
     char struct_id[4];                  /**< Must be "MQTS" */
