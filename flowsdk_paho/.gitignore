@@ -4,3 +4,7 @@
 /tests/paho_async_smoke
 /tests/paho_v5_props_smoke
 /tests/paho_tls_smoke
+/tests/paho_qos_smoke
+
+# Packaged drop-in distribution (built by scripts/package.sh)
+/dist/

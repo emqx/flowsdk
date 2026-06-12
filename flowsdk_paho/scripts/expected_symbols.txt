@@ -1,0 +1,61 @@
+# Paho C ABI symbols implemented by flowsdk_paho (the drop-in surface).
+#
+# `check_symbols.sh` verifies every name below is exported by the built
+# library. Lines starting with '#' and blank lines are ignored. Keep this
+# list sorted within each section.
+
+# ── Synchronous API (libpaho-mqtt3c) ──────────────────────────────────
+MQTTClient_connect
+MQTTClient_create
+MQTTClient_destroy
+MQTTClient_disconnect
+MQTTClient_free
+MQTTClient_freeMessage
+MQTTClient_getPendingDeliveryTokens
+MQTTClient_isConnected
+MQTTClient_publish
+MQTTClient_publishMessage
+MQTTClient_receive
+MQTTClient_setCallbacks
+MQTTClient_strerror
+MQTTClient_subscribe
+MQTTClient_subscribeMany
+MQTTClient_unsubscribe
+MQTTClient_unsubscribeMany
+MQTTClient_waitForCompletion
+MQTTClient_yield
+
+# ── Asynchronous API (libpaho-mqtt3a) ─────────────────────────────────
+MQTTAsync_connect
+MQTTAsync_create
+MQTTAsync_createWithOptions
+MQTTAsync_destroy
+MQTTAsync_disconnect
+MQTTAsync_free
+MQTTAsync_freeMessage
+MQTTAsync_getPendingTokens
+MQTTAsync_isConnected
+MQTTAsync_send
+MQTTAsync_sendMessage
+MQTTAsync_setCallbacks
+MQTTAsync_setConnected
+MQTTAsync_setDisconnected
+MQTTAsync_strerror
+MQTTAsync_subscribe
+MQTTAsync_subscribeMany
+MQTTAsync_unsubscribe
+MQTTAsync_unsubscribeMany
+MQTTAsync_waitForCompletion
+
+# ── MQTT v5 properties API ─────────────────────────────────────────────
+MQTTProperties_add
+MQTTProperties_free
+MQTTProperties_getNumericValue
+MQTTProperties_getNumericValueAt
+MQTTProperties_getProperty
+MQTTProperties_getPropertyAt
+MQTTProperties_hasProperty
+MQTTProperties_len
+MQTTProperties_propertyCount
+MQTTPropertyName
+MQTTProperty_getType
