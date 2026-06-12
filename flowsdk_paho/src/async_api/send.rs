@@ -36,7 +36,7 @@ pub unsafe extern "C" fn MQTTAsync_send(
     if handle.is_null() || destination_name.is_null() {
         return MQTTASYNC_NULL_PARAMETER;
     }
-    if qos < 0 || qos > 2 {
+    if !(0..=2).contains(&qos) {
         return MQTTASYNC_BAD_QOS;
     }
 

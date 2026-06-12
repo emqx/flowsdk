@@ -6,7 +6,9 @@ use libc::{c_char, c_int};
 use std::ffi::CStr;
 use std::time::Duration;
 
-use flowsdk::mqtt_client::commands::{SubscribeCommand, SubscribeCommandBuilder, UnsubscribeCommand};
+use flowsdk::mqtt_client::commands::{
+    SubscribeCommand, SubscribeCommandBuilder, UnsubscribeCommand,
+};
 
 use crate::common::async_structs::{MQTTAsync, MQTTAsync_responseOptions};
 use crate::common::properties;
@@ -30,14 +32,17 @@ unsafe fn subscribe_options(
         return (false, false, 0);
     }
     let opts = &*response;
-    let so = if !opts.subscribeOptionsList.is_null()
-        && (index as c_int) < opts.subscribeOptionsCount
-    {
-        &*opts.subscribeOptionsList.add(index)
-    } else {
-        &opts.subscribeOptions
-    };
-    (so.noLocal != 0, so.retainAsPublished != 0, so.retainHandling)
+    let so =
+        if !opts.subscribeOptionsList.is_null() && (index as c_int) < opts.subscribeOptionsCount {
+            &*opts.subscribeOptionsList.add(index)
+        } else {
+            &opts.subscribeOptions
+        };
+    (
+        so.noLocal != 0,
+        so.retainAsPublished != 0,
+        so.retainHandling,
+    )
 }
 
 /// Fold any MQTT v5 properties from a `MQTTAsync_responseOptions` into the builder.
@@ -70,7 +75,7 @@ pub unsafe extern "C" fn MQTTAsync_subscribe(
     if handle.is_null() || topic.is_null() {
         return MQTTASYNC_NULL_PARAMETER;
     }
-    if qos < 0 || qos > 2 {
+    if !(0..=2).contains(&qos) {
         return MQTTASYNC_BAD_QOS;
     }
 
@@ -148,7 +153,7 @@ pub unsafe extern "C" fn MQTTAsync_subscribeMany(
             Err(_) => return MQTTASYNC_BAD_UTF8_STRING,
         };
         let q = *qos.add(i);
-        if q < 0 || q > 2 {
+        if !(0..=2).contains(&q) {
             return MQTTASYNC_BAD_QOS;
         }
         let (no_local, rap, rh) = subscribe_options(response, i);

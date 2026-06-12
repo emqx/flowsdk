@@ -38,7 +38,7 @@ pub unsafe extern "C" fn MQTTClient_receive(
 
     let inner = &*(handle as *mut PahoClientInner);
 
-    let duration = Duration::from_millis(timeout as u64);
+    let duration = Duration::from_millis(timeout);
 
     match inner.message_rx.recv_timeout(duration) {
         Ok(msg) => {
@@ -127,7 +127,7 @@ pub unsafe extern "C" fn MQTTClient_waitForCompletion(
     }
 
     let inner = &*(handle as *mut PahoClientInner);
-    let duration = Duration::from_millis(timeout as u64);
+    let duration = Duration::from_millis(timeout);
 
     match inner.shared.token_tracker.wait_for_completion(dt, duration) {
         Some(result) => result.rc,

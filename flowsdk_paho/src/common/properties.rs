@@ -201,7 +201,9 @@ pub fn property_name(identifier: c_int) -> &'static str {
         MQTTPROPERTY_CODE_USER_PROPERTY => "USER_PROPERTY",
         MQTTPROPERTY_CODE_MAXIMUM_PACKET_SIZE => "MAXIMUM_PACKET_SIZE",
         MQTTPROPERTY_CODE_WILDCARD_SUBSCRIPTION_AVAILABLE => "WILDCARD_SUBSCRIPTION_AVAILABLE",
-        MQTTPROPERTY_CODE_SUBSCRIPTION_IDENTIFIERS_AVAILABLE => "SUBSCRIPTION_IDENTIFIERS_AVAILABLE",
+        MQTTPROPERTY_CODE_SUBSCRIPTION_IDENTIFIERS_AVAILABLE => {
+            "SUBSCRIPTION_IDENTIFIERS_AVAILABLE"
+        }
         MQTTPROPERTY_CODE_SHARED_SUBSCRIPTION_AVAILABLE => "SHARED_SUBSCRIPTION_AVAILABLE",
         _ => "UNKNOWN_PROPERTY",
     }
@@ -454,11 +456,8 @@ unsafe fn property_from_c(p: &MQTTProperty) -> Option<Property> {
 
 /// Best-effort encoded length of a property (identifier byte + value bytes).
 fn property_encoded_len(identifier: c_int, p: &MQTTProperty) -> c_int {
-    let id_len = if identifier == MQTTPROPERTY_CODE_SUBSCRIPTION_IDENTIFIER {
-        1
-    } else {
-        1
-    };
+    // All property identifiers in the supported set encode in a single byte.
+    let id_len = 1;
     let val = match property_type(identifier) {
         MQTTPROPERTY_TYPE_BYTE => 1,
         MQTTPROPERTY_TYPE_TWO_BYTE_INTEGER => 2,
@@ -484,8 +483,7 @@ pub unsafe fn props_to_c(props: &[Property]) -> MQTTProperties {
         return MQTTProperties::default();
     }
     let count = props.len();
-    let array =
-        libc::malloc(count * std::mem::size_of::<MQTTProperty>()) as *mut MQTTProperty;
+    let array = libc::malloc(count * std::mem::size_of::<MQTTProperty>()) as *mut MQTTProperty;
     if array.is_null() {
         return MQTTProperties::default();
     }
@@ -832,11 +830,11 @@ mod tests {
                     strings: MQTTLenStringPair {
                         data: MQTTLenString {
                             len: 3,
-                            data: b"key\0".as_ptr() as *mut c_char,
+                            data: c"key".as_ptr() as *mut c_char,
                         },
                         value: MQTTLenString {
                             len: 3,
-                            data: b"val\0".as_ptr() as *mut c_char,
+                            data: c"val".as_ptr() as *mut c_char,
                         },
                     },
                 },

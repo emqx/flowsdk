@@ -11,7 +11,7 @@
 
 use libc::{c_char, c_int, c_void};
 
-use super::structs::{MQTTClient_message, MQTTClient_SSLOptions, MQTTClient_willOptions};
+use super::structs::{MQTTClient_SSLOptions, MQTTClient_message, MQTTClient_willOptions};
 
 // ─── Handle / token / message aliases ────────────────────────────────────
 

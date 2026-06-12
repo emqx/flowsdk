@@ -27,8 +27,12 @@ pub unsafe extern "C" fn MQTTAsync_waitForCompletion(
         return MQTTASYNC_NULL_PARAMETER;
     }
     let inner = &*(handle as *mut PahoClientInner);
-    let duration = Duration::from_millis(timeout as u64);
-    match inner.shared.token_tracker.wait_for_completion(token, duration) {
+    let duration = Duration::from_millis(timeout);
+    match inner
+        .shared
+        .token_tracker
+        .wait_for_completion(token, duration)
+    {
         Some(result) => result.rc,
         None => MQTTASYNC_FAILURE,
     }

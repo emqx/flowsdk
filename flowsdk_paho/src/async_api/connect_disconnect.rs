@@ -12,9 +12,7 @@ use crate::common::async_structs::{
 };
 use crate::common::return_codes::*;
 use crate::common::uri_parser;
-use crate::inner::client_state::{
-    AsyncResponse, PahoClientInner, PahoCommand, SharedState,
-};
+use crate::inner::client_state::{AsyncResponse, PahoClientInner, PahoCommand, SharedState};
 use crate::inner::io_worker::IoWorker;
 
 /// Build an `AsyncResponse` from a set of callback pointers + context.
@@ -96,8 +94,11 @@ pub unsafe extern "C" fn MQTTAsync_connect(
     };
     let password = if !opts.binarypwd.data.is_null() && opts.binarypwd.len > 0 {
         Some(
-            std::slice::from_raw_parts(opts.binarypwd.data as *const u8, opts.binarypwd.len as usize)
-                .to_vec(),
+            std::slice::from_raw_parts(
+                opts.binarypwd.data as *const u8,
+                opts.binarypwd.len as usize,
+            )
+            .to_vec(),
         )
     } else if !opts.password.is_null() {
         Some(std::ffi::CStr::from_ptr(opts.password).to_bytes().to_vec())
@@ -132,7 +133,9 @@ pub unsafe extern "C" fn MQTTAsync_connect(
             )
             .to_vec()
         } else if !will_opts.message.is_null() {
-            std::ffi::CStr::from_ptr(will_opts.message).to_bytes().to_vec()
+            std::ffi::CStr::from_ptr(will_opts.message)
+                .to_bytes()
+                .to_vec()
         } else {
             Vec::new()
         };

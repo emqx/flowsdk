@@ -201,7 +201,7 @@ impl IoWorker {
                         self.shared
                             .subscribe_waiters
                             .lock()
-                            .insert(packet_id as u16, response_tx);
+                            .insert(packet_id, response_tx);
                     }
                     Err(e) => {
                         let _ = response_tx.send(Err(e));
@@ -230,7 +230,7 @@ impl IoWorker {
                         self.shared
                             .unsubscribe_waiters
                             .lock()
-                            .insert(packet_id as u16, response_tx);
+                            .insert(packet_id, response_tx);
                     }
                     Err(e) => {
                         let _ = response_tx.send(Err(e));
@@ -431,8 +431,13 @@ impl IoWorker {
         if let Some(resp) = self.shared.async_connect_response.lock().take() {
             event_dispatch::fire_failure(&resp, MQTTCLIENT_FAILURE, reason);
         }
-        let pending: Vec<AsyncResponse> =
-            self.shared.async_responses.lock().drain().map(|(_, r)| r).collect();
+        let pending: Vec<AsyncResponse> = self
+            .shared
+            .async_responses
+            .lock()
+            .drain()
+            .map(|(_, r)| r)
+            .collect();
         for resp in pending {
             event_dispatch::fire_failure(&resp, MQTTCLIENT_FAILURE, reason);
         }

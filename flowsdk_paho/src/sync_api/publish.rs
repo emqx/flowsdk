@@ -39,7 +39,7 @@ pub unsafe extern "C" fn MQTTClient_publish(
         return MQTTCLIENT_NULL_PARAMETER;
     }
 
-    if qos < 0 || qos > 2 {
+    if !(0..=2).contains(&qos) {
         return MQTTCLIENT_BAD_QOS;
     }
 

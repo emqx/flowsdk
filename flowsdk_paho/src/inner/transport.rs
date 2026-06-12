@@ -14,7 +14,7 @@ use crate::common::uri_parser::{ParsedUri, TransportType};
 /// Resolve a `host:port` string to a `SocketAddr` via DNS and connect with timeout.
 fn tcp_connect(addr: &str, timeout: Duration) -> io::Result<TcpStream> {
     // DNS resolution: ToSocketAddrs handles hostnames (unlike SocketAddr::parse).
-    let mut last_err = io::Error::new(io::ErrorKind::Other, "no addresses resolved");
+    let mut last_err = io::Error::other("no addresses resolved");
     let socket_addrs = addr.to_socket_addrs().map_err(|e| {
         io::Error::new(
             io::ErrorKind::InvalidInput,
@@ -63,17 +63,13 @@ impl BlockingTransport {
                     tcp_stream.set_nodelay(true)?;
 
                     // Use the caller-supplied connector (from SSL options) or a default.
-                    let connector = match tls_connector {
-                        Some(c) => c,
-                        None => std::sync::Arc::new(native_tls::TlsConnector::new().map_err(
-                            |e| {
-                                io::Error::new(
-                                    io::ErrorKind::Other,
-                                    format!("TLS connector error: {}", e),
-                                )
-                            },
-                        )?),
-                    };
+                    let connector =
+                        match tls_connector {
+                            Some(c) => c,
+                            None => std::sync::Arc::new(native_tls::TlsConnector::new().map_err(
+                                |e| io::Error::other(format!("TLS connector error: {}", e)),
+                            )?),
+                        };
 
                     let tls_stream = connector.connect(&uri.hostname, tcp_stream).map_err(|e| {
                         io::Error::new(
@@ -174,7 +170,6 @@ pub unsafe fn tls_handle_from_options(
     }
 }
 
-
 /// Build a `native_tls::TlsConnector` from a Paho `MQTTClient_SSLOptions`.
 ///
 /// Maps the supported fields:
@@ -197,8 +192,7 @@ pub fn build_tls_connector(
 
     // Root CA trust store (PEM file, possibly containing multiple certificates).
     if let Some(path) = unsafe { cstr_to_opt(ssl.trustStore) } {
-        let pem = std::fs::read(&path)
-            .map_err(|e| format!("trustStore '{}': {}", path, e))?;
+        let pem = std::fs::read(&path).map_err(|e| format!("trustStore '{}': {}", path, e))?;
         let mut added = 0;
         for block in split_pem_certificates(&pem) {
             match Certificate::from_pem(&block) {
@@ -218,10 +212,10 @@ pub fn build_tls_connector(
     let key_store = unsafe { cstr_to_opt(ssl.keyStore) };
     let private_key = unsafe { cstr_to_opt(ssl.privateKey) };
     if let (Some(cert_path), Some(key_path)) = (key_store.as_ref(), private_key.as_ref()) {
-        let cert_pem = std::fs::read(cert_path)
-            .map_err(|e| format!("keyStore '{}': {}", cert_path, e))?;
-        let key_pem = std::fs::read(key_path)
-            .map_err(|e| format!("privateKey '{}': {}", key_path, e))?;
+        let cert_pem =
+            std::fs::read(cert_path).map_err(|e| format!("keyStore '{}': {}", cert_path, e))?;
+        let key_pem =
+            std::fs::read(key_path).map_err(|e| format!("privateKey '{}': {}", key_path, e))?;
         let identity = Identity::from_pkcs8(&cert_pem, &key_pem).map_err(|e| {
             format!(
                 "building client identity from '{}' + '{}': {} \
@@ -287,7 +281,7 @@ fn split_pem_certificates(pem: &[u8]) -> Vec<Vec<u8>> {
     while let Some(start) = rest.find(BEGIN) {
         if let Some(end_rel) = rest[start..].find(END) {
             let end = start + end_rel + END.len();
-            out.push(rest[start..end].as_bytes().to_vec());
+            out.push(rest.as_bytes()[start..end].to_vec());
             rest = &rest[end..];
         } else {
             break;
@@ -334,7 +328,7 @@ mod tls_tests {
         let mut ssl = default_ssl();
         let path = std::ffi::CString::new("/nonexistent/ca-does-not-exist.pem").unwrap();
         ssl.trustStore = path.as_ptr();
-        assert!(matches!(build_tls_connector(&ssl), Err(_)));
+        assert!(build_tls_connector(&ssl).is_err());
     }
 
     #[test]

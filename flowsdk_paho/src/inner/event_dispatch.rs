@@ -167,8 +167,12 @@ fn fail_pending_async(shared: &Arc<SharedState>, reason: &str) {
     if let Some(resp) = shared.async_connect_response.lock().take() {
         fire_failure(&resp, MQTTCLIENT_FAILURE, reason);
     }
-    let pending: Vec<AsyncResponse> =
-        shared.async_responses.lock().drain().map(|(_, r)| r).collect();
+    let pending: Vec<AsyncResponse> = shared
+        .async_responses
+        .lock()
+        .drain()
+        .map(|(_, r)| r)
+        .collect();
     for resp in pending {
         fire_failure(&resp, MQTTCLIENT_FAILURE, reason);
     }
@@ -214,7 +218,7 @@ fn handle_subscribed(result: SubscribeResult, shared: &Arc<SharedState>) {
     if let Some(tx) = shared
         .subscribe_waiters
         .lock()
-        .remove(&(result.packet_id as u16))
+        .remove(&{ result.packet_id })
     {
         let _ = tx.send(Ok(()));
     }
@@ -248,7 +252,7 @@ fn handle_unsubscribed(result: UnsubscribeResult, shared: &Arc<SharedState>) {
     if let Some(tx) = shared
         .unsubscribe_waiters
         .lock()
-        .remove(&(result.packet_id as u16))
+        .remove(&{ result.packet_id })
     {
         let _ = tx.send(Ok(()));
     }

@@ -145,9 +145,7 @@ pub enum PahoCommand {
         token_tx: std::sync::mpsc::Sender<i32>,
     },
     /// Disconnect; fire the response callbacks on completion.
-    DisconnectAsync {
-        response: AsyncResponse,
-    },
+    DisconnectAsync { response: AsyncResponse },
 
     /// Shutdown the I/O thread and exit.
     Shutdown,
@@ -265,6 +263,11 @@ impl PahoClientInner {
     }
 
     /// Send a command to the I/O worker thread.
+    ///
+    /// The error wraps the whole `PahoCommand` (crossbeam's `SendError` contract);
+    /// callers only test `is_err()` and map it to a return code, so the large
+    /// `Err` variant is never propagated.
+    #[allow(clippy::result_large_err)]
     pub fn send_command(
         &self,
         cmd: PahoCommand,

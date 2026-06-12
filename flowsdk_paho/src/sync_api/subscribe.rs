@@ -28,7 +28,7 @@ pub unsafe extern "C" fn MQTTClient_subscribe(
         return MQTTCLIENT_NULL_PARAMETER;
     }
 
-    if qos < 0 || qos > 2 {
+    if !(0..=2).contains(&qos) {
         return MQTTCLIENT_BAD_QOS;
     }
 
@@ -105,7 +105,7 @@ pub unsafe extern "C" fn MQTTClient_subscribeMany(
             Err(_) => return MQTTCLIENT_BAD_UTF8_STRING,
         };
         let q = *qos.add(i);
-        if q < 0 || q > 2 {
+        if !(0..=2).contains(&q) {
             return MQTTCLIENT_BAD_QOS;
         }
         builder = builder.add_topic(topic_str, q as u8);
