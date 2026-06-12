@@ -71,3 +71,34 @@ fi
 
 llvm-cov export -format=lcov --instr-profile target/llvm-cov-target/cargo-llvm-cov2.profdata -object target/debug/deps/libflowsdk_ffi.${LIB_EXT} > lcov2.info
 
+# 4. Collect coverage from the Paho C API smoke tests (MQTTClient_* / MQTTAsync_*)
+# The Rust unit tests already cover the helper modules via the workspace run in
+# step 1; these C programs additionally exercise the C ABI entry points, which
+# the unit tests cannot reach.
+cargo +stable llvm-cov clean --workspace
+export RUSTFLAGS="-C instrument-coverage"
+# Instrumented Paho cdylib the C smoke tests link against (-lflowsdk_paho).
+cargo build -p flowsdk_paho
+make -C flowsdk_paho/tests clean
+make -C flowsdk_paho/tests all
+
+# Run each smoke test against the public broker. They depend on network access,
+# so a timeout guards hangs and `|| true` keeps coverage non-fatal — even a
+# refused connection still exercises create/connect/error-mapping/destroy paths.
+export LLVM_PROFILE_FILE="target/llvm-cov-target/paho-%p-%m.profraw"
+for t in paho_smoke paho_async_smoke paho_qos_smoke paho_v5_props_smoke paho_tls_smoke; do
+    LD_LIBRARY_PATH=target/debug DYLD_LIBRARY_PATH=target/debug \
+        timeout 30s ./flowsdk_paho/tests/"$t" || true
+done
+
+# Merge the Paho profraws and export coverage against the instrumented library.
+if [ "$(ls -A target/llvm-cov-target/paho-*.profraw 2>/dev/null)" ]; then
+    "$PROFDATA_TOOL" merge -sparse target/llvm-cov-target/paho-*.profraw \
+        -o target/llvm-cov-target/paho-llvm-cov.profdata
+    export PATH="$(rustc --print=target-libdir)/../bin:$PATH"
+    llvm-cov export -format=lcov \
+        --instr-profile target/llvm-cov-target/paho-llvm-cov.profdata \
+        -object target/debug/libflowsdk_paho.${LIB_EXT} > lcov4.info
+else
+    echo "Warning: No Paho .profraw files found; skipping lcov4.info."
+fi
