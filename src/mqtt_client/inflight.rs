@@ -19,6 +19,11 @@ pub struct InflightEntry {
     pub retry_count: u32,
     /// QoS level (1 or 2)
     pub qos: u8,
+    /// Logical channel the packet was originally sent on (e.g. a QUIC data
+    /// stream handle). `None` for single-stream transports (TCP/TLS, QUIC control
+    /// stream). Retransmissions are routed back onto this same channel so the QoS
+    /// 1/2 handshake never crosses streams.
+    pub stream: Option<u64>,
 }
 
 /// A queue for managing inflight QoS 1 and QoS 2 messages.
@@ -71,12 +76,25 @@ impl InflightQueue {
         }
     }
 
-    /// Push a message into the inflight queue
+    /// Push a message into the inflight queue (single-stream / unrouted).
     pub fn push(
         &mut self,
         packet_id: u16,
         packet: MqttPacket,
         qos: u8,
+    ) -> Result<(), MqttClientError> {
+        self.push_with_stream(packet_id, packet, qos, None)
+    }
+
+    /// Push a message into the inflight queue, recording the logical channel
+    /// (e.g. QUIC data stream) it was sent on so retransmissions can be routed
+    /// back onto the same channel.
+    pub fn push_with_stream(
+        &mut self,
+        packet_id: u16,
+        packet: MqttPacket,
+        qos: u8,
+        stream: Option<u64>,
     ) -> Result<(), MqttClientError> {
         // Validation for PUBLISH should happen in MqttEngine before calling push,
         // but we keep a check here as a safety measure.
@@ -100,6 +118,7 @@ impl InflightQueue {
             sent_at: now,
             retry_count: 0,
             qos,
+            stream,
         };
 
         self.entries.insert(packet_id, entry);
@@ -126,8 +145,19 @@ impl InflightQueue {
         }
     }
 
-    /// Get all expired messages that need retransmission (MQTT 3.1.1 only)
+    /// Get all expired messages that need retransmission (MQTT 3.1.1 only).
+    /// This is a BAD design in MQTT 3.1.1
     pub fn get_expired(&mut self, now: Instant) -> Vec<MqttPacket> {
+        self.get_expired_with_stream(now)
+            .into_iter()
+            .map(|(packet, _stream)| packet)
+            .collect()
+    }
+
+    /// Like [`get_expired`](Self::get_expired) but also reports the logical
+    /// channel each packet was originally sent on, so the caller can retransmit
+    /// it on the same channel (e.g. the originating QUIC data stream).
+    pub fn get_expired_with_stream(&mut self, now: Instant) -> Vec<(MqttPacket, Option<u64>)> {
         let mut expired = Vec::new();
 
         // MQTT v5.0: MUST NOT retransmit while connection is active
@@ -147,7 +177,7 @@ impl InflightQueue {
                 if entry.sent_at == sent_at {
                     entry.retry_count += 1;
                     entry.sent_at = now;
-                    expired.push(entry.packet.clone());
+                    expired.push((entry.packet.clone(), entry.stream));
                     // Re-queue for next timeout
                     self.deadline_queue.push_back((pid, now));
                 }
