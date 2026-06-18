@@ -104,6 +104,10 @@ name = "no_io_quic_async_client_example"
 required-features = ["quic"]
 
 [[example]]
+name = "no_io_quic_multi_stream_example"
+required-features = ["quic"]
+
+[[example]]
 name = "no_io_quic_client_example"
 required-features = ["quic"]
 
