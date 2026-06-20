@@ -215,6 +215,16 @@ fn map_event(event: MqttEvent) -> MqttEventFFI {
         MqttEvent::Error(err) => MqttEventFFI::Error {
             message: format!("{:?}", err),
         },
+        MqttEvent::TransportClosed {
+            reason,
+            by_peer,
+            error_code,
+        } => MqttEventFFI::Error {
+            message: format!(
+                "transport closed: {} (by_peer={}, error_code={:?})",
+                reason, by_peer, error_code
+            ),
+        },
         MqttEvent::ReconnectNeeded => MqttEventFFI::ReconnectNeeded,
         MqttEvent::ReconnectScheduled { attempt, delay } => MqttEventFFI::ReconnectScheduled {
             attempt,

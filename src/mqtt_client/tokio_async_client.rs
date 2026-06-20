@@ -1778,6 +1778,10 @@ impl TokioClientWorker {
                 MqttEvent::Error(err) => {
                     self.event_handler.on_error(&err).await;
                 }
+                MqttEvent::TransportClosed { .. } => {
+                    // QUIC-transport-specific detail; the tokio (TCP/TLS) client
+                    // surfaces loss via Disconnected/ReconnectNeeded instead.
+                }
                 MqttEvent::ReconnectNeeded => {
                     // Engine requesting action.
                     // If we have a stream, it means we timed out -> handle_connection_lost (to clean up)

@@ -2,7 +2,8 @@
 
 #[cfg(feature = "quic-proto")]
 use quinn_proto::{
-    ClientConfig, Connection, ConnectionHandle, Dir, Endpoint, EndpointConfig, StreamId,
+    ClientConfig, Connection, ConnectionError, ConnectionHandle, Dir, Endpoint, EndpointConfig,
+    StreamId, VarInt,
 };
 #[cfg(feature = "quic-proto")]
 use std::collections::HashMap;
@@ -50,6 +51,16 @@ pub enum MqttEvent {
     MessageReceived(MqttMessage),
     PingResponse(PingResult),
     Error(MqttClientError),
+    /// The underlying QUIC transport connection was lost or closed, with details
+    /// from quinn-proto (peer close, idle timeout, local close, reset, etc.).
+    ///
+    /// `by_peer` is true if the peer initiated the close; `error_code` carries the
+    /// QUIC application/transport error code when one was signalled.
+    TransportClosed {
+        reason: String,
+        by_peer: bool,
+        error_code: Option<u64>,
+    },
     /// Signal that a reconnection is needed (e.g. after keep-alive timeout)
     ReconnectNeeded,
     /// Reconnection scheduled with exponential backoff
@@ -185,6 +196,28 @@ impl MqttEngine {
         self.is_connected = false;
     }
 
+    /// Reset all transport-tied state for a fresh underlying transport (e.g. a
+    /// QUIC reconnect), discarding any bytes queued for the *old* connection so
+    /// they cannot be replayed before the new CONNECT.
+    ///
+    /// Clears the outgoing byte buffer, pending per-stream retransmissions, and
+    /// the inbound parser (any partial packet from the old transport). The MQTT
+    /// session and the inflight queue are **retained** so QoS 1/2 messages can be
+    /// resumed if the server reports `session_present`.
+    pub fn reset_for_new_transport(&mut self) {
+        self.is_connected = false;
+        self.outgoing_buffer.clear();
+        self.stream_retransmissions.clear();
+        self.parser = MqttParser::new(self.options.parser_buffer_size, self.options.mqtt_version);
+        // Cancel any pending reconnect deadline so it cannot fire another
+        // ReconnectNeeded while a new transport handshake is in progress. The
+        // attempt counter is left intact until CONNACK resets it.
+        self.next_reconnect_at = None;
+        let now = Instant::now();
+        self.last_packet_sent = now;
+        self.last_packet_received = now;
+    }
+
     /// Schedule the next reconnection attempt using exponential backoff.
     ///
     /// Logic: `delay = min(base * 2^attempts, max)`.
@@ -302,8 +335,11 @@ impl MqttEngine {
 
         let keep_alive = Duration::from_secs(self.options.keep_alive as u64);
 
-        // 1. Keep-alive: Send PING if needed
-        if keep_alive > Duration::ZERO && now.duration_since(self.last_packet_sent) >= keep_alive {
+        // 1. Keep-alive: Send PING if needed (unless automatic keep-alive disabled)
+        if self.options.auto_keepalive
+            && keep_alive > Duration::ZERO
+            && now.duration_since(self.last_packet_sent) >= keep_alive
+        {
             self.send_ping();
             self.last_packet_sent = now;
         }
@@ -375,8 +411,8 @@ impl MqttEngine {
         let mut next = None;
         let keep_alive = Duration::from_secs(self.options.keep_alive as u64);
 
-        // 2. Keep-alive timer (send PING)
-        if keep_alive > Duration::ZERO {
+        // 2. Keep-alive timer (send PING) — only when automatic keep-alive is on
+        if self.options.auto_keepalive && keep_alive > Duration::ZERO {
             let ping_deadline = self.last_packet_sent + keep_alive;
             next = Some(ping_deadline);
         }
@@ -725,20 +761,38 @@ impl MqttEngine {
         Ok((pid, bytes))
     }
 
-    /// Queue a DISCONNECT packet and update state to disconnected.
+    fn disconnect_packet(&self) -> MqttPacket {
+        if self.options.mqtt_version == 5 {
+            MqttPacket::Disconnect5(disconnectv5::MqttDisconnect::new(0, Vec::new()))
+        } else {
+            MqttPacket::Disconnect3(disconnectv3::MqttDisconnect::new())
+        }
+    }
+
+    /// Queue a DISCONNECT packet and update state to disconnected, ignoring a
+    /// full outgoing buffer (best-effort). Prefer [`try_disconnect`](Self::try_disconnect)
+    /// when the caller needs to know the DISCONNECT was actually queued.
     pub fn disconnect(&mut self) {
         if !self.is_connected {
             return;
         }
-
-        let packet = if self.options.mqtt_version == 5 {
-            MqttPacket::Disconnect5(disconnectv5::MqttDisconnect::new(0, Vec::new()))
-        } else {
-            MqttPacket::Disconnect3(disconnectv3::MqttDisconnect::new())
-        };
-
+        let packet = self.disconnect_packet();
         let _ = self.enqueue_packet(packet);
         self.is_connected = false;
+    }
+
+    /// Queue a DISCONNECT packet, propagating [`MqttClientError::BufferFull`] if
+    /// the outgoing buffer is full. The session is marked disconnected only once
+    /// the packet has actually been queued. A no-op (returns `Ok`) if already
+    /// disconnected.
+    pub fn try_disconnect(&mut self) -> Result<(), MqttClientError> {
+        if !self.is_connected {
+            return Ok(());
+        }
+        let packet = self.disconnect_packet();
+        self.enqueue_packet(packet)?;
+        self.is_connected = false;
+        Ok(())
     }
 
     pub fn auth(&mut self, reason_code: u8, properties: Vec<Property>) {
@@ -1000,13 +1054,26 @@ impl MqttEngine {
         (events, responses)
     }
 
-    pub fn send_ping(&mut self) {
-        let packet = if self.options.mqtt_version == 5 {
+    fn pingreq_packet(&self) -> MqttPacket {
+        if self.options.mqtt_version == 5 {
             MqttPacket::PingReq5(pingreqv5::MqttPingReq::new())
         } else {
             MqttPacket::PingReq3(pingreqv3::MqttPingReq::new())
-        };
+        }
+    }
+
+    /// Queue a PINGREQ, ignoring a full outgoing buffer (best-effort, used by the
+    /// automatic keep-alive timer).
+    pub fn send_ping(&mut self) {
+        let packet = self.pingreq_packet();
         let _ = self.enqueue_packet(packet);
+    }
+
+    /// Queue a PINGREQ, propagating [`MqttClientError::BufferFull`] if the
+    /// outgoing buffer is full, so callers can confirm it was actually queued.
+    pub fn try_send_ping(&mut self) -> Result<(), MqttClientError> {
+        let packet = self.pingreq_packet();
+        self.enqueue_packet(packet)
     }
 
     pub fn enqueue_packet(&mut self, packet: MqttPacket) -> Result<(), MqttClientError> {
@@ -1100,6 +1167,10 @@ struct QuicStream {
     pending_packets: usize,
     /// Maximum number of buffered packets before [`MqttClientError::BufferFull`].
     max_packets: usize,
+    /// A FIN has been requested; the send side is finished once `outgoing` drains.
+    finishing: bool,
+    /// The send side has been finished or reset; further writes are rejected.
+    finished: bool,
 }
 
 #[cfg(feature = "quic-proto")]
@@ -1110,7 +1181,46 @@ impl QuicStream {
             outgoing: Vec::new(),
             pending_packets: 0,
             max_packets,
+            finishing: false,
+            finished: false,
         }
+    }
+}
+
+/// Error returned when writing to a stream whose send side has been finished or
+/// reset.
+#[cfg(feature = "quic-proto")]
+fn stream_finished_error() -> MqttClientError {
+    MqttClientError::InvalidState {
+        expected: "an open (non-finished) stream".to_string(),
+        actual: "stream finished or reset".to_string(),
+    }
+}
+
+/// Convert an application error code into a QUIC [`VarInt`], rejecting values
+/// that exceed the 62-bit QUIC varint range.
+#[cfg(feature = "quic-proto")]
+fn quic_error_code(error_code: u64) -> Result<VarInt, MqttClientError> {
+    VarInt::from_u64(error_code).map_err(|_| MqttClientError::InvalidConfiguration {
+        field: "error_code".to_string(),
+        reason: "QUIC error code exceeds 2^62-1".to_string(),
+    })
+}
+
+/// Map a quinn-proto [`ConnectionError`] to `(by_peer, error_code)` for the
+/// [`MqttEvent::TransportClosed`] event.
+#[cfg(feature = "quic-proto")]
+fn transport_close_details(reason: &ConnectionError) -> (bool, Option<u64>) {
+    match reason {
+        ConnectionError::ApplicationClosed(c) => (true, Some(u64::from(c.error_code))),
+        // Peer's QUIC stack aborted with a transport error code — preserve it.
+        ConnectionError::ConnectionClosed(c) => (true, Some(u64::from(c.error_code))),
+        ConnectionError::Reset => (true, None),
+        ConnectionError::VersionMismatch
+        | ConnectionError::TransportError(_)
+        | ConnectionError::TimedOut
+        | ConnectionError::LocallyClosed
+        | ConnectionError::CidsExhausted => (false, None),
     }
 }
 
@@ -1159,6 +1269,22 @@ pub struct QuicMqttEngine {
     // packets. Used for negative testing.
     control_outgoing: Vec<u8>,
 
+    // Connection parameters retained from the last `connect` so `reconnect` can
+    // re-establish on the same endpoint without the caller rebuilding the config.
+    client_config: Option<ClientConfig>,
+    server_addr: Option<std::net::SocketAddr>,
+    server_name: Option<String>,
+
+    // A deferred graceful QUIC close, applied after the queued MQTT DISCONNECT has
+    // been flushed (see `disconnect_and_close`).
+    pending_close: Option<(VarInt, bytes::Bytes)>,
+    // A FIN requested for the control stream's send side, applied after its
+    // buffered bytes are flushed.
+    control_finishing: bool,
+    // The control stream's send side has been finished or reset; further writes
+    // (including raw injection) are rejected.
+    control_finished: bool,
+
     // Outgoing UDP datagrams to be sent by the application
     outgoing_datagrams: VecDeque<(std::net::SocketAddr, Vec<u8>)>,
 }
@@ -1188,6 +1314,12 @@ impl QuicMqttEngine {
             default_pub_stream: None,
             default_sub_stream: None,
             control_outgoing: Vec::new(),
+            client_config: None,
+            server_addr: None,
+            server_name: None,
+            pending_close: None,
+            control_finishing: false,
+            control_finished: false,
             outgoing_datagrams: VecDeque::new(),
         })
     }
@@ -1226,9 +1358,76 @@ impl QuicMqttEngine {
         transport.max_idle_timeout(Some(idle_timeout));
         client_config.transport_config(Arc::new(transport));
 
+        // Retain parameters so `reconnect` can re-establish without rebuilding.
+        self.client_config = Some(client_config);
+        self.server_addr = Some(server_addr);
+        self.server_name = Some(server_name.to_string());
+
+        self.establish(now)
+    }
+
+    /// Re-establish the QUIC connection on the existing endpoint, reusing the
+    /// configuration captured by the previous [`connect`](Self::connect).
+    ///
+    /// Resets all stream state (the new connection starts fresh streams) and the
+    /// MQTT connected flag; the MQTT handshake is re-driven once the new QUIC
+    /// handshake completes. Returns an error if [`connect`](Self::connect) has not
+    /// been called yet.
+    pub fn reconnect(&mut self, now: Instant) -> Result<(), MqttClientError> {
+        if self.client_config.is_none() {
+            return Err(MqttClientError::InvalidState {
+                expected: "a prior successful connect()".to_string(),
+                actual: "reconnect called before connect".to_string(),
+            });
+        }
+        self.reset_connection_state();
+        self.establish(now)
+    }
+
+    /// Clear all per-connection state (streams, buffers, MQTT connected flag).
+    fn reset_connection_state(&mut self) {
+        self.connection = None;
+        self.connection_handle = None;
+        self.control_stream = None;
+        self.data_streams.clear();
+        self.default_pub_stream = None;
+        self.default_sub_stream = None;
+        self.control_outgoing.clear();
+        self.outgoing_datagrams.clear();
+        self.pending_close = None;
+        self.control_finishing = false;
+        self.control_finished = false;
+        // Discard any MQTT bytes queued for the old transport so they are not
+        // replayed before the next CONNECT.
+        self.mqtt_engine.reset_for_new_transport();
+    }
+
+    /// Open a fresh QUIC connection using the retained configuration.
+    fn establish(&mut self, now: Instant) -> Result<(), MqttClientError> {
+        let client_config =
+            self.client_config
+                .clone()
+                .ok_or_else(|| MqttClientError::InvalidState {
+                    expected: "stored client config".to_string(),
+                    actual: "none".to_string(),
+                })?;
+        let server_addr = self
+            .server_addr
+            .ok_or_else(|| MqttClientError::InvalidState {
+                expected: "stored server address".to_string(),
+                actual: "none".to_string(),
+            })?;
+        let server_name =
+            self.server_name
+                .clone()
+                .ok_or_else(|| MqttClientError::InvalidState {
+                    expected: "stored server name".to_string(),
+                    actual: "none".to_string(),
+                })?;
+
         let (ch, conn) = self
             .endpoint
-            .connect(now, client_config, server_addr, server_name)
+            .connect(now, client_config, server_addr, &server_name)
             .map_err(|e| MqttClientError::InternalError {
                 message: format!("Failed to create QUIC connection: {}", e),
             })?;
@@ -1311,13 +1510,26 @@ impl QuicMqttEngine {
                             self.mqtt_engine.connect();
                         }
                     }
-                    quinn_proto::Event::ConnectionLost { .. } => {
-                        self.mqtt_engine.handle_connection_lost();
+                    quinn_proto::Event::ConnectionLost { reason } => {
+                        // Drop transport-tied MQTT output so a stale packet is not
+                        // replayed before CONNECT on the next transport.
+                        self.mqtt_engine.reset_for_new_transport();
                         self.control_stream = None;
                         self.data_streams.clear();
                         self.default_pub_stream = None;
                         self.default_sub_stream = None;
                         self.control_outgoing.clear();
+                        self.pending_close = None;
+                        self.control_finishing = false;
+                        self.control_finished = false;
+                        // Surface the QUIC-level detail in addition to the
+                        // MQTT-level Disconnected signal.
+                        let (by_peer, error_code) = transport_close_details(&reason);
+                        mqtt_events.push(MqttEvent::TransportClosed {
+                            reason: reason.to_string(),
+                            by_peer,
+                            error_code,
+                        });
                         mqtt_events.push(MqttEvent::Disconnected(None));
                     }
                     _ => {}
@@ -1391,34 +1603,59 @@ impl QuicMqttEngine {
                 );
             }
 
-            // 4a. Flush the control stream: the engine's session packets plus any
-            //     raw bytes injected via the low-level escape hatch.
-            let mut control_bytes = self.mqtt_engine.take_outgoing();
-            if !self.control_outgoing.is_empty() {
-                control_bytes.append(&mut self.control_outgoing);
+            // 4a. Flush the control stream. `control_outgoing` is a persistent
+            //     buffer: the engine's session packets are appended to it, then it
+            //     is written with partial-write retention (like the data streams),
+            //     so a flow-controlled or partial write never silently drops bytes
+            //     such as a queued MQTT DISCONNECT.
+            // Stop pulling new session output once a FIN has been requested or
+            // applied — those bytes could never be written on the finished send
+            // side and would block the deferred close below forever.
+            if !self.control_finishing && !self.control_finished {
+                let session_bytes = self.mqtt_engine.take_outgoing();
+                self.control_outgoing.extend_from_slice(&session_bytes);
             }
-            if !control_bytes.is_empty() {
-                if let Some(stream_id) = self.control_stream {
+            if let Some(stream_id) = self.control_stream {
+                // Flush buffered bytes (partial-write retention) until the send side
+                // is finished; once finished we no longer write.
+                if !self.control_finished && !self.control_outgoing.is_empty() {
                     let mut stream = conn.send_stream(stream_id);
-                    // @TODO: handle partial writes / errors
-                    let _ = stream.write(&control_bytes);
+                    if let Ok(written) = stream.write(&self.control_outgoing) {
+                        self.control_outgoing.drain(..written);
+                    }
+                }
+                // Deferred FIN: finish only once the control buffer is fully
+                // flushed, so no queued bytes are lost.
+                if self.control_finishing
+                    && !self.control_finished
+                    && self.control_outgoing.is_empty()
+                {
+                    let _ = conn.send_stream(stream_id).finish();
+                    self.control_finishing = false;
+                    self.control_finished = true;
                 }
             }
 
             // 4b. Flush each data stream's outgoing buffer, retaining any bytes
             //     that could not be written yet (stream-level back-pressure).
             for (stream_id, ds) in self.data_streams.iter_mut() {
-                if ds.outgoing.is_empty() {
-                    continue;
+                if !ds.outgoing.is_empty() {
+                    let mut stream = conn.send_stream(*stream_id);
+                    if let Ok(written) = stream.write(&ds.outgoing) {
+                        ds.outgoing.drain(..written);
+                    }
+                    // Once fully drained the buffered-packet count is cleared,
+                    // freeing capacity for new publishes/subscribes on this stream.
+                    if ds.outgoing.is_empty() {
+                        ds.pending_packets = 0;
+                    }
                 }
-                let mut stream = conn.send_stream(*stream_id);
-                if let Ok(written) = stream.write(&ds.outgoing) {
-                    ds.outgoing.drain(..written);
-                }
-                // Once fully drained the buffered-packet count is cleared, freeing
-                // capacity for new publishes/subscribes on this stream.
-                if ds.outgoing.is_empty() {
-                    ds.pending_packets = 0;
+                // Deferred FIN: finish the send side only once all buffered bytes
+                // have actually been written, so queued publishes are not lost.
+                if ds.finishing && !ds.finished && ds.outgoing.is_empty() {
+                    let _ = conn.send_stream(*stream_id).finish();
+                    ds.finishing = false;
+                    ds.finished = true;
                 }
             }
 
@@ -1430,13 +1667,31 @@ impl QuicMqttEngine {
                 // @TODO: Reuse the same buffer; poll_transmit writes the datagram payload into `buf` each time.
                 buf.clear();
             }
+
+            // 6. Deferred graceful close: apply only once the control buffer
+            //    (including the queued MQTT DISCONNECT) has been fully written and
+            //    transmitted above. If the control stream is still draining under
+            //    flow control, defer to a later tick so the DISCONNECT is not
+            //    dropped. Then emit the CONNECTION_CLOSE after the DISCONNECT.
+            if self.pending_close.is_some() && self.control_outgoing.is_empty() {
+                if let Some((code, reason)) = self.pending_close.take() {
+                    conn.close(now, code, reason);
+                    self.mqtt_engine.handle_connection_lost();
+                    let mut close_buf = Vec::new();
+                    while let Some(transmit) = conn.poll_transmit(now, 1, &mut close_buf) {
+                        self.outgoing_datagrams
+                            .push_back((transmit.destination, close_buf.clone()));
+                        close_buf.clear();
+                    }
+                }
+            }
         }
 
-        // 6. Drive MqttEngine tick
+        // 7. Drive MqttEngine tick
         let tick_events = self.mqtt_engine.handle_tick(now);
         mqtt_events.extend(tick_events);
 
-        // 7. Route per-stream (MQTT v3) retransmissions back onto their
+        // 8. Route per-stream (MQTT v3) retransmissions back onto their
         //    originating data stream; they are flushed on the next tick.
         //    Best-effort: skipped if the stream is gone or its buffer is full —
         //    the inflight timer will retry on a later tick.
@@ -1523,6 +1778,9 @@ impl QuicMqttEngine {
     /// slots for a packet that cannot be buffered.
     fn ensure_stream_capacity(&self, stream_id: StreamId) -> Result<(), MqttClientError> {
         if let Some(ds) = self.data_streams.get(&stream_id) {
+            if ds.finishing || ds.finished {
+                return Err(stream_finished_error());
+            }
             if ds.pending_packets >= ds.max_packets {
                 return Err(MqttClientError::BufferFull {
                     buffer_type: "quic_stream_outgoing".to_string(),
@@ -1535,13 +1793,16 @@ impl QuicMqttEngine {
 
     /// Append one already-encoded packet to a data stream's bounded outgoing
     /// buffer, returning [`MqttClientError::BufferFull`] if the stream is at its
-    /// packet-count limit.
+    /// packet-count limit, or an error if the stream has been finished/reset.
     fn enqueue_on_stream(
         &mut self,
         stream_id: StreamId,
         bytes: &[u8],
     ) -> Result<(), MqttClientError> {
         if let Some(ds) = self.data_streams.get_mut(&stream_id) {
+            if ds.finishing || ds.finished {
+                return Err(stream_finished_error());
+            }
             if ds.pending_packets >= ds.max_packets {
                 return Err(MqttClientError::BufferFull {
                     buffer_type: "quic_stream_outgoing".to_string(),
@@ -1598,8 +1859,13 @@ impl QuicMqttEngine {
             events.extend(evs);
             if !resp.is_empty() {
                 if let Some(ds) = data_streams.get_mut(&stream_id) {
-                    ds.outgoing.extend_from_slice(&resp);
-                    ds.pending_packets += 1;
+                    // If the send side has been finished/reset we can no longer
+                    // transmit on this stream; surface the message event but drop
+                    // the unsendable response rather than letting it accumulate.
+                    if !ds.finished {
+                        ds.outgoing.extend_from_slice(&resp);
+                        ds.pending_packets += 1;
+                    }
                 }
             }
         }
@@ -1718,6 +1984,177 @@ impl QuicMqttEngine {
         self.data_streams.len()
     }
 
+    // --- Connection close controls ---
+
+    /// Gracefully close the QUIC connection immediately, sending a
+    /// CONNECTION_CLOSE frame with the given application error code and reason.
+    ///
+    /// Use `error_code = 0` for a normal close. This is an **immediate** QUIC
+    /// close: quinn-proto abandons any unacknowledged stream data, so it does not
+    /// guarantee delivery of buffered bytes — use [`disconnect_and_close`](Self::disconnect_and_close)
+    /// when an MQTT DISCONNECT must reach the peer first. The connection enters its
+    /// closing state and the CONNECTION_CLOSE frame is emitted on the next
+    /// [`handle_tick`](Self::handle_tick); the MQTT session is marked disconnected.
+    pub fn close(&mut self, error_code: u64, reason: &[u8]) -> Result<(), MqttClientError> {
+        let code = quic_error_code(error_code)?;
+        // Supersede any deferred close so we don't close twice.
+        self.pending_close = None;
+        let conn = self.require_connection()?;
+        conn.close(Instant::now(), code, bytes::Bytes::copy_from_slice(reason));
+        self.mqtt_engine.handle_connection_lost();
+        Ok(())
+    }
+
+    /// Send an MQTT DISCONNECT on the control stream, then gracefully close the
+    /// QUIC connection **after** the DISCONNECT has been transmitted.
+    ///
+    /// The QUIC close is deferred to [`handle_tick`](Self::handle_tick): the queued
+    /// DISCONNECT is written and put on the wire first, then CONNECTION_CLOSE is
+    /// emitted, so the peer has a chance to observe the MQTT-level disconnect.
+    /// (Delivery is still best-effort — QUIC does not wait for the DISCONNECT to be
+    /// acknowledged.) The MQTT session is marked disconnected immediately.
+    pub fn disconnect_and_close(
+        &mut self,
+        error_code: u64,
+        reason: &[u8],
+    ) -> Result<(), MqttClientError> {
+        let code = quic_error_code(error_code)?;
+        // Validate a connection exists before queuing anything.
+        let _ = self.require_connection()?;
+        // Queue the DISCONNECT first; if the outgoing buffer is full, surface the
+        // error and do NOT arm the close, so we never close the QUIC connection
+        // having silently dropped the MQTT DISCONNECT. (No-op if not connected.)
+        self.mqtt_engine.try_disconnect()?;
+        self.pending_close = Some((code, bytes::Bytes::copy_from_slice(reason)));
+        Ok(())
+    }
+
+    /// Silently/abruptly drop the QUIC connection without sending CONNECTION_CLOSE.
+    ///
+    /// The peer is left to detect the loss via its idle timeout. Useful for
+    /// simulating dead-peer / abrupt-disconnect scenarios. All local stream state
+    /// is cleared. Connection parameters are retained so [`reconnect`](Self::reconnect)
+    /// still works afterwards.
+    pub fn close_silent(&mut self) {
+        self.reset_connection_state();
+    }
+
+    // --- Per-stream controls ---
+
+    /// Cleanly finish (FIN) the send side of a stream — the control stream or a
+    /// data stream.
+    ///
+    /// The FIN is **deferred** to [`handle_tick`](Self::handle_tick) and applied
+    /// only once the stream's buffered outbound bytes have been written, so bytes
+    /// queued by `publish_on`/`send_raw_on` before the next tick are not lost.
+    /// After finishing, further writes to the stream are rejected.
+    ///
+    /// Finishing the **control stream** ends the MQTT session: the layer is marked
+    /// disconnected so it produces no further keep-alive/control packets that could
+    /// never be sent on the finished send side.
+    pub fn finish_stream(&mut self, stream: u64) -> Result<(), MqttClientError> {
+        let stream_id = self.resolve_any_stream(stream)?;
+        // Validate a connection exists; the FIN itself is applied on the next tick.
+        let _ = self.require_connection()?;
+        if Some(stream_id) == self.control_stream {
+            // Capture anything the engine has already queued so it is flushed
+            // before the FIN, then stop the MQTT layer from producing more control
+            // traffic (auto-PINGREQ, etc.).
+            let pending = self.mqtt_engine.take_outgoing();
+            self.control_outgoing.extend_from_slice(&pending);
+            self.mqtt_engine.handle_connection_lost();
+            self.control_finishing = true;
+        } else if let Some(ds) = self.data_streams.get_mut(&stream_id) {
+            ds.finishing = true;
+        }
+        Ok(())
+    }
+
+    /// Reset (RESET_STREAM) the send side of a stream with the given error code,
+    /// discarding any buffered outbound bytes. After resetting, further writes to
+    /// the stream are rejected.
+    pub fn reset_stream(&mut self, stream: u64, error_code: u64) -> Result<(), MqttClientError> {
+        let stream_id = self.resolve_any_stream(stream)?;
+        let code = quic_error_code(error_code)?;
+        if Some(stream_id) == self.control_stream {
+            self.control_outgoing.clear();
+            self.control_finishing = false;
+            self.control_finished = true;
+            // Resetting the control send side ends the MQTT session.
+            self.mqtt_engine.handle_connection_lost();
+        } else if let Some(ds) = self.data_streams.get_mut(&stream_id) {
+            ds.outgoing.clear();
+            ds.pending_packets = 0;
+            ds.finishing = false;
+            ds.finished = true;
+        }
+        let conn = self.require_connection()?;
+        conn.send_stream(stream_id)
+            .reset(code)
+            .map_err(|e| MqttClientError::InternalError {
+                message: format!("QUIC stream reset failed: {:?}", e),
+            })
+    }
+
+    /// Ask the peer to stop sending on a stream (STOP_SENDING) with the given
+    /// error code.
+    pub fn stop_stream(&mut self, stream: u64, error_code: u64) -> Result<(), MqttClientError> {
+        let stream_id = self.resolve_any_stream(stream)?;
+        let code = quic_error_code(error_code)?;
+        let conn = self.require_connection()?;
+        conn.recv_stream(stream_id)
+            .stop(code)
+            .map_err(|e| MqttClientError::InternalError {
+                message: format!("QUIC stream stop failed: {:?}", e),
+            })
+    }
+
+    // --- Keep-alive / ping ---
+
+    /// Queue an MQTT PINGREQ on the control stream (manual keep-alive).
+    ///
+    /// Rejected until the MQTT session is connected (CONNACK received), so a
+    /// PINGREQ can never be queued ahead of CONNECT on a fresh transport, and
+    /// rejected once the control stream's send side has been finished or reset.
+    pub fn ping(&mut self) -> Result<(), MqttClientError> {
+        if self.control_finishing || self.control_finished {
+            return Err(stream_finished_error());
+        }
+        if !self.mqtt_engine.is_connected() {
+            return Err(MqttClientError::InvalidState {
+                expected: "a connected MQTT session".to_string(),
+                actual: "not connected".to_string(),
+            });
+        }
+        // Propagate a full outgoing buffer instead of silently dropping the ping.
+        self.mqtt_engine.try_send_ping()
+    }
+
+    /// Send a QUIC-level PING frame (transport keep-alive), independent of MQTT.
+    pub fn quic_ping(&mut self) -> Result<(), MqttClientError> {
+        self.require_connection()?.ping();
+        Ok(())
+    }
+
+    // --- Internal helpers shared by the controls above ---
+
+    fn require_connection(&mut self) -> Result<&mut Connection, MqttClientError> {
+        self.connection
+            .as_mut()
+            .ok_or_else(|| MqttClientError::InvalidState {
+                expected: "an established QUIC connection".to_string(),
+                actual: "no connection".to_string(),
+            })
+    }
+
+    /// Resolve a handle to either the control stream or a known data stream.
+    fn resolve_any_stream(&self, handle: u64) -> Result<StreamId, MqttClientError> {
+        if Some(handle) == self.control_stream.map(u64::from) {
+            return Ok(self.control_stream.unwrap());
+        }
+        self.resolve_stream(handle)
+    }
+
     /// The control stream handle, available once the QUIC handshake has completed.
     ///
     /// Can be passed to [`send_raw_on`](Self::send_raw_on) /
@@ -1741,14 +2178,21 @@ impl QuicMqttEngine {
     /// "wrong" stream, etc. The bytes are buffered on the target stream and
     /// flushed on the next [`handle_tick`](Self::handle_tick).
     ///
-    /// Errors if `stream` is neither the control stream nor a known data stream.
+    /// Errors if `stream` is neither the control stream nor a known data stream,
+    /// or if the stream's send side has already been finished or reset.
     pub fn send_raw_on(&mut self, stream: u64, bytes: &[u8]) -> Result<(), MqttClientError> {
         if Some(stream) == self.control_stream.map(u64::from) {
+            if self.control_finishing || self.control_finished {
+                return Err(stream_finished_error());
+            }
             self.control_outgoing.extend_from_slice(bytes);
             return Ok(());
         }
         let stream_id = self.resolve_stream(stream)?;
         if let Some(ds) = self.data_streams.get_mut(&stream_id) {
+            if ds.finishing || ds.finished {
+                return Err(stream_finished_error());
+            }
             ds.outgoing.extend_from_slice(bytes);
         }
         Ok(())
@@ -2030,6 +2474,13 @@ mod tests {
 
         // An unknown stream handle is rejected.
         assert!(engine.send_raw_on(9999, &[0]).is_err());
+
+        // After the send side is finished/reset, raw writes are rejected rather
+        // than silently buffering unsendable bytes.
+        engine.data_streams.get_mut(&data).unwrap().finished = true;
+        assert!(engine.send_raw_on(u64::from(data), &[0]).is_err());
+        engine.control_finished = true;
+        assert!(engine.send_raw_on(u64::from(control), &[0]).is_err());
     }
 
     #[cfg(feature = "quic-proto")]
@@ -2188,5 +2639,208 @@ mod tests {
             engine.outgoing_buffer.is_empty(),
             "ack must not cross-fire onto the shared/control buffer"
         );
+    }
+
+    #[test]
+    fn test_try_send_ping_and_disconnect_report_buffer_full() {
+        let mut engine = MqttEngine::new(
+            MqttClientOptions::builder()
+                .max_outgoing_packet_count(1)
+                .build(),
+        );
+        engine.connect(); // queues CONNECT, filling the single-slot buffer
+        engine.is_connected = true;
+        assert_eq!(engine.outgoing_buffer.len(), 1);
+
+        // Fallible paths must report BufferFull rather than silently dropping.
+        assert!(matches!(
+            engine.try_send_ping(),
+            Err(MqttClientError::BufferFull { .. })
+        ));
+        assert!(matches!(
+            engine.try_disconnect(),
+            Err(MqttClientError::BufferFull { .. })
+        ));
+        // A failed try_disconnect must not mark the session disconnected.
+        assert!(engine.is_connected());
+
+        // After draining, both succeed and disconnect updates state.
+        let _ = engine.take_outgoing();
+        assert!(engine.try_send_ping().is_ok());
+        let _ = engine.take_outgoing();
+        assert!(engine.try_disconnect().is_ok());
+        assert!(!engine.is_connected());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_quic_ping_propagates_buffer_full() {
+        let mut engine = QuicMqttEngine::new(
+            MqttClientOptions::builder()
+                .max_outgoing_packet_count(1)
+                .build(),
+        )
+        .unwrap();
+        engine.mqtt_engine.is_connected = true;
+        // Fill the single outgoing slot, then ping() must report BufferFull
+        // instead of returning Ok without queuing a PINGREQ.
+        engine.mqtt_engine.send_ping();
+        assert!(matches!(
+            engine.ping(),
+            Err(MqttClientError::BufferFull { .. })
+        ));
+    }
+
+    #[test]
+    fn test_reset_for_new_transport_clears_outbound_keeps_inflight() {
+        let mut engine = MqttEngine::new(MqttClientOptions::builder().build());
+        engine.connect(); // queues CONNECT into outgoing_buffer
+        engine.is_connected = true;
+
+        // A QoS 1 publish (tracked inflight) and a PINGREQ (queued outbound).
+        let cmd = PublishCommand::builder()
+            .topic("t")
+            .payload("x".to_string())
+            .qos(1)
+            .build()
+            .unwrap();
+        engine.publish_encoded(cmd, Some(3)).unwrap();
+        engine.send_ping();
+        // A pending reconnect deadline from a prior timeout.
+        engine.next_reconnect_at = Some(Instant::now() + Duration::from_secs(30));
+        assert!(!engine.outgoing_buffer.is_empty());
+        assert!(!engine.inflight_queue.is_empty());
+
+        engine.reset_for_new_transport();
+
+        // The stale reconnect deadline must be cancelled so it cannot fire another
+        // ReconnectNeeded during the new handshake.
+        assert!(engine.next_reconnect_at.is_none());
+
+        // Transport-tied output is discarded so it cannot be replayed before the
+        // next CONNECT, but the inflight queue is retained for session resumption.
+        assert!(
+            engine.outgoing_buffer.is_empty(),
+            "stale outbound bytes must be cleared on reset"
+        );
+        assert!(engine.stream_retransmissions.is_empty());
+        assert!(!engine.is_connected());
+        assert!(
+            !engine.inflight_queue.is_empty(),
+            "inflight must be retained for session resumption"
+        );
+    }
+
+    #[test]
+    fn test_auto_keepalive_toggle() {
+        let tick_at = Instant::now() + Duration::from_millis(1100);
+
+        // Disabled: no PINGREQ emitted even though keep_alive has elapsed.
+        let mut off = MqttEngine::new(
+            MqttClientOptions::builder()
+                .keep_alive(1)
+                .auto_keepalive(false)
+                .build(),
+        );
+        off.connect();
+        off.is_connected = true;
+        let _ = off.take_outgoing();
+        let _ = off.handle_tick(tick_at);
+        assert!(
+            off.outgoing_buffer.is_empty(),
+            "no PINGREQ when auto_keepalive is disabled"
+        );
+
+        // Enabled: PINGREQ is emitted on the keep-alive timer.
+        let mut on = MqttEngine::new(
+            MqttClientOptions::builder()
+                .keep_alive(1)
+                .auto_keepalive(true)
+                .build(),
+        );
+        on.connect();
+        on.is_connected = true;
+        let _ = on.take_outgoing();
+        let _ = on.handle_tick(tick_at);
+        assert!(
+            !on.outgoing_buffer.is_empty(),
+            "PINGREQ expected when auto_keepalive is enabled"
+        );
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_transport_close_details_mapping() {
+        use quinn_proto::{ApplicationClose, ConnectionClose, TransportErrorCode, VarInt};
+
+        let (by_peer, code) = transport_close_details(&ConnectionError::TimedOut);
+        assert!(!by_peer);
+        assert_eq!(code, None);
+
+        let (by_peer, _) = transport_close_details(&ConnectionError::Reset);
+        assert!(by_peer, "Reset is peer-initiated");
+
+        let (by_peer, _) = transport_close_details(&ConnectionError::LocallyClosed);
+        assert!(!by_peer, "LocallyClosed is local");
+
+        // Peer application close preserves the application error code.
+        let app = ConnectionError::ApplicationClosed(ApplicationClose {
+            error_code: VarInt::from_u32(5),
+            reason: bytes::Bytes::new(),
+        });
+        assert_eq!(transport_close_details(&app), (true, Some(5)));
+
+        // Peer transport close preserves the transport error code (P3 regression).
+        let transport = ConnectionError::ConnectionClosed(ConnectionClose {
+            error_code: TransportErrorCode::APPLICATION_ERROR,
+            frame_type: None,
+            reason: bytes::Bytes::new(),
+        });
+        let (by_peer, code) = transport_close_details(&transport);
+        assert!(by_peer);
+        assert_eq!(code, Some(u64::from(TransportErrorCode::APPLICATION_ERROR)));
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_quic_error_code_rejects_overflow() {
+        assert!(quic_error_code(0).is_ok());
+        assert!(quic_error_code((1u64 << 62) - 1).is_ok());
+        assert!(quic_error_code(u64::MAX).is_err());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_controls_require_connection() {
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+
+        // reconnect before any connect() has stored config.
+        assert!(engine.reconnect(Instant::now()).is_err());
+
+        // Connection-level / stream-level controls error without a connection.
+        assert!(engine.close(0, b"bye").is_err());
+        assert!(engine.quic_ping().is_err());
+        assert!(engine.finish_stream(0).is_err());
+        assert!(engine.reset_stream(0, 1).is_err());
+        assert!(engine.stop_stream(0, 1).is_err());
+
+        // close_silent is always safe and clears state.
+        engine.close_silent();
+
+        // ping() is rejected until the MQTT session is connected, so a PINGREQ
+        // can never be queued ahead of CONNECT on a fresh transport.
+        assert!(engine.ping().is_err());
+
+        // Once connected, ping() queues a PINGREQ.
+        engine.mqtt_engine.is_connected = true;
+        engine.ping().unwrap();
+        assert!(
+            !engine.mqtt_engine.outgoing_buffer.is_empty(),
+            "ping() must queue a PINGREQ once connected"
+        );
+
+        // Rejected again once the control stream is finished.
+        engine.control_finished = true;
+        assert!(engine.ping().is_err());
     }
 }
