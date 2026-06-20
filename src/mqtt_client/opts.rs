@@ -126,6 +126,14 @@ pub struct MqttClientOptions {
     /// - For high-connection-count scenarios with small packets, use 1500 (1 MTU)
     ///   to reduce per-connection memory overhead.
     pub parser_buffer_size: usize,
+
+    /// Whether the engine automatically sends MQTT PINGREQ keep-alive packets.
+    /// - Default: true
+    /// - Set to `false` to suppress automatic PINGREQ even when `keep_alive > 0`.
+    ///   The negotiated keep-alive is still advertised in CONNECT; this only stops
+    ///   the client-side timer from emitting PINGREQ, which is useful for testing
+    ///   QUIC/data-stream keep-alive behaviour or sending PINGREQ manually.
+    pub auto_keepalive: bool,
 }
 
 impl Default for MqttClientOptions {
@@ -162,6 +170,7 @@ impl Default for MqttClientOptions {
             max_event_count: 1000,
             receive_maximum: 65535,
             parser_buffer_size: 16384,
+            auto_keepalive: true,
         }
     }
 }
@@ -200,6 +209,16 @@ impl MqttClientOptions {
     /// Set the keep alive interval in seconds
     pub fn keep_alive(mut self, keep_alive: u16) -> Self {
         self.keep_alive = keep_alive;
+        self
+    }
+
+    /// Enable or disable automatic MQTT PINGREQ keep-alive (default: enabled).
+    ///
+    /// When disabled, the client will not emit PINGREQ on the keep-alive timer
+    /// even if `keep_alive > 0`; send PINGREQ manually instead. Useful for
+    /// keep-alive / idle-timeout testing.
+    pub fn auto_keepalive(mut self, enabled: bool) -> Self {
+        self.auto_keepalive = enabled;
         self
     }
 
