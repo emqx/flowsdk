@@ -225,6 +225,9 @@ fn map_event(event: MqttEvent) -> MqttEventFFI {
                 reason, by_peer, error_code
             ),
         },
+        MqttEvent::ZeroRttStatusChanged { status } => MqttEventFFI::Error {
+            message: format!("unsupported QUIC 0-RTT status event over FFI: {:?}", status),
+        },
         MqttEvent::ReconnectNeeded => MqttEventFFI::ReconnectNeeded,
         MqttEvent::ReconnectScheduled { attempt, delay } => MqttEventFFI::ReconnectScheduled {
             attempt,

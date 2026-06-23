@@ -29,6 +29,8 @@ pub use commands::{
     SubscribeCommand, SubscribeCommandBuilder, UnsubscribeCommand,
 };
 pub use engine::{MqttEngine, MqttEvent, MqttMessage};
+#[cfg(feature = "quic-proto")]
+pub use engine::{QuicMqttEngine, QuicZeroRttConfig, QuicZeroRttStatus};
 pub use error::{MqttClientError, MqttClientResult};
 pub use no_io_client::NoIoMqttClient;
 pub use opts::{MqttClientOptions, MqttClientOptionsBuilder};
