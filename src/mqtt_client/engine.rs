@@ -6,11 +6,23 @@ use quinn_proto::{
     StreamId, VarInt,
 };
 #[cfg(feature = "quic-proto")]
+use rustls::{
+    client::{
+        ClientSessionMemoryCache, ClientSessionStore, Resumption, Tls12ClientSessionValue,
+        Tls13ClientSessionValue,
+    },
+    pki_types::ServerName,
+    NamedGroup,
+};
+#[cfg(feature = "quic-proto")]
 use std::collections::HashMap;
 use std::collections::VecDeque;
-#[cfg(feature = "quic-proto")]
-use std::sync::Arc;
 use std::time::{Duration, Instant};
+#[cfg(feature = "quic-proto")]
+use std::{
+    fmt,
+    sync::{Arc, Mutex},
+};
 
 use crate::mqtt_serde::control_packet::MqttPacket;
 use crate::mqtt_serde::mqttv3::{
@@ -40,6 +52,39 @@ use super::opts::MqttClientOptions;
 /// For MQTT v3.1.1 messages, the v5-specific fields (Properties) will be empty.
 pub type MqttMessage = MqttPublish;
 
+/// Configuration for QUIC 0-RTT/session-ticket support.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct QuicZeroRttConfig {
+    /// Maximum number of TLS session entries retained in memory.
+    pub session_cache_size: usize,
+    /// Replay exact early MQTT bytes as 1-RTT if the peer rejects 0-RTT.
+    pub replay_on_reject: bool,
+}
+
+impl Default for QuicZeroRttConfig {
+    fn default() -> Self {
+        Self {
+            session_cache_size: 256,
+            replay_on_reject: true,
+        }
+    }
+}
+
+/// Current QUIC 0-RTT state for [`QuicMqttEngine`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
+pub enum QuicZeroRttStatus {
+    /// 0-RTT is not enabled for this engine/connection.
+    Disabled,
+    /// 0-RTT was enabled but no resumable session ticket was available.
+    Unavailable,
+    /// 0-RTT keys were available and early data is being attempted.
+    Attempted,
+    /// The peer accepted early data.
+    Accepted,
+    /// The peer rejected early data.
+    Rejected,
+}
+
 /// Events emitted by the MqttEngine to be handled by the application (I/O layer)
 #[derive(Debug, serde::Serialize)]
 pub enum MqttEvent {
@@ -67,6 +112,10 @@ pub enum MqttEvent {
     ReconnectScheduled {
         attempt: u32,
         delay: Duration,
+    },
+    /// QUIC 0-RTT status changed for the Sans-I/O QUIC engine.
+    ZeroRttStatusChanged {
+        status: QuicZeroRttStatus,
     },
 }
 
@@ -1185,6 +1234,120 @@ impl QuicStream {
             finished: false,
         }
     }
+
+    fn with_outgoing(
+        parser_buffer_size: usize,
+        mqtt_version: u8,
+        max_packets: usize,
+        outgoing: Vec<u8>,
+        pending_packets: usize,
+    ) -> Self {
+        Self {
+            parser: MqttParser::new(parser_buffer_size, mqtt_version),
+            outgoing,
+            pending_packets,
+            max_packets,
+            finishing: false,
+            finished: false,
+        }
+    }
+}
+
+#[cfg(feature = "quic-proto")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum EarlyStreamRole {
+    Control,
+    DefaultPub,
+    DefaultSub,
+    ExplicitData,
+}
+
+#[cfg(feature = "quic-proto")]
+#[derive(Debug, Clone)]
+struct EarlyStreamJournal {
+    original_stream_id: StreamId,
+    role: EarlyStreamRole,
+    bytes: Vec<u8>,
+    packet_count: usize,
+}
+
+#[cfg(feature = "quic-proto")]
+struct ClearableQuicSessionCache {
+    size: usize,
+    inner: Mutex<ClientSessionMemoryCache>,
+}
+
+#[cfg(feature = "quic-proto")]
+impl ClearableQuicSessionCache {
+    fn new(size: usize) -> Self {
+        Self {
+            size,
+            inner: Mutex::new(ClientSessionMemoryCache::new(size)),
+        }
+    }
+
+    fn size(&self) -> usize {
+        self.size
+    }
+
+    fn clear(&self) {
+        let mut guard = self.inner.lock().unwrap();
+        let _ = std::mem::replace(&mut *guard, ClientSessionMemoryCache::new(self.size));
+    }
+}
+
+#[cfg(feature = "quic-proto")]
+impl fmt::Debug for ClearableQuicSessionCache {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ClearableQuicSessionCache")
+            .field("size", &self.size)
+            .field("sessions", &"[redacted]")
+            .finish()
+    }
+}
+
+#[cfg(feature = "quic-proto")]
+impl ClientSessionStore for ClearableQuicSessionCache {
+    fn set_kx_hint(&self, server_name: ServerName<'static>, group: NamedGroup) {
+        self.inner.lock().unwrap().set_kx_hint(server_name, group);
+    }
+
+    fn kx_hint(&self, server_name: &ServerName<'_>) -> Option<NamedGroup> {
+        self.inner.lock().unwrap().kx_hint(server_name)
+    }
+
+    fn set_tls12_session(&self, server_name: ServerName<'static>, value: Tls12ClientSessionValue) {
+        self.inner
+            .lock()
+            .unwrap()
+            .set_tls12_session(server_name, value);
+    }
+
+    fn tls12_session(&self, server_name: &ServerName<'_>) -> Option<Tls12ClientSessionValue> {
+        self.inner.lock().unwrap().tls12_session(server_name)
+    }
+
+    fn remove_tls12_session(&self, server_name: &ServerName<'static>) {
+        self.inner.lock().unwrap().remove_tls12_session(server_name);
+    }
+
+    fn insert_tls13_ticket(
+        &self,
+        server_name: ServerName<'static>,
+        value: Tls13ClientSessionValue,
+    ) {
+        self.inner
+            .lock()
+            .unwrap()
+            .insert_tls13_ticket(server_name, value);
+    }
+
+    fn take_tls13_ticket(
+        &self,
+        server_name: &ServerName<'static>,
+    ) -> Option<Tls13ClientSessionValue> {
+        self.inner.lock().unwrap().take_tls13_ticket(server_name)
+    }
 }
 
 /// Error returned when writing to a stream whose send side has been finished or
@@ -1275,6 +1438,14 @@ pub struct QuicMqttEngine {
     server_addr: Option<std::net::SocketAddr>,
     server_name: Option<String>,
 
+    // Optional QUIC 0-RTT/session-ticket policy and cache. The cache is retained
+    // across connections until explicitly cleared or replaced with another size.
+    zero_rtt_config: Option<QuicZeroRttConfig>,
+    zero_rtt_status: QuicZeroRttStatus,
+    zero_rtt_cache: Option<Arc<ClearableQuicSessionCache>>,
+    pending_transport_events: VecDeque<MqttEvent>,
+    early_stream_journal: Vec<EarlyStreamJournal>,
+
     // A deferred graceful QUIC close, applied after the queued MQTT DISCONNECT has
     // been flushed (see `disconnect_and_close`).
     pending_close: Option<(VarInt, bytes::Bytes)>,
@@ -1317,6 +1488,11 @@ impl QuicMqttEngine {
             client_config: None,
             server_addr: None,
             server_name: None,
+            zero_rtt_config: None,
+            zero_rtt_status: QuicZeroRttStatus::Disabled,
+            zero_rtt_cache: None,
+            pending_transport_events: VecDeque::new(),
+            early_stream_journal: Vec::new(),
             pending_close: None,
             control_finishing: false,
             control_finished: false,
@@ -1336,6 +1512,88 @@ impl QuicMqttEngine {
             crypto_config.alpn_protocols = vec![b"mqtt".to_vec()];
         }
 
+        let client_config = Self::client_config_from_crypto(crypto_config)?;
+
+        // Retain parameters so `reconnect` can re-establish without rebuilding.
+        self.client_config = Some(client_config);
+        self.server_addr = Some(server_addr);
+        self.server_name = Some(server_name.to_string());
+        self.zero_rtt_config = None;
+        self.zero_rtt_status = QuicZeroRttStatus::Disabled;
+        self.pending_transport_events.clear();
+        self.early_stream_journal.clear();
+
+        self.establish(now)
+    }
+
+    /// Connect with QUIC 0-RTT/session-ticket support enabled.
+    ///
+    /// Early MQTT commands are only accepted while the returned status is
+    /// [`QuicZeroRttStatus::Attempted`]. If the peer rejects 0-RTT and
+    /// `replay_on_reject` is true, the engine replays the exact early bytes as
+    /// 1-RTT data on replacement streams.
+    pub fn connect_with_zero_rtt(
+        &mut self,
+        server_addr: std::net::SocketAddr,
+        server_name: &str,
+        mut crypto_config: rustls::ClientConfig,
+        zero_rtt_config: QuicZeroRttConfig,
+        now: Instant,
+    ) -> Result<(), MqttClientError> {
+        if crypto_config.alpn_protocols.is_empty() {
+            crypto_config.alpn_protocols = vec![b"mqtt".to_vec()];
+        }
+
+        crypto_config.enable_early_data = true;
+        let cache = self.zero_rtt_cache_for_size(zero_rtt_config.session_cache_size);
+        crypto_config.resumption = Resumption::store(cache);
+
+        let client_config = Self::client_config_from_crypto(crypto_config)?;
+
+        self.client_config = Some(client_config);
+        self.server_addr = Some(server_addr);
+        self.server_name = Some(server_name.to_string());
+        self.zero_rtt_config = Some(zero_rtt_config);
+        self.zero_rtt_status = QuicZeroRttStatus::Unavailable;
+        self.pending_transport_events.clear();
+        self.early_stream_journal.clear();
+
+        self.establish(now)
+    }
+
+    /// Current QUIC 0-RTT state.
+    pub fn zero_rtt_status(&self) -> QuicZeroRttStatus {
+        self.zero_rtt_status
+    }
+
+    /// Clear any retained QUIC TLS resumption/session tickets.
+    pub fn clear_quic_session_cache(&mut self) {
+        if let Some(cache) = &self.zero_rtt_cache {
+            cache.clear();
+        }
+    }
+
+    /// Re-establish the QUIC connection on the existing endpoint, reusing the
+    /// configuration captured by the previous [`connect`](Self::connect).
+    ///
+    /// Resets all stream state (the new connection starts fresh streams) and the
+    /// MQTT connected flag; the MQTT handshake is re-driven once the new QUIC
+    /// handshake completes. Returns an error if [`connect`](Self::connect) has not
+    /// been called yet.
+    pub fn reconnect(&mut self, now: Instant) -> Result<(), MqttClientError> {
+        if self.client_config.is_none() {
+            return Err(MqttClientError::InvalidState {
+                expected: "a prior successful connect()".to_string(),
+                actual: "reconnect called before connect".to_string(),
+            });
+        }
+        self.reset_connection_state();
+        self.establish(now)
+    }
+
+    fn client_config_from_crypto(
+        crypto_config: rustls::ClientConfig,
+    ) -> Result<ClientConfig, MqttClientError> {
         // Wrap in quinn config
         let mut client_config = ClientConfig::new(Arc::new(
             quinn_proto::crypto::rustls::QuicClientConfig::try_from(crypto_config).map_err(
@@ -1357,31 +1615,186 @@ impl QuicMqttEngine {
             })?;
         transport.max_idle_timeout(Some(idle_timeout));
         client_config.transport_config(Arc::new(transport));
-
-        // Retain parameters so `reconnect` can re-establish without rebuilding.
-        self.client_config = Some(client_config);
-        self.server_addr = Some(server_addr);
-        self.server_name = Some(server_name.to_string());
-
-        self.establish(now)
+        Ok(client_config)
     }
 
-    /// Re-establish the QUIC connection on the existing endpoint, reusing the
-    /// configuration captured by the previous [`connect`](Self::connect).
-    ///
-    /// Resets all stream state (the new connection starts fresh streams) and the
-    /// MQTT connected flag; the MQTT handshake is re-driven once the new QUIC
-    /// handshake completes. Returns an error if [`connect`](Self::connect) has not
-    /// been called yet.
-    pub fn reconnect(&mut self, now: Instant) -> Result<(), MqttClientError> {
-        if self.client_config.is_none() {
-            return Err(MqttClientError::InvalidState {
-                expected: "a prior successful connect()".to_string(),
-                actual: "reconnect called before connect".to_string(),
-            });
+    fn zero_rtt_cache_for_size(&mut self, size: usize) -> Arc<ClearableQuicSessionCache> {
+        if let Some(cache) = &self.zero_rtt_cache {
+            if cache.size() == size {
+                return Arc::clone(cache);
+            }
         }
-        self.reset_connection_state();
-        self.establish(now)
+
+        let cache = Arc::new(ClearableQuicSessionCache::new(size));
+        self.zero_rtt_cache = Some(Arc::clone(&cache));
+        cache
+    }
+
+    fn journal_stream_open(
+        early_stream_journal: &mut Vec<EarlyStreamJournal>,
+        stream_id: StreamId,
+        role: EarlyStreamRole,
+    ) {
+        early_stream_journal.push(EarlyStreamJournal {
+            original_stream_id: stream_id,
+            role,
+            bytes: Vec::new(),
+            packet_count: 0,
+        });
+    }
+
+    fn journal_stream_bytes(
+        early_stream_journal: &mut [EarlyStreamJournal],
+        stream_id: StreamId,
+        bytes: &[u8],
+        packet_count_delta: usize,
+    ) {
+        if bytes.is_empty() && packet_count_delta == 0 {
+            return;
+        }
+        if let Some(entry) = early_stream_journal
+            .iter_mut()
+            .find(|entry| entry.original_stream_id == stream_id)
+        {
+            entry.bytes.extend_from_slice(bytes);
+            entry.packet_count += packet_count_delta;
+        }
+    }
+
+    fn append_control_outgoing_bytes(
+        control_outgoing: &mut Vec<u8>,
+        early_stream_journal: &mut Vec<EarlyStreamJournal>,
+        zero_rtt_status: QuicZeroRttStatus,
+        control_stream: Option<StreamId>,
+        bytes: &[u8],
+        packet_count_delta: usize,
+    ) {
+        if bytes.is_empty() {
+            return;
+        }
+        control_outgoing.extend_from_slice(bytes);
+        if zero_rtt_status == QuicZeroRttStatus::Attempted {
+            if let Some(stream_id) = control_stream {
+                Self::journal_stream_bytes(
+                    early_stream_journal,
+                    stream_id,
+                    bytes,
+                    packet_count_delta,
+                );
+            }
+        }
+    }
+
+    fn mark_zero_rtt_unavailable(&mut self) {
+        self.zero_rtt_status = QuicZeroRttStatus::Unavailable;
+        self.pending_transport_events
+            .push_back(MqttEvent::ZeroRttStatusChanged {
+                status: QuicZeroRttStatus::Unavailable,
+            });
+    }
+
+    fn begin_zero_rtt_attempt(&mut self, control_stream: Option<StreamId>) {
+        let Some(stream_id) = control_stream else {
+            self.mark_zero_rtt_unavailable();
+            return;
+        };
+
+        self.zero_rtt_status = QuicZeroRttStatus::Attempted;
+        self.pending_transport_events
+            .push_back(MqttEvent::ZeroRttStatusChanged {
+                status: QuicZeroRttStatus::Attempted,
+            });
+        self.control_stream = Some(stream_id);
+        Self::journal_stream_open(
+            &mut self.early_stream_journal,
+            stream_id,
+            EarlyStreamRole::Control,
+        );
+        self.mqtt_engine.connect();
+        let connect_bytes = self.mqtt_engine.take_outgoing();
+        Self::append_control_outgoing_bytes(
+            &mut self.control_outgoing,
+            &mut self.early_stream_journal,
+            self.zero_rtt_status,
+            self.control_stream,
+            &connect_bytes,
+            usize::from(!connect_bytes.is_empty()),
+        );
+    }
+
+    fn ensure_command_allowed_before_mqtt_connected(&self) -> Result<(), MqttClientError> {
+        if self.mqtt_engine.is_connected() || self.zero_rtt_status == QuicZeroRttStatus::Attempted {
+            return Ok(());
+        }
+
+        Err(MqttClientError::InvalidState {
+            expected: "a connected MQTT session or attempted QUIC 0-RTT".to_string(),
+            actual: format!(
+                "MQTT not connected; 0-RTT status {:?}",
+                self.zero_rtt_status
+            ),
+        })
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn replay_early_stream_journals(
+        conn: &mut Connection,
+        journals: Vec<EarlyStreamJournal>,
+        parser_buffer_size: usize,
+        mqtt_version: u8,
+        max_packets: usize,
+        control_stream: &mut Option<StreamId>,
+        data_streams: &mut HashMap<StreamId, QuicStream>,
+        default_pub_stream: &mut Option<StreamId>,
+        default_sub_stream: &mut Option<StreamId>,
+        control_outgoing: &mut Vec<u8>,
+        events: &mut Vec<MqttEvent>,
+    ) {
+        for journal in journals {
+            let Some(stream_id) = conn.streams().open(Dir::Bi) else {
+                events.push(MqttEvent::Error(MqttClientError::InternalError {
+                    message: "QUIC stream limit reached while replaying rejected 0-RTT data"
+                        .to_string(),
+                }));
+                break;
+            };
+
+            if stream_id != journal.original_stream_id {
+                events.push(MqttEvent::Error(MqttClientError::InternalError {
+                    message: format!(
+                        "0-RTT replay stream id changed from {} to {}",
+                        u64::from(journal.original_stream_id),
+                        u64::from(stream_id)
+                    ),
+                }));
+            }
+
+            match journal.role {
+                EarlyStreamRole::Control => {
+                    *control_stream = Some(stream_id);
+                    control_outgoing.extend_from_slice(&journal.bytes);
+                }
+                EarlyStreamRole::DefaultPub
+                | EarlyStreamRole::DefaultSub
+                | EarlyStreamRole::ExplicitData => {
+                    data_streams.insert(
+                        stream_id,
+                        QuicStream::with_outgoing(
+                            parser_buffer_size,
+                            mqtt_version,
+                            max_packets,
+                            journal.bytes,
+                            journal.packet_count,
+                        ),
+                    );
+                    match journal.role {
+                        EarlyStreamRole::DefaultPub => *default_pub_stream = Some(stream_id),
+                        EarlyStreamRole::DefaultSub => *default_sub_stream = Some(stream_id),
+                        EarlyStreamRole::ExplicitData | EarlyStreamRole::Control => {}
+                    }
+                }
+            }
+        }
     }
 
     /// Clear all per-connection state (streams, buffers, MQTT connected flag).
@@ -1397,6 +1810,8 @@ impl QuicMqttEngine {
         self.pending_close = None;
         self.control_finishing = false;
         self.control_finished = false;
+        self.pending_transport_events.clear();
+        self.early_stream_journal.clear();
         // Discard any MQTT bytes queued for the old transport so they are not
         // replayed before the next CONNECT.
         self.mqtt_engine.reset_for_new_transport();
@@ -1425,12 +1840,21 @@ impl QuicMqttEngine {
                     actual: "none".to_string(),
                 })?;
 
-        let (ch, conn) = self
+        let (ch, mut conn) = self
             .endpoint
             .connect(now, client_config, server_addr, &server_name)
             .map_err(|e| MqttClientError::InternalError {
                 message: format!("Failed to create QUIC connection: {}", e),
             })?;
+
+        if self.zero_rtt_config.is_some() {
+            if conn.has_0rtt() {
+                let control_stream = conn.streams().open(Dir::Bi);
+                self.begin_zero_rtt_attempt(control_stream);
+            } else {
+                self.mark_zero_rtt_unavailable();
+            }
+        }
 
         self.connection = Some(conn);
         self.connection_handle = Some(ch);
@@ -1484,7 +1908,7 @@ impl QuicMqttEngine {
 
     /// Drive time-dependent logic for both QUIC and MQTT state machines.
     pub fn handle_tick(&mut self, now: Instant) -> Vec<MqttEvent> {
-        let mut mqtt_events = Vec::new();
+        let mut mqtt_events: Vec<MqttEvent> = self.pending_transport_events.drain(..).collect();
 
         let parser_buffer_size = self.mqtt_engine.options().parser_buffer_size;
         let mqtt_version = self.mqtt_engine.mqtt_version();
@@ -1501,13 +1925,63 @@ impl QuicMqttEngine {
                         // Stream readable/writable/finished events are handled by
                         // polling the streams directly below.
                     }
-                    quinn_proto::Event::Connected
-                        // QUIC handshake done. Open the control stream for MQTT.
-                        if self.control_stream.is_none() =>
-                    {
-                        if let Some(stream_id) = conn.streams().open(Dir::Bi) {
-                            self.control_stream = Some(stream_id);
-                            self.mqtt_engine.connect();
+                    quinn_proto::Event::Connected => {
+                        let zero_rtt_was_attempted =
+                            self.zero_rtt_status == QuicZeroRttStatus::Attempted;
+
+                        if zero_rtt_was_attempted {
+                            if conn.accepted_0rtt() {
+                                self.zero_rtt_status = QuicZeroRttStatus::Accepted;
+                                self.early_stream_journal.clear();
+                                mqtt_events.push(MqttEvent::ZeroRttStatusChanged {
+                                    status: QuicZeroRttStatus::Accepted,
+                                });
+                            } else {
+                                self.zero_rtt_status = QuicZeroRttStatus::Rejected;
+                                mqtt_events.push(MqttEvent::ZeroRttStatusChanged {
+                                    status: QuicZeroRttStatus::Rejected,
+                                });
+
+                                let replay_on_reject = self
+                                    .zero_rtt_config
+                                    .map(|config| config.replay_on_reject)
+                                    .unwrap_or(false);
+                                let journals = std::mem::take(&mut self.early_stream_journal);
+                                self.control_stream = None;
+                                self.data_streams.clear();
+                                self.default_pub_stream = None;
+                                self.default_sub_stream = None;
+                                self.control_outgoing.clear();
+                                self.pending_close = None;
+                                self.control_finishing = false;
+                                self.control_finished = false;
+
+                                if replay_on_reject {
+                                    Self::replay_early_stream_journals(
+                                        conn,
+                                        journals,
+                                        parser_buffer_size,
+                                        mqtt_version,
+                                        max_packets,
+                                        &mut self.control_stream,
+                                        &mut self.data_streams,
+                                        &mut self.default_pub_stream,
+                                        &mut self.default_sub_stream,
+                                        &mut self.control_outgoing,
+                                        &mut mqtt_events,
+                                    );
+                                }
+                            }
+                        }
+
+                        // QUIC handshake done. Open the control stream for MQTT
+                        // unless it already exists from 0-RTT or a rejected
+                        // attempt intentionally left retry to the caller.
+                        if self.control_stream.is_none() && !zero_rtt_was_attempted {
+                            if let Some(stream_id) = conn.streams().open(Dir::Bi) {
+                                self.control_stream = Some(stream_id);
+                                self.mqtt_engine.connect();
+                            }
                         }
                     }
                     quinn_proto::Event::ConnectionLost { reason } => {
@@ -1519,6 +1993,7 @@ impl QuicMqttEngine {
                         self.default_pub_stream = None;
                         self.default_sub_stream = None;
                         self.control_outgoing.clear();
+                        self.early_stream_journal.clear();
                         self.pending_close = None;
                         self.control_finishing = false;
                         self.control_finished = false;
@@ -1613,7 +2088,14 @@ impl QuicMqttEngine {
             // side and would block the deferred close below forever.
             if !self.control_finishing && !self.control_finished {
                 let session_bytes = self.mqtt_engine.take_outgoing();
-                self.control_outgoing.extend_from_slice(&session_bytes);
+                Self::append_control_outgoing_bytes(
+                    &mut self.control_outgoing,
+                    &mut self.early_stream_journal,
+                    self.zero_rtt_status,
+                    self.control_stream,
+                    &session_bytes,
+                    0,
+                );
             }
             if let Some(stream_id) = self.control_stream {
                 // Flush buffered bytes (partial-write retention) until the send side
@@ -1715,7 +2197,9 @@ impl QuicMqttEngine {
     }
 
     pub fn take_events(&mut self) -> Vec<MqttEvent> {
-        self.mqtt_engine.take_events()
+        let mut events: Vec<MqttEvent> = self.pending_transport_events.drain(..).collect();
+        events.extend(self.mqtt_engine.take_events());
+        events
     }
 
     /// Open a new client-initiated bidirectional QUIC data stream.
@@ -1729,11 +2213,18 @@ impl QuicMqttEngine {
     /// Fails if the connection has not been established yet, or if the peer's
     /// stream limit (`initial_max_streams_bidi`) has been reached.
     pub fn open_data_stream(&mut self) -> Result<u64, MqttClientError> {
-        Ok(self.open_bidi_stream()?.into())
+        Ok(self
+            .open_bidi_stream_with_role(EarlyStreamRole::ExplicitData)?
+            .into())
     }
 
     /// Internal: open a bidirectional stream and register per-stream state.
-    fn open_bidi_stream(&mut self) -> Result<StreamId, MqttClientError> {
+    fn open_bidi_stream_with_role(
+        &mut self,
+        role: EarlyStreamRole,
+    ) -> Result<StreamId, MqttClientError> {
+        self.ensure_command_allowed_before_mqtt_connected()?;
+
         let parser_buffer_size = self.mqtt_engine.options().parser_buffer_size;
         let mqtt_version = self.mqtt_engine.mqtt_version();
         let max_packets = self.mqtt_engine.options().max_outgoing_packet_count;
@@ -1757,6 +2248,9 @@ impl QuicMqttEngine {
             stream_id,
             QuicStream::new(parser_buffer_size, mqtt_version, max_packets),
         );
+        if self.zero_rtt_status == QuicZeroRttStatus::Attempted {
+            Self::journal_stream_open(&mut self.early_stream_journal, stream_id, role);
+        }
         Ok(stream_id)
     }
 
@@ -1811,6 +2305,9 @@ impl QuicMqttEngine {
             }
             ds.outgoing.extend_from_slice(bytes);
             ds.pending_packets += 1;
+            if self.zero_rtt_status == QuicZeroRttStatus::Attempted {
+                Self::journal_stream_bytes(&mut self.early_stream_journal, stream_id, bytes, 1);
+            }
         }
         Ok(())
     }
@@ -1876,7 +2373,7 @@ impl QuicMqttEngine {
         if let Some(id) = self.default_pub_stream {
             return Ok(id);
         }
-        let id = self.open_bidi_stream()?;
+        let id = self.open_bidi_stream_with_role(EarlyStreamRole::DefaultPub)?;
         self.default_pub_stream = Some(id);
         Ok(id)
     }
@@ -1887,7 +2384,7 @@ impl QuicMqttEngine {
         if let Some(id) = self.default_sub_stream {
             return Ok(id);
         }
-        let id = self.open_bidi_stream()?;
+        let id = self.open_bidi_stream_with_role(EarlyStreamRole::DefaultSub)?;
         self.default_sub_stream = Some(id);
         Ok(id)
     }
@@ -1897,6 +2394,7 @@ impl QuicMqttEngine {
     /// PUBLISH traffic is never placed on the session control stream. The QoS 1/2
     /// acknowledgement handshake completes on this same stream.
     pub fn publish(&mut self, command: PublishCommand) -> Result<Option<u16>, MqttClientError> {
+        self.ensure_command_allowed_before_mqtt_connected()?;
         let stream_id = self.ensure_default_pub_stream()?;
         self.ensure_stream_capacity(stream_id)?;
         let (pid, bytes) = self
@@ -1918,6 +2416,7 @@ impl QuicMqttEngine {
         stream: u64,
         command: PublishCommand,
     ) -> Result<Option<u16>, MqttClientError> {
+        self.ensure_command_allowed_before_mqtt_connected()?;
         let stream_id = self.resolve_stream(stream)?;
         self.ensure_stream_capacity(stream_id)?;
         let (pid, bytes) = self.mqtt_engine.publish_encoded(command, Some(stream))?;
@@ -1930,6 +2429,7 @@ impl QuicMqttEngine {
     /// SUBSCRIBE traffic is never placed on the session control stream; the SUBACK
     /// and any messages delivered for the subscription flow on this same stream.
     pub fn subscribe(&mut self, command: SubscribeCommand) -> Result<u16, MqttClientError> {
+        self.ensure_command_allowed_before_mqtt_connected()?;
         let stream_id = self.ensure_default_sub_stream()?;
         self.ensure_stream_capacity(stream_id)?;
         let (pid, bytes) = self
@@ -1946,6 +2446,7 @@ impl QuicMqttEngine {
         stream: u64,
         command: SubscribeCommand,
     ) -> Result<u16, MqttClientError> {
+        self.ensure_command_allowed_before_mqtt_connected()?;
         let stream_id = self.resolve_stream(stream)?;
         self.ensure_stream_capacity(stream_id)?;
         let (pid, bytes) = self.mqtt_engine.subscribe_encoded(command, Some(stream))?;
@@ -1955,6 +2456,7 @@ impl QuicMqttEngine {
 
     /// Unsubscribe on the default sub data stream.
     pub fn unsubscribe(&mut self, command: UnsubscribeCommand) -> Result<u16, MqttClientError> {
+        self.ensure_command_allowed_before_mqtt_connected()?;
         let stream_id = self.ensure_default_sub_stream()?;
         self.ensure_stream_capacity(stream_id)?;
         let (pid, bytes) = self
@@ -1970,6 +2472,7 @@ impl QuicMqttEngine {
         stream: u64,
         command: UnsubscribeCommand,
     ) -> Result<u16, MqttClientError> {
+        self.ensure_command_allowed_before_mqtt_connected()?;
         let stream_id = self.resolve_stream(stream)?;
         self.ensure_stream_capacity(stream_id)?;
         let (pid, bytes) = self
@@ -2061,7 +2564,14 @@ impl QuicMqttEngine {
             // before the FIN, then stop the MQTT layer from producing more control
             // traffic (auto-PINGREQ, etc.).
             let pending = self.mqtt_engine.take_outgoing();
-            self.control_outgoing.extend_from_slice(&pending);
+            Self::append_control_outgoing_bytes(
+                &mut self.control_outgoing,
+                &mut self.early_stream_journal,
+                self.zero_rtt_status,
+                self.control_stream,
+                &pending,
+                0,
+            );
             self.mqtt_engine.handle_connection_lost();
             self.control_finishing = true;
         } else if let Some(ds) = self.data_streams.get_mut(&stream_id) {
@@ -2185,7 +2695,14 @@ impl QuicMqttEngine {
             if self.control_finishing || self.control_finished {
                 return Err(stream_finished_error());
             }
-            self.control_outgoing.extend_from_slice(bytes);
+            Self::append_control_outgoing_bytes(
+                &mut self.control_outgoing,
+                &mut self.early_stream_journal,
+                self.zero_rtt_status,
+                self.control_stream,
+                bytes,
+                0,
+            );
             return Ok(());
         }
         let stream_id = self.resolve_stream(stream)?;
@@ -2194,6 +2711,9 @@ impl QuicMqttEngine {
                 return Err(stream_finished_error());
             }
             ds.outgoing.extend_from_slice(bytes);
+            if self.zero_rtt_status == QuicZeroRttStatus::Attempted {
+                Self::journal_stream_bytes(&mut self.early_stream_journal, stream_id, bytes, 0);
+            }
         }
         Ok(())
     }
@@ -2842,5 +3362,195 @@ mod tests {
         // Rejected again once the control stream is finished.
         engine.control_finished = true;
         assert!(engine.ping().is_err());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    fn quic_test_crypto_config() -> rustls::ClientConfig {
+        rustls::ClientConfig::builder()
+            .with_root_certificates(rustls::RootCertStore::empty())
+            .with_no_client_auth()
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_zero_rtt_config_default_and_connect_disables() {
+        let default = QuicZeroRttConfig::default();
+        assert_eq!(default.session_cache_size, 256);
+        assert!(default.replay_on_reject);
+
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+        engine.zero_rtt_config = Some(default);
+        engine.zero_rtt_status = QuicZeroRttStatus::Attempted;
+        engine
+            .pending_transport_events
+            .push_back(MqttEvent::ZeroRttStatusChanged {
+                status: QuicZeroRttStatus::Attempted,
+            });
+        QuicMqttEngine::journal_stream_open(
+            &mut engine.early_stream_journal,
+            StreamId::new(quinn_proto::Side::Client, Dir::Bi, 0),
+            EarlyStreamRole::Control,
+        );
+
+        engine
+            .connect(
+                "127.0.0.1:4433".parse().unwrap(),
+                "localhost",
+                quic_test_crypto_config(),
+                Instant::now(),
+            )
+            .unwrap();
+
+        assert_eq!(engine.zero_rtt_config, None);
+        assert_eq!(engine.zero_rtt_status(), QuicZeroRttStatus::Disabled);
+        assert!(engine.pending_transport_events.is_empty());
+        assert!(engine.early_stream_journal.is_empty());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_connect_with_zero_rtt_emits_unavailable_without_ticket() {
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+        let config = QuicZeroRttConfig {
+            session_cache_size: 8,
+            replay_on_reject: false,
+        };
+
+        engine
+            .connect_with_zero_rtt(
+                "127.0.0.1:4433".parse().unwrap(),
+                "localhost",
+                quic_test_crypto_config(),
+                config,
+                Instant::now(),
+            )
+            .unwrap();
+
+        assert_eq!(engine.zero_rtt_config, Some(config));
+        assert_eq!(engine.zero_rtt_status(), QuicZeroRttStatus::Unavailable);
+        assert!(engine.zero_rtt_cache.is_some());
+
+        let events = engine.take_events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            MqttEvent::ZeroRttStatusChanged {
+                status: QuicZeroRttStatus::Unavailable
+            }
+        ));
+        assert!(engine.take_events().is_empty());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_zero_rtt_early_control_open_failure_falls_back_to_unavailable() {
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+        engine.zero_rtt_config = Some(QuicZeroRttConfig::default());
+
+        engine.begin_zero_rtt_attempt(None);
+
+        assert_eq!(engine.zero_rtt_status(), QuicZeroRttStatus::Unavailable);
+        assert_eq!(engine.control_stream, None);
+        assert!(engine.control_outgoing.is_empty());
+        assert!(engine.early_stream_journal.is_empty());
+
+        let events = engine.take_events();
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            events[0],
+            MqttEvent::ZeroRttStatusChanged {
+                status: QuicZeroRttStatus::Unavailable
+            }
+        ));
+        assert!(engine
+            .publish(PublishCommand::simple(
+                "topic",
+                b"payload".to_vec(),
+                0,
+                false
+            ))
+            .is_err());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_clearable_quic_session_cache_delegates_and_redacts() {
+        let cache = ClearableQuicSessionCache::new(16);
+        let name = ServerName::try_from("example.com").unwrap().to_owned();
+
+        cache.set_kx_hint(name.clone(), NamedGroup::X25519);
+        assert_eq!(cache.kx_hint(&name), Some(NamedGroup::X25519));
+
+        let debug = format!("{:?}", cache);
+        assert!(debug.contains("[redacted]"));
+        assert!(!debug.contains("example.com"));
+
+        cache.clear();
+        assert_eq!(cache.kx_hint(&name), None);
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_early_stream_journal_records_enqueue_not_write() {
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+        engine.zero_rtt_status = QuicZeroRttStatus::Attempted;
+
+        let control = StreamId::new(quinn_proto::Side::Client, Dir::Bi, 0);
+        let data = StreamId::new(quinn_proto::Side::Client, Dir::Bi, 1);
+        engine.control_stream = Some(control);
+        QuicMqttEngine::journal_stream_open(
+            &mut engine.early_stream_journal,
+            control,
+            EarlyStreamRole::Control,
+        );
+        QuicMqttEngine::journal_stream_open(
+            &mut engine.early_stream_journal,
+            data,
+            EarlyStreamRole::DefaultPub,
+        );
+        engine
+            .data_streams
+            .insert(data, QuicStream::new(1024, 5, 10));
+
+        QuicMqttEngine::append_control_outgoing_bytes(
+            &mut engine.control_outgoing,
+            &mut engine.early_stream_journal,
+            engine.zero_rtt_status,
+            engine.control_stream,
+            &[0x10, 0x00],
+            1,
+        );
+        engine.enqueue_on_stream(data, &[0x30, 0x01, b'x']).unwrap();
+
+        let control_entry = engine
+            .early_stream_journal
+            .iter()
+            .find(|entry| entry.original_stream_id == control)
+            .unwrap();
+        assert_eq!(control_entry.bytes, vec![0x10, 0x00]);
+        assert_eq!(control_entry.packet_count, 1);
+
+        let data_entry = engine
+            .early_stream_journal
+            .iter()
+            .find(|entry| entry.original_stream_id == data)
+            .unwrap();
+        assert_eq!(data_entry.bytes, vec![0x30, 0x01, b'x']);
+        assert_eq!(data_entry.packet_count, 1);
+
+        // Simulate a partial QUIC write draining the stream buffer. The replay
+        // journal must keep the full original enqueue bytes.
+        engine
+            .data_streams
+            .get_mut(&data)
+            .unwrap()
+            .outgoing
+            .drain(..1);
+        let data_entry = engine
+            .early_stream_journal
+            .iter()
+            .find(|entry| entry.original_stream_id == data)
+            .unwrap();
+        assert_eq!(data_entry.bytes, vec![0x30, 0x01, b'x']);
     }
 }
