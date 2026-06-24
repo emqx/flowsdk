@@ -225,6 +225,29 @@ fn map_event(event: MqttEvent) -> MqttEventFFI {
                 reason, by_peer, error_code
             ),
         },
+        MqttEvent::StreamClosed {
+            stream_id,
+            reason,
+            by_peer,
+        } => MqttEventFFI::StreamClosed {
+            stream_id,
+            reason,
+            by_peer,
+        },
+        MqttEvent::StreamReset {
+            stream_id,
+            error_code,
+        } => MqttEventFFI::StreamReset {
+            stream_id,
+            error_code,
+        },
+        MqttEvent::StreamStopped {
+            stream_id,
+            error_code,
+        } => MqttEventFFI::StreamStopped {
+            stream_id,
+            error_code,
+        },
         MqttEvent::ZeroRttStatusChanged { status } => MqttEventFFI::Error {
             message: format!("unsupported QUIC 0-RTT status event over FFI: {:?}", status),
         },
@@ -1637,6 +1660,9 @@ pub unsafe extern "C" fn mqtt_event_list_get_tag(ptr: *const MqttEventListFFI, i
                 MqttEventFFI::Error { .. } => 8,
                 MqttEventFFI::ReconnectNeeded => 9,
                 MqttEventFFI::ReconnectScheduled { .. } => 10,
+                MqttEventFFI::StreamClosed { .. } => 11,
+                MqttEventFFI::StreamReset { .. } => 12,
+                MqttEventFFI::StreamStopped { .. } => 13,
             }
         } else {
             0
@@ -1753,6 +1779,78 @@ pub unsafe extern "C" fn mqtt_event_list_get_error_message(
         }
     }
     std::ptr::null_mut()
+}
+
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEventListFFI`.
+#[no_mangle]
+pub unsafe extern "C" fn mqtt_event_list_get_stream_id(
+    ptr: *const MqttEventListFFI,
+    index: usize,
+) -> u64 {
+    if let Some(list) = ptr.as_ref() {
+        match list.events.get(index) {
+            Some(MqttEventFFI::StreamClosed { stream_id, .. })
+            | Some(MqttEventFFI::StreamReset { stream_id, .. })
+            | Some(MqttEventFFI::StreamStopped { stream_id, .. }) => *stream_id,
+            _ => 0,
+        }
+    } else {
+        0
+    }
+}
+
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEventListFFI`.
+#[no_mangle]
+pub unsafe extern "C" fn mqtt_event_list_get_stream_error_code(
+    ptr: *const MqttEventListFFI,
+    index: usize,
+) -> u64 {
+    if let Some(list) = ptr.as_ref() {
+        match list.events.get(index) {
+            Some(MqttEventFFI::StreamReset { error_code, .. })
+            | Some(MqttEventFFI::StreamStopped { error_code, .. }) => *error_code,
+            _ => 0,
+        }
+    } else {
+        0
+    }
+}
+
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEventListFFI`
+/// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
+#[no_mangle]
+pub unsafe extern "C" fn mqtt_event_list_get_stream_close_reason(
+    ptr: *const MqttEventListFFI,
+    index: usize,
+) -> *mut c_char {
+    if let Some(list) = ptr.as_ref() {
+        if let Some(MqttEventFFI::StreamClosed { reason, .. }) = list.events.get(index) {
+            return CString::new(reason.clone()).unwrap().into_raw();
+        }
+    }
+    std::ptr::null_mut()
+}
+
+/// # Safety
+///
+/// This function is unsafe because it dereferences a raw pointer to `MqttEventListFFI`.
+#[no_mangle]
+pub unsafe extern "C" fn mqtt_event_list_get_stream_closed_by_peer(
+    ptr: *const MqttEventListFFI,
+    index: usize,
+) -> i32 {
+    if let Some(list) = ptr.as_ref() {
+        if let Some(MqttEventFFI::StreamClosed { by_peer, .. }) = list.events.get(index) {
+            return i32::from(*by_peer);
+        }
+    }
+    -1
 }
 
 /// # Safety
