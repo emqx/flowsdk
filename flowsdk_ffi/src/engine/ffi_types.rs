@@ -42,15 +42,37 @@ pub struct UnsubscribeResultFFI {
 #[derive(Clone)]
 pub enum MqttEventFFI {
     Connected(ConnectionResultFFI),
-    Disconnected { reason_code: Option<u8> },
+    Disconnected {
+        reason_code: Option<u8>,
+    },
     MessageReceived(MqttMessageFFI),
     Published(PublishResultFFI),
     Subscribed(SubscribeResultFFI),
     Unsubscribed(UnsubscribeResultFFI),
-    PingResponse { success: bool },
-    Error { message: String },
+    PingResponse {
+        success: bool,
+    },
+    Error {
+        message: String,
+    },
+    StreamClosed {
+        stream_id: u64,
+        reason: String,
+        by_peer: bool,
+    },
+    StreamReset {
+        stream_id: u64,
+        error_code: u64,
+    },
+    StreamStopped {
+        stream_id: u64,
+        error_code: u64,
+    },
     ReconnectNeeded,
-    ReconnectScheduled { attempt: u32, delay_ms: u64 },
+    ReconnectScheduled {
+        attempt: u32,
+        delay_ms: u64,
+    },
 }
 
 #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Record))]

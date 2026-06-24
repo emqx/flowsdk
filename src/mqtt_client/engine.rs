@@ -106,6 +106,25 @@ pub enum MqttEvent {
         by_peer: bool,
         error_code: Option<u64>,
     },
+    /// A QUIC stream was closed gracefully.
+    ///
+    /// `by_peer` is true when the peer finished its send side. It is false when
+    /// our finished send side was acknowledged by the peer.
+    StreamClosed {
+        stream_id: u64,
+        reason: String,
+        by_peer: bool,
+    },
+    /// The peer aborted its send side with RESET_STREAM.
+    StreamReset {
+        stream_id: u64,
+        error_code: u64,
+    },
+    /// The peer aborted our send side with STOP_SENDING.
+    StreamStopped {
+        stream_id: u64,
+        error_code: u64,
+    },
     /// Signal that a reconnection is needed (e.g. after keep-alive timeout)
     ReconnectNeeded,
     /// Reconnection scheduled with exponential backoff
@@ -1220,6 +1239,8 @@ struct QuicStream {
     finishing: bool,
     /// The send side has been finished or reset; further writes are rejected.
     finished: bool,
+    /// The receive side has seen FIN or RESET; further reads are skipped.
+    recv_closed: bool,
 }
 
 #[cfg(feature = "quic-proto")]
@@ -1232,6 +1253,7 @@ impl QuicStream {
             max_packets,
             finishing: false,
             finished: false,
+            recv_closed: false,
         }
     }
 
@@ -1249,6 +1271,7 @@ impl QuicStream {
             max_packets,
             finishing: false,
             finished: false,
+            recv_closed: false,
         }
     }
 }
@@ -1817,6 +1840,225 @@ impl QuicMqttEngine {
         self.mqtt_engine.reset_for_new_transport();
     }
 
+    fn clear_data_stream_refs_fields(
+        data_streams: &mut HashMap<StreamId, QuicStream>,
+        default_pub_stream: &mut Option<StreamId>,
+        default_sub_stream: &mut Option<StreamId>,
+        stream_id: StreamId,
+    ) {
+        data_streams.remove(&stream_id);
+        if *default_pub_stream == Some(stream_id) {
+            *default_pub_stream = None;
+        }
+        if *default_sub_stream == Some(stream_id) {
+            *default_sub_stream = None;
+        }
+    }
+
+    fn handle_control_stream_terminal_fields(
+        control_stream: &mut Option<StreamId>,
+        control_outgoing: &mut Vec<u8>,
+        control_finishing: &mut bool,
+        control_finished: &mut bool,
+        mqtt_engine: &mut MqttEngine,
+        mqtt_events: &mut Vec<MqttEvent>,
+    ) {
+        *control_stream = None;
+        control_outgoing.clear();
+        *control_finishing = false;
+        *control_finished = true;
+        mqtt_engine.handle_connection_lost();
+        mqtt_events.push(MqttEvent::Disconnected(None));
+    }
+
+    #[cfg(test)]
+    fn handle_stream_stopped(
+        &mut self,
+        stream_id: StreamId,
+        error_code: VarInt,
+        mqtt_events: &mut Vec<MqttEvent>,
+    ) {
+        Self::handle_stream_stopped_fields(
+            &mut self.control_stream,
+            &mut self.data_streams,
+            &mut self.default_pub_stream,
+            &mut self.default_sub_stream,
+            &mut self.control_outgoing,
+            &mut self.control_finishing,
+            &mut self.control_finished,
+            &mut self.mqtt_engine,
+            stream_id,
+            error_code,
+            mqtt_events,
+        );
+    }
+
+    fn handle_stream_stopped_fields(
+        control_stream: &mut Option<StreamId>,
+        data_streams: &mut HashMap<StreamId, QuicStream>,
+        default_pub_stream: &mut Option<StreamId>,
+        default_sub_stream: &mut Option<StreamId>,
+        control_outgoing: &mut Vec<u8>,
+        control_finishing: &mut bool,
+        control_finished: &mut bool,
+        mqtt_engine: &mut MqttEngine,
+        stream_id: StreamId,
+        error_code: VarInt,
+        mqtt_events: &mut Vec<MqttEvent>,
+    ) {
+        if Some(stream_id) == *control_stream {
+            mqtt_events.push(MqttEvent::StreamStopped {
+                stream_id: u64::from(stream_id),
+                error_code: u64::from(error_code),
+            });
+            Self::handle_control_stream_terminal_fields(
+                control_stream,
+                control_outgoing,
+                control_finishing,
+                control_finished,
+                mqtt_engine,
+                mqtt_events,
+            );
+        } else if data_streams.contains_key(&stream_id) {
+            mqtt_events.push(MqttEvent::StreamStopped {
+                stream_id: u64::from(stream_id),
+                error_code: u64::from(error_code),
+            });
+            Self::clear_data_stream_refs_fields(
+                data_streams,
+                default_pub_stream,
+                default_sub_stream,
+                stream_id,
+            );
+        }
+    }
+
+    #[cfg(test)]
+    fn handle_stream_reset(
+        &mut self,
+        stream_id: StreamId,
+        error_code: VarInt,
+        mqtt_events: &mut Vec<MqttEvent>,
+    ) {
+        Self::handle_stream_reset_fields(
+            &mut self.control_stream,
+            &mut self.data_streams,
+            &mut self.default_pub_stream,
+            &mut self.default_sub_stream,
+            &mut self.control_outgoing,
+            &mut self.control_finishing,
+            &mut self.control_finished,
+            &mut self.mqtt_engine,
+            stream_id,
+            error_code,
+            mqtt_events,
+        );
+    }
+
+    fn handle_stream_reset_fields(
+        control_stream: &mut Option<StreamId>,
+        data_streams: &mut HashMap<StreamId, QuicStream>,
+        default_pub_stream: &mut Option<StreamId>,
+        default_sub_stream: &mut Option<StreamId>,
+        control_outgoing: &mut Vec<u8>,
+        control_finishing: &mut bool,
+        control_finished: &mut bool,
+        mqtt_engine: &mut MqttEngine,
+        stream_id: StreamId,
+        error_code: VarInt,
+        mqtt_events: &mut Vec<MqttEvent>,
+    ) {
+        if Some(stream_id) == *control_stream {
+            mqtt_events.push(MqttEvent::StreamReset {
+                stream_id: u64::from(stream_id),
+                error_code: u64::from(error_code),
+            });
+            Self::handle_control_stream_terminal_fields(
+                control_stream,
+                control_outgoing,
+                control_finishing,
+                control_finished,
+                mqtt_engine,
+                mqtt_events,
+            );
+        } else if data_streams.contains_key(&stream_id) {
+            mqtt_events.push(MqttEvent::StreamReset {
+                stream_id: u64::from(stream_id),
+                error_code: u64::from(error_code),
+            });
+            Self::clear_data_stream_refs_fields(
+                data_streams,
+                default_pub_stream,
+                default_sub_stream,
+                stream_id,
+            );
+        }
+    }
+
+    #[cfg(test)]
+    fn handle_stream_closed(
+        &mut self,
+        stream_id: StreamId,
+        reason: &'static str,
+        by_peer: bool,
+        mqtt_events: &mut Vec<MqttEvent>,
+    ) {
+        Self::handle_stream_closed_fields(
+            &mut self.control_stream,
+            &mut self.data_streams,
+            &mut self.control_outgoing,
+            &mut self.control_finishing,
+            &mut self.control_finished,
+            &mut self.mqtt_engine,
+            stream_id,
+            reason,
+            by_peer,
+            mqtt_events,
+        );
+    }
+
+    fn handle_stream_closed_fields(
+        control_stream: &mut Option<StreamId>,
+        data_streams: &mut HashMap<StreamId, QuicStream>,
+        control_outgoing: &mut Vec<u8>,
+        control_finishing: &mut bool,
+        control_finished: &mut bool,
+        mqtt_engine: &mut MqttEngine,
+        stream_id: StreamId,
+        reason: &'static str,
+        by_peer: bool,
+        mqtt_events: &mut Vec<MqttEvent>,
+    ) {
+        if Some(stream_id) == *control_stream {
+            mqtt_events.push(MqttEvent::StreamClosed {
+                stream_id: u64::from(stream_id),
+                reason: reason.to_string(),
+                by_peer,
+            });
+            if by_peer {
+                Self::handle_control_stream_terminal_fields(
+                    control_stream,
+                    control_outgoing,
+                    control_finishing,
+                    control_finished,
+                    mqtt_engine,
+                    mqtt_events,
+                );
+            }
+        } else if let Some(ds) = data_streams.get_mut(&stream_id) {
+            mqtt_events.push(MqttEvent::StreamClosed {
+                stream_id: u64::from(stream_id),
+                reason: reason.to_string(),
+                by_peer,
+            });
+            if by_peer {
+                ds.recv_closed = true;
+            } else {
+                ds.finished = true;
+            }
+        }
+    }
+
     /// Open a fresh QUIC connection using the retained configuration.
     fn establish(&mut self, now: Instant) -> Result<(), MqttClientError> {
         let client_config =
@@ -1921,10 +2163,44 @@ impl QuicMqttEngine {
             // 1. Drain connection events.
             while let Some(event) = conn.poll() {
                 match event {
-                    quinn_proto::Event::Stream(_) => {
-                        // Stream readable/writable/finished events are handled by
-                        // polling the streams directly below.
-                    }
+                    quinn_proto::Event::Stream(stream_event) => match stream_event {
+                        quinn_proto::StreamEvent::Finished { id } => {
+                            Self::handle_stream_closed_fields(
+                                &mut self.control_stream,
+                                &mut self.data_streams,
+                                &mut self.control_outgoing,
+                                &mut self.control_finishing,
+                                &mut self.control_finished,
+                                &mut self.mqtt_engine,
+                                id,
+                                "send_finished",
+                                false,
+                                &mut mqtt_events,
+                            );
+                        }
+                        quinn_proto::StreamEvent::Stopped { id, error_code } => {
+                            Self::handle_stream_stopped_fields(
+                                &mut self.control_stream,
+                                &mut self.data_streams,
+                                &mut self.default_pub_stream,
+                                &mut self.default_sub_stream,
+                                &mut self.control_outgoing,
+                                &mut self.control_finishing,
+                                &mut self.control_finished,
+                                &mut self.mqtt_engine,
+                                id,
+                                error_code,
+                                &mut mqtt_events,
+                            );
+                        }
+                        quinn_proto::StreamEvent::Opened { .. }
+                        | quinn_proto::StreamEvent::Readable { .. }
+                        | quinn_proto::StreamEvent::Writable { .. }
+                        | quinn_proto::StreamEvent::Available { .. } => {
+                            // Readable/writable/open events are handled by polling
+                            // the streams directly below.
+                        }
+                    },
                     quinn_proto::Event::Connected => {
                         let zero_rtt_was_attempted =
                             self.zero_rtt_status == QuicZeroRttStatus::Attempted;
@@ -2020,14 +2296,81 @@ impl QuicMqttEngine {
 
             // 3a. Read the control stream into the shared internal parser.
             if let Some(stream_id) = self.control_stream {
-                let mut stream = conn.recv_stream(stream_id);
-                // Bind the Result to a local so its temporary (which borrows
-                // `stream`) is dropped before `stream` itself.
-                let read_result = stream.read(true);
-                if let Ok(mut chunks) = read_result {
-                    while let Ok(Some(chunk)) = chunks.next(16384) {
-                        mqtt_events.extend(self.mqtt_engine.handle_incoming(&chunk.bytes));
+                let reset_code = {
+                    let mut stream = conn.recv_stream(stream_id);
+                    stream.received_reset().ok().flatten()
+                };
+                if let Some(error_code) = reset_code {
+                    Self::handle_stream_reset_fields(
+                        &mut self.control_stream,
+                        &mut self.data_streams,
+                        &mut self.default_pub_stream,
+                        &mut self.default_sub_stream,
+                        &mut self.control_outgoing,
+                        &mut self.control_finishing,
+                        &mut self.control_finished,
+                        &mut self.mqtt_engine,
+                        stream_id,
+                        error_code,
+                        &mut mqtt_events,
+                    );
+                }
+            }
+            if let Some(stream_id) = self.control_stream {
+                let mut recv_finished = false;
+                let mut read_reset = None;
+                {
+                    let mut stream = conn.recv_stream(stream_id);
+                    // Bind the Result to a local so its temporary (which borrows
+                    // `stream`) is dropped before `stream` itself.
+                    let read_result = stream.read(true);
+                    if let Ok(mut chunks) = read_result {
+                        loop {
+                            match chunks.next(16384) {
+                                Ok(Some(chunk)) => {
+                                    mqtt_events
+                                        .extend(self.mqtt_engine.handle_incoming(&chunk.bytes));
+                                }
+                                Ok(None) => {
+                                    recv_finished = true;
+                                    break;
+                                }
+                                Err(quinn_proto::ReadError::Reset(error_code)) => {
+                                    read_reset = Some(error_code);
+                                    break;
+                                }
+                                Err(_) => break,
+                            }
+                        }
                     }
+                }
+                if let Some(error_code) = read_reset {
+                    Self::handle_stream_reset_fields(
+                        &mut self.control_stream,
+                        &mut self.data_streams,
+                        &mut self.default_pub_stream,
+                        &mut self.default_sub_stream,
+                        &mut self.control_outgoing,
+                        &mut self.control_finishing,
+                        &mut self.control_finished,
+                        &mut self.mqtt_engine,
+                        stream_id,
+                        error_code,
+                        &mut mqtt_events,
+                    );
+                } else if recv_finished {
+                    Self::handle_stream_closed_fields(
+                        &mut self.control_stream,
+                        &mut self.data_streams,
+                        &mut self.control_outgoing,
+                        &mut self.control_finishing,
+                        &mut self.control_finished,
+                        &mut self.mqtt_engine,
+                        stream_id,
+                        "recv_finished",
+                        true,
+                        &mut mqtt_events,
+                    );
                 }
             }
 
@@ -2036,12 +2379,37 @@ impl QuicMqttEngine {
             let data_ids: Vec<StreamId> = self.data_streams.keys().copied().collect();
             let max_event_count = self.mqtt_engine.options().max_event_count;
             for stream_id in data_ids {
+                if !self.data_streams.contains_key(&stream_id) {
+                    continue;
+                }
+
                 // Back-pressure: stop reading inbound data once the application
                 // event buffer is full (mirrors `handle_incoming`). Undecoded bytes
                 // stay in quinn-proto's receive buffer, flow-controlling the peer,
                 // and are processed on a later tick after events are drained.
                 if mqtt_events.len() >= max_event_count {
                     break;
+                }
+
+                let reset_code = {
+                    let mut stream = conn.recv_stream(stream_id);
+                    stream.received_reset().ok().flatten()
+                };
+                if let Some(error_code) = reset_code {
+                    Self::handle_stream_reset_fields(
+                        &mut self.control_stream,
+                        &mut self.data_streams,
+                        &mut self.default_pub_stream,
+                        &mut self.default_sub_stream,
+                        &mut self.control_outgoing,
+                        &mut self.control_finishing,
+                        &mut self.control_finished,
+                        &mut self.mqtt_engine,
+                        stream_id,
+                        error_code,
+                        &mut mqtt_events,
+                    );
+                    continue;
                 }
 
                 // Back-pressure: if this stream's bounded send buffer is already
@@ -2058,13 +2426,66 @@ impl QuicMqttEngine {
                     continue;
                 }
 
-                let mut stream = conn.recv_stream(stream_id);
-                let read_result = stream.read(true);
-                if let Ok(mut chunks) = read_result {
-                    while let Ok(Some(chunk)) = chunks.next(16384) {
-                        if let Some(ds) = self.data_streams.get_mut(&stream_id) {
-                            ds.parser.feed(&chunk.bytes);
+                let recv_closed = self
+                    .data_streams
+                    .get(&stream_id)
+                    .map(|ds| ds.recv_closed)
+                    .unwrap_or(true);
+                if !recv_closed {
+                    let mut recv_finished = false;
+                    let mut read_reset = None;
+                    {
+                        let mut stream = conn.recv_stream(stream_id);
+                        let read_result = stream.read(true);
+                        if let Ok(mut chunks) = read_result {
+                            loop {
+                                match chunks.next(16384) {
+                                    Ok(Some(chunk)) => {
+                                        if let Some(ds) = self.data_streams.get_mut(&stream_id) {
+                                            ds.parser.feed(&chunk.bytes);
+                                        }
+                                    }
+                                    Ok(None) => {
+                                        recv_finished = true;
+                                        break;
+                                    }
+                                    Err(quinn_proto::ReadError::Reset(error_code)) => {
+                                        read_reset = Some(error_code);
+                                        break;
+                                    }
+                                    Err(_) => break,
+                                }
+                            }
                         }
+                    }
+                    if let Some(error_code) = read_reset {
+                        Self::handle_stream_reset_fields(
+                            &mut self.control_stream,
+                            &mut self.data_streams,
+                            &mut self.default_pub_stream,
+                            &mut self.default_sub_stream,
+                            &mut self.control_outgoing,
+                            &mut self.control_finishing,
+                            &mut self.control_finished,
+                            &mut self.mqtt_engine,
+                            stream_id,
+                            error_code,
+                            &mut mqtt_events,
+                        );
+                        continue;
+                    } else if recv_finished {
+                        Self::handle_stream_closed_fields(
+                            &mut self.control_stream,
+                            &mut self.data_streams,
+                            &mut self.control_outgoing,
+                            &mut self.control_finishing,
+                            &mut self.control_finished,
+                            &mut self.mqtt_engine,
+                            stream_id,
+                            "recv_finished",
+                            true,
+                            &mut mqtt_events,
+                        );
                     }
                 }
                 // `chunks`/`stream` are dropped here, releasing the connection
@@ -3327,6 +3748,119 @@ mod tests {
         assert!(quic_error_code(0).is_ok());
         assert!(quic_error_code((1u64 << 62) - 1).is_ok());
         assert!(quic_error_code(u64::MAX).is_err());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_stream_abort_events_clear_data_stream_refs() {
+        use quinn_proto::{Dir, Side, StreamId};
+
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+        let reset_stream = StreamId::new(Side::Client, Dir::Bi, 1);
+        engine
+            .data_streams
+            .insert(reset_stream, QuicStream::new(1024, 5, 1000));
+        engine.default_pub_stream = Some(reset_stream);
+
+        let mut events = Vec::new();
+        engine.handle_stream_reset(reset_stream, VarInt::from_u32(42), &mut events);
+
+        assert!(matches!(
+            events.as_slice(),
+            [MqttEvent::StreamReset {
+                stream_id,
+                error_code: 42
+            }] if *stream_id == u64::from(reset_stream)
+        ));
+        assert!(!engine.data_streams.contains_key(&reset_stream));
+        assert_eq!(engine.default_pub_stream, None);
+
+        let stopped_stream = StreamId::new(Side::Client, Dir::Bi, 2);
+        engine
+            .data_streams
+            .insert(stopped_stream, QuicStream::new(1024, 5, 1000));
+        engine.default_sub_stream = Some(stopped_stream);
+
+        events.clear();
+        engine.handle_stream_stopped(stopped_stream, VarInt::from_u32(7), &mut events);
+
+        assert!(matches!(
+            events.as_slice(),
+            [MqttEvent::StreamStopped {
+                stream_id,
+                error_code: 7
+            }] if *stream_id == u64::from(stopped_stream)
+        ));
+        assert!(!engine.data_streams.contains_key(&stopped_stream));
+        assert_eq!(engine.default_sub_stream, None);
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_stream_closed_events_mark_half_close_state() {
+        use quinn_proto::{Dir, Side, StreamId};
+
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+        let data = StreamId::new(Side::Client, Dir::Bi, 1);
+        engine
+            .data_streams
+            .insert(data, QuicStream::new(1024, 5, 1000));
+
+        let mut events = Vec::new();
+        engine.handle_stream_closed(data, "recv_finished", true, &mut events);
+
+        assert!(matches!(
+            events.as_slice(),
+            [MqttEvent::StreamClosed {
+                stream_id,
+                reason,
+                by_peer: true
+            }] if *stream_id == u64::from(data) && reason == "recv_finished"
+        ));
+        assert!(engine.data_streams.get(&data).unwrap().recv_closed);
+        assert!(!engine.data_streams.get(&data).unwrap().finished);
+
+        events.clear();
+        engine.handle_stream_closed(data, "send_finished", false, &mut events);
+
+        assert!(matches!(
+            events.as_slice(),
+            [MqttEvent::StreamClosed {
+                stream_id,
+                reason,
+                by_peer: false
+            }] if *stream_id == u64::from(data) && reason == "send_finished"
+        ));
+        assert!(engine.data_streams.get(&data).unwrap().finished);
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_control_stream_abort_emits_disconnect() {
+        use quinn_proto::{Dir, Side, StreamId};
+
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+        let control = StreamId::new(Side::Client, Dir::Bi, 0);
+        engine.control_stream = Some(control);
+        engine.control_outgoing.extend_from_slice(&[1, 2, 3]);
+        engine.mqtt_engine.is_connected = true;
+
+        let mut events = Vec::new();
+        engine.handle_stream_reset(control, VarInt::from_u32(9), &mut events);
+
+        assert!(matches!(
+            events.as_slice(),
+            [
+                MqttEvent::StreamReset {
+                    stream_id,
+                    error_code: 9
+                },
+                MqttEvent::Disconnected(None)
+            ] if *stream_id == u64::from(control)
+        ));
+        assert_eq!(engine.control_stream, None);
+        assert!(engine.control_outgoing.is_empty());
+        assert!(!engine.mqtt_engine.is_connected());
     }
 
     #[cfg(feature = "quic-proto")]

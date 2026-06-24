@@ -1782,6 +1782,12 @@ impl TokioClientWorker {
                     // QUIC-transport-specific detail; the tokio (TCP/TLS) client
                     // surfaces loss via Disconnected/ReconnectNeeded instead.
                 }
+                MqttEvent::StreamClosed { .. }
+                | MqttEvent::StreamReset { .. }
+                | MqttEvent::StreamStopped { .. } => {
+                    // QUIC-stream-specific detail; this client does not expose
+                    // the Sans-I/O QUIC multi-stream API.
+                }
                 MqttEvent::ZeroRttStatusChanged { .. } => {
                     // QUIC-transport-specific detail; this client does not expose
                     // the Sans-I/O QUIC 0-RTT API.
