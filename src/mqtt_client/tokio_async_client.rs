@@ -2,6 +2,8 @@
 
 use std::collections::HashMap;
 use std::io;
+#[cfg(feature = "quic")]
+use std::net::SocketAddr;
 use std::pin::Pin;
 use std::time::{Duration, Instant};
 
@@ -256,6 +258,10 @@ pub struct TokioAsyncClientConfig {
     /// Only used when connecting via quic:// URLs (requires `quic` feature)
     #[cfg(feature = "quic")]
     pub quic_datagram_receive_buffer_size: usize,
+    /// QUIC transport: Local UDP address to bind before connecting
+    /// Only used when connecting via quic:// URLs (requires `quic` feature)
+    #[cfg(feature = "quic")]
+    pub quic_local_bind_addr: Option<SocketAddr>,
     /// QUIC transport: Enable TLS key logging (writes to SSLKEYLOGFILE)
     /// Only used when connecting via quic:// URLs (requires `quic` feature)
     #[cfg(feature = "quic")]
@@ -300,6 +306,8 @@ impl Default for TokioAsyncClientConfig {
             quic_client_key_pem: None, // No client key by default
             #[cfg(feature = "quic")]
             quic_datagram_receive_buffer_size: 0, // Disable datagram
+            #[cfg(feature = "quic")]
+            quic_local_bind_addr: None, // Use OS-selected source address by default
             #[cfg(feature = "quic")]
             quic_enable_key_log: false, // Disable key logging by default
             #[cfg(feature = "rustls-tls")]
@@ -772,6 +780,16 @@ impl ConfigBuilder {
     #[cfg(feature = "quic")]
     pub fn quic_datagram_receive_buffer_size(mut self, size: usize) -> Self {
         self.config.quic_datagram_receive_buffer_size = size;
+        self
+    }
+
+    /// Bind QUIC connections to a local UDP address before connecting.
+    ///
+    /// Use port `0` to let the OS assign an ephemeral source port.
+    /// Only applies when connecting via quic:// URLs (requires `quic` feature)
+    #[cfg(feature = "quic")]
+    pub fn quic_local_bind_addr(mut self, addr: SocketAddr) -> Self {
+        self.config.quic_local_bind_addr = Some(addr);
         self
     }
 
@@ -2138,6 +2156,10 @@ impl TokioClientWorker {
 
                 if self.config.quic_enable_key_log {
                     builder = builder.enable_key_log(true);
+                }
+
+                if let Some(local_bind_addr) = self.config.quic_local_bind_addr {
+                    builder = builder.local_bind_addr(local_bind_addr);
                 }
                 let cfg = builder.build();
 

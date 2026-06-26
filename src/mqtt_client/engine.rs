@@ -1614,6 +1614,20 @@ impl QuicMqttEngine {
         self.establish(now)
     }
 
+    /// Notify quinn-proto that the embedding runtime has switched to a new local UDP address.
+    ///
+    /// The sans-I/O engine does not own sockets, so the caller is responsible for
+    /// rebinding/replacing the UDP socket used to send [`take_outgoing_datagrams`](Self::take_outgoing_datagrams).
+    /// This hook mirrors Quinn's async `Endpoint::rebind` behavior for active
+    /// connections: it rotates to a fresh remote connection ID when available and
+    /// queues a PING so the peer can validate the new path.
+    pub fn notify_local_address_changed(&mut self) -> Result<(), MqttClientError> {
+        if let Some(conn) = &mut self.connection {
+            conn.local_address_changed();
+        }
+        Ok(())
+    }
+
     fn client_config_from_crypto(
         crypto_config: rustls::ClientConfig,
     ) -> Result<ClientConfig, MqttClientError> {
@@ -3896,6 +3910,27 @@ mod tests {
         // Rejected again once the control stream is finished.
         engine.control_finished = true;
         assert!(engine.ping().is_err());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_notify_local_address_changed_noop_and_connected() {
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+
+        assert!(engine.notify_local_address_changed().is_ok());
+        assert!(engine.connection.is_none());
+
+        engine
+            .connect(
+                "127.0.0.1:4433".parse().unwrap(),
+                "localhost",
+                quic_test_crypto_config(),
+                Instant::now(),
+            )
+            .unwrap();
+        assert!(engine.connection.is_some());
+        assert!(engine.notify_local_address_changed().is_ok());
+        assert!(engine.connection.is_some());
     }
 
     #[cfg(feature = "quic-proto")]

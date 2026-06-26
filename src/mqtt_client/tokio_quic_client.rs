@@ -4,7 +4,7 @@ use super::commands::{PublishCommand, SubscribeCommand, UnsubscribeCommand};
 use super::engine::{MqttEvent, QuicMqttEngine};
 use super::opts::MqttClientOptions;
 use std::collections::VecDeque;
-use std::net::SocketAddr;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::time::{Duration, Instant};
 use tokio::net::UdpSocket;
 use tokio::sync::{mpsc, oneshot};
@@ -24,7 +24,12 @@ pub enum QuicCommand {
         server_addr: SocketAddr,
         server_name: String,
         crypto: Box<rustls::ClientConfig>,
+        local_bind_addr: Option<SocketAddr>,
         resp: oneshot::Sender<CommandResult<()>>,
+    },
+    Rebind {
+        local_addr: SocketAddr,
+        resp: oneshot::Sender<CommandResult<SocketAddr>>,
     },
     Publish {
         cmd: PublishCommand,
@@ -69,16 +74,42 @@ impl TokioQuicMqttClient {
         server_name: String,
         crypto: rustls::ClientConfig,
     ) -> CommandResult<()> {
+        self.connect_with_bind(server_addr, server_name, crypto, None)
+            .await
+    }
+
+    pub async fn connect_with_bind(
+        &self,
+        server_addr: SocketAddr,
+        server_name: String,
+        crypto: rustls::ClientConfig,
+        local_bind_addr: Option<SocketAddr>,
+    ) -> CommandResult<()> {
         let (tx, rx) = oneshot::channel();
         self.command_tx
             .send(QuicCommand::Connect {
                 server_addr,
                 server_name,
                 crypto: Box::new(crypto),
+                local_bind_addr,
                 resp: tx,
             })
             .await
             .map_err(|_| "Failed to send connect command")?;
+        rx.await
+            .map_err(|_| "Command response channel dropped".into())
+            .and_then(|r| r)
+    }
+
+    pub async fn rebind(&self, local_addr: SocketAddr) -> CommandResult<SocketAddr> {
+        let (tx, rx) = oneshot::channel();
+        self.command_tx
+            .send(QuicCommand::Rebind {
+                local_addr,
+                resp: tx,
+            })
+            .await
+            .map_err(|_| "Failed to send rebind command")?;
         rx.await
             .map_err(|_| "Command response channel dropped".into())
             .and_then(|r| r)
@@ -148,14 +179,25 @@ async fn run_engine_loop(
         tokio::select! {
             Some(cmd) = command_rx.recv() => {
                 match cmd {
-                    QuicCommand::Connect { server_addr, server_name, crypto, resp } => {
+                    QuicCommand::Connect { server_addr, server_name, crypto, local_bind_addr, resp } => {
                         let res = (|| -> CommandResult<()> {
-                            //@TODO: bind to a specific address
-                            let std_socket = std::net::UdpSocket::bind("0.0.0.0:0")?;
+                            let bind_addr = bind_addr_for_peer(server_addr, local_bind_addr)?;
+                            let std_socket = std::net::UdpSocket::bind(bind_addr)?;
                             std_socket.set_nonblocking(true)?;
                             socket = Some(UdpSocket::from_std(std_socket)?);
                             engine.connect(server_addr, &server_name, *crypto, Instant::now())?;
                             Ok(())
+                        })();
+                        let _ = resp.send(res);
+                    }
+                    QuicCommand::Rebind { local_addr, resp } => {
+                        let res = (|| -> CommandResult<SocketAddr> {
+                            let std_socket = std::net::UdpSocket::bind(local_addr)?;
+                            std_socket.set_nonblocking(true)?;
+                            let bound_addr = std_socket.local_addr()?;
+                            socket = Some(UdpSocket::from_std(std_socket)?);
+                            engine.notify_local_address_changed()?;
+                            Ok(bound_addr)
                         })();
                         let _ = resp.send(res);
                     }
@@ -219,4 +261,27 @@ async fn run_engine_loop(
             }
         }
     }
+}
+
+fn bind_addr_for_peer(
+    peer: SocketAddr,
+    requested: Option<SocketAddr>,
+) -> CommandResult<SocketAddr> {
+    if let Some(addr) = requested {
+        if addr.is_ipv4() != peer.is_ipv4() {
+            return Err(format!(
+                "QUIC local bind address family ({}) does not match peer address family ({})",
+                addr, peer
+            )
+            .into());
+        }
+        return Ok(addr);
+    }
+
+    let ip = if peer.is_ipv4() {
+        IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+    } else {
+        IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+    };
+    Ok(SocketAddr::new(ip, 0))
 }

@@ -23,6 +23,7 @@
 - [ ] Client support MQTT v3
 - [ ] UnixDomain socket
 - [ ] QUIC support (multi stream)
+- [ ] FFI/language wrappers for QUIC source bind/rebind and local-address-change notification
 - [ ] Service discovery for distributed deployments
 - [ ] WebSocket transport support
 - [ ] Packet inspection utilities
