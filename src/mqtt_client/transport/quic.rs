@@ -6,6 +6,7 @@
 mod imp {
     use super::super::{Transport, TransportError};
     use async_trait::async_trait;
+    use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
     use std::pin::Pin;
     use std::task::{Context, Poll};
     use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
@@ -95,6 +96,8 @@ mod imp {
         pub datagram_receive_buffer_size: usize,
         /// Enable TLS key logging (writes to the file specified by SSLKEYLOGFILE env var)
         pub enable_key_log: bool,
+        /// Optional local UDP address to bind before connecting.
+        pub local_bind_addr: Option<SocketAddr>,
     }
 
     /// Builder for `QuicConfig` to simplify ergonomic construction.
@@ -107,6 +110,7 @@ mod imp {
         insecure_skip_verify: bool,
         datagram_receive_buffer_size: usize,
         enable_key_log: bool,
+        local_bind_addr: Option<SocketAddr>,
     }
 
     impl QuicConfigBuilder {
@@ -286,6 +290,20 @@ mod imp {
             self
         }
 
+        /// Bind the QUIC UDP socket to a specific local address before connecting.
+        ///
+        /// Use port `0` to let the OS assign an ephemeral source port.
+        pub fn local_bind_addr(mut self, addr: SocketAddr) -> Self {
+            self.local_bind_addr = Some(addr);
+            self
+        }
+
+        /// Bind the QUIC UDP socket to a specific local IP with an ephemeral port.
+        pub fn local_bind_ip(mut self, ip: IpAddr) -> Self {
+            self.local_bind_addr = Some(SocketAddr::new(ip, 0));
+            self
+        }
+
         /// Finalize the builder into a `QuicConfig`.
         pub fn build(self) -> QuicConfig {
             QuicConfig {
@@ -297,6 +315,7 @@ mod imp {
                 insecure_skip_verify: self.insecure_skip_verify,
                 datagram_receive_buffer_size: self.datagram_receive_buffer_size,
                 enable_key_log: self.enable_key_log,
+                local_bind_addr: self.local_bind_addr,
             }
         }
     }
@@ -313,6 +332,7 @@ mod imp {
                 insecure_skip_verify: false,
                 datagram_receive_buffer_size: 0,
                 enable_key_log: false,
+                local_bind_addr: None,
             }
         }
     }
@@ -454,8 +474,10 @@ mod imp {
             trpt_cfg.datagram_receive_buffer_size(Some(cfg.datagram_receive_buffer_size));
             quinn_crypto.transport_config(Arc::new(trpt_cfg));
 
-            // Create an endpoint bound to an ephemeral UDP port
-            let socket = std::net::UdpSocket::bind("0.0.0.0:0").map_err(|e| {
+            let bind_addr = bind_addr_for_peer(peer, cfg.local_bind_addr)?;
+
+            // Create an endpoint bound to an ephemeral UDP port, or the caller's requested source address.
+            let socket = std::net::UdpSocket::bind(bind_addr).map_err(|e| {
                 TransportError::ConnectionFailed(format!("QUIC endpoint create failed: {}", e))
             })?;
             let runtime = quinn::default_runtime()
@@ -494,6 +516,21 @@ mod imp {
                 recv,
             })
         }
+
+        /// Rebind the underlying QUIC endpoint to a new UDP socket.
+        ///
+        /// This changes the source address used for future packets on all active
+        /// connections managed by the endpoint. Use port `0` to let the OS assign
+        /// a new ephemeral source port.
+        pub fn rebind(&self, local_addr: SocketAddr) -> Result<SocketAddr, TransportError> {
+            let socket = std::net::UdpSocket::bind(local_addr).map_err(|e| {
+                TransportError::ConnectionFailed(format!("QUIC endpoint rebind failed: {}", e))
+            })?;
+            self.endpoint.rebind(socket).map_err(|e| {
+                TransportError::ConnectionFailed(format!("QUIC endpoint rebind failed: {}", e))
+            })?;
+            self.endpoint.local_addr().map_err(TransportError::Io)
+        }
     }
 
     #[async_trait]
@@ -528,6 +565,28 @@ mod imp {
 
     fn endpoint_local_addr(endpoint: &Endpoint) -> Option<String> {
         endpoint.local_addr().ok().map(|s| s.to_string())
+    }
+
+    fn bind_addr_for_peer(
+        peer: SocketAddr,
+        requested: Option<SocketAddr>,
+    ) -> Result<SocketAddr, TransportError> {
+        if let Some(addr) = requested {
+            if addr.is_ipv4() != peer.is_ipv4() {
+                return Err(TransportError::InvalidAddress(format!(
+                    "QUIC local bind address family ({}) does not match peer address family ({})",
+                    addr, peer
+                )));
+            }
+            return Ok(addr);
+        }
+
+        let ip = if peer.is_ipv4() {
+            IpAddr::V4(Ipv4Addr::UNSPECIFIED)
+        } else {
+            IpAddr::V6(Ipv6Addr::UNSPECIFIED)
+        };
+        Ok(SocketAddr::new(ip, 0))
     }
 
     impl AsyncRead for QuicTransport {
