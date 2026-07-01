@@ -977,11 +977,11 @@ impl MqttEngine {
                 let pid = p.packet_id;
                 events.push(MqttEvent::MessageReceived(p));
 
-                if qos == 1 {
+                if self.options.auto_ack && qos == 1 {
                     if let Some(pid) = pid {
                         responses.push(MqttPacket::PubAck5(MqttPubAck::new(pid, 0, Vec::new())));
                     }
-                } else if qos == 2 {
+                } else if self.options.auto_ack && qos == 2 {
                     if let Some(pid) = pid {
                         responses.push(MqttPacket::PubRec5(MqttPubRec::new(pid, 0, Vec::new())));
                     }
@@ -1002,13 +1002,13 @@ impl MqttEngine {
                 );
                 events.push(MqttEvent::MessageReceived(p5));
 
-                if qos == 1 {
+                if self.options.auto_ack && qos == 1 {
                     if let Some(pid) = pid {
                         responses.push(MqttPacket::PubAck3(
                             crate::mqtt_serde::mqttv3::puback::MqttPubAck::new(pid),
                         ));
                     }
-                } else if qos == 2 {
+                } else if self.options.auto_ack && qos == 2 {
                     if let Some(pid) = pid {
                         responses.push(MqttPacket::PubRec3(
                             crate::mqtt_serde::mqttv3::pubrec::MqttPubRec::new(pid),
@@ -1082,16 +1082,20 @@ impl MqttEngine {
                 }
             }
             MqttPacket::PubRel5(rel) => {
-                responses.push(MqttPacket::PubComp5(MqttPubComp::new(
-                    rel.packet_id,
-                    0,
-                    Vec::new(),
-                )));
+                if self.options.auto_ack {
+                    responses.push(MqttPacket::PubComp5(MqttPubComp::new(
+                        rel.packet_id,
+                        0,
+                        Vec::new(),
+                    )));
+                }
             }
             MqttPacket::PubRel3(rel) => {
-                responses.push(MqttPacket::PubComp3(
-                    crate::mqtt_serde::mqttv3::pubcomp::MqttPubComp::new(rel.message_id),
-                ));
+                if self.options.auto_ack {
+                    responses.push(MqttPacket::PubComp3(
+                        crate::mqtt_serde::mqttv3::pubcomp::MqttPubComp::new(rel.message_id),
+                    ));
+                }
             }
             MqttPacket::PubComp5(comp) => {
                 if let Some(entry) = self.inflight_queue.acknowledge(comp.packet_id) {
@@ -3166,6 +3170,78 @@ impl QuicMqttEngine {
         self.send_raw_on(stream, &bytes)
     }
 
+    /// Send a success PUBACK on a specific QUIC stream.
+    ///
+    /// This is a typed convenience wrapper around [`send_packet_on`](Self::send_packet_on)
+    /// for manual-ack tests. It does not update protocol/inflight state.
+    pub fn puback_on(&mut self, stream: u64, packet_id: u16) -> Result<(), MqttClientError> {
+        self.send_packet_on(stream, self.puback_packet(packet_id))
+    }
+
+    /// Send a success PUBREC on a specific QUIC stream.
+    ///
+    /// This is a typed convenience wrapper around [`send_packet_on`](Self::send_packet_on)
+    /// for manual-ack tests. It does not update protocol/inflight state.
+    pub fn pubrec_on(&mut self, stream: u64, packet_id: u16) -> Result<(), MqttClientError> {
+        self.send_packet_on(stream, self.pubrec_packet(packet_id))
+    }
+
+    /// Send a success PUBREL on a specific QUIC stream.
+    ///
+    /// This is a typed convenience wrapper around [`send_packet_on`](Self::send_packet_on)
+    /// for manual-ack tests. It does not update protocol/inflight state.
+    pub fn pubrel_on(&mut self, stream: u64, packet_id: u16) -> Result<(), MqttClientError> {
+        self.send_packet_on(stream, self.pubrel_packet(packet_id))
+    }
+
+    /// Send a success PUBCOMP on a specific QUIC stream.
+    ///
+    /// This is a typed convenience wrapper around [`send_packet_on`](Self::send_packet_on)
+    /// for manual-ack tests. It does not update protocol/inflight state.
+    pub fn pubcomp_on(&mut self, stream: u64, packet_id: u16) -> Result<(), MqttClientError> {
+        self.send_packet_on(stream, self.pubcomp_packet(packet_id))
+    }
+
+    fn puback_packet(&self, packet_id: u16) -> MqttPacket {
+        if self.mqtt_engine.mqtt_version() == 5 {
+            MqttPacket::PubAck5(MqttPubAck::new(packet_id, 0, Vec::new()))
+        } else {
+            MqttPacket::PubAck3(crate::mqtt_serde::mqttv3::puback::MqttPubAck::new(
+                packet_id,
+            ))
+        }
+    }
+
+    fn pubrec_packet(&self, packet_id: u16) -> MqttPacket {
+        if self.mqtt_engine.mqtt_version() == 5 {
+            MqttPacket::PubRec5(MqttPubRec::new(packet_id, 0, Vec::new()))
+        } else {
+            MqttPacket::PubRec3(crate::mqtt_serde::mqttv3::pubrec::MqttPubRec::new(
+                packet_id,
+            ))
+        }
+    }
+
+    fn pubrel_packet(&self, packet_id: u16) -> MqttPacket {
+        if self.mqtt_engine.mqtt_version() == 5 {
+            MqttPacket::PubRel5(MqttPubRel::new(packet_id, 0, Vec::new()))
+        } else {
+            MqttPacket::PubRel3(crate::mqtt_serde::mqttv3::pubrel::MqttPubRel::new(
+                packet_id,
+            ))
+        }
+    }
+
+    fn pubcomp_packet(&self, packet_id: u16) -> MqttPacket {
+        if self.mqtt_engine.mqtt_version() == 5 {
+            MqttPacket::PubComp5(MqttPubComp::new(packet_id, 0, Vec::new()))
+        } else {
+            MqttPacket::PubComp3(crate::mqtt_serde::mqttv3::pubcomp::MqttPubComp::new(
+                packet_id,
+            ))
+        }
+    }
+
     /// Borrow the underlying sans-I/O MQTT protocol engine (the "middle layer").
     ///
     /// Exposed so tests can drive the protocol state machine directly — inspect
@@ -3439,6 +3515,114 @@ mod tests {
     }
 
     #[cfg(feature = "quic-proto")]
+    fn parse_packets(bytes: &[u8], mqtt_version: u8) -> Vec<MqttPacket> {
+        use crate::mqtt_serde::parser::ParseOk;
+
+        let mut packets = Vec::new();
+        let mut offset = 0;
+        while offset < bytes.len() {
+            match MqttPacket::from_bytes_with_version(&bytes[offset..], mqtt_version).unwrap() {
+                ParseOk::Packet(packet, consumed) => {
+                    packets.push(packet);
+                    offset += consumed;
+                }
+                ParseOk::Continue(_, _) => panic!("unexpected partial packet"),
+                ParseOk::TopicName(_, _) => panic!("unexpected topic-name parse result"),
+            }
+        }
+        packets
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_manual_ack_helpers_route_v5_packets_to_target_stream() {
+        use quinn_proto::{Dir, Side, StreamId};
+
+        let mut engine = QuicMqttEngine::new(
+            MqttClientOptions::builder()
+                .mqtt_version(5)
+                .auto_ack(false)
+                .build(),
+        )
+        .unwrap();
+        let data = StreamId::new(Side::Client, Dir::Bi, 1);
+        engine
+            .data_streams
+            .insert(data, QuicStream::new(1024, 5, 1000));
+
+        engine.puback_on(u64::from(data), 11).unwrap();
+        engine.pubrec_on(u64::from(data), 12).unwrap();
+        engine.pubrel_on(u64::from(data), 13).unwrap();
+        engine.pubcomp_on(u64::from(data), 14).unwrap();
+
+        let bytes = &engine.data_streams.get(&data).unwrap().outgoing;
+        let packets = parse_packets(bytes, 5);
+        assert_eq!(packets.len(), 4);
+        assert!(
+            matches!(&packets[0], MqttPacket::PubAck5(p) if p.packet_id == 11 && p.reason_code == 0)
+        );
+        assert!(
+            matches!(&packets[1], MqttPacket::PubRec5(p) if p.packet_id == 12 && p.reason_code == 0)
+        );
+        assert!(
+            matches!(&packets[2], MqttPacket::PubRel5(p) if p.packet_id == 13 && p.reason_code == 0)
+        );
+        assert!(
+            matches!(&packets[3], MqttPacket::PubComp5(p) if p.packet_id == 14 && p.reason_code == 0)
+        );
+        assert!(engine.control_outgoing.is_empty());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_manual_ack_helpers_route_v3_packets_to_target_stream() {
+        use quinn_proto::{Dir, Side, StreamId};
+
+        let mut engine = QuicMqttEngine::new(
+            MqttClientOptions::builder()
+                .mqtt_version(3)
+                .auto_ack(false)
+                .build(),
+        )
+        .unwrap();
+        let data = StreamId::new(Side::Client, Dir::Bi, 1);
+        engine
+            .data_streams
+            .insert(data, QuicStream::new(1024, 3, 1000));
+
+        engine.puback_on(u64::from(data), 21).unwrap();
+        engine.pubrec_on(u64::from(data), 22).unwrap();
+        engine.pubrel_on(u64::from(data), 23).unwrap();
+        engine.pubcomp_on(u64::from(data), 24).unwrap();
+
+        let bytes = &engine.data_streams.get(&data).unwrap().outgoing;
+        let packets = parse_packets(bytes, 3);
+        assert_eq!(packets.len(), 4);
+        assert!(matches!(&packets[0], MqttPacket::PubAck3(p) if p.message_id == 21));
+        assert!(matches!(&packets[1], MqttPacket::PubRec3(p) if p.message_id == 22));
+        assert!(matches!(&packets[2], MqttPacket::PubRel3(p) if p.message_id == 23));
+        assert!(matches!(&packets[3], MqttPacket::PubComp3(p) if p.message_id == 24));
+        assert!(engine.control_outgoing.is_empty());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_manual_ack_helpers_preserve_send_packet_on_errors() {
+        use quinn_proto::{Dir, Side, StreamId};
+
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+        let data = StreamId::new(Side::Client, Dir::Bi, 1);
+        engine
+            .data_streams
+            .insert(data, QuicStream::new(1024, 5, 1000));
+
+        assert!(engine.puback_on(9999, 1).is_err());
+
+        engine.data_streams.get_mut(&data).unwrap().finished = true;
+        assert!(engine.pubrec_on(u64::from(data), 2).is_err());
+    }
+
+    #[cfg(feature = "quic-proto")]
     #[test]
     fn test_drain_data_stream_bounds_response_buffer() {
         use quinn_proto::{Dir, Side, StreamId};
@@ -3593,6 +3777,131 @@ mod tests {
         assert!(
             engine.outgoing_buffer.is_empty(),
             "ack must not cross-fire onto the shared/control buffer"
+        );
+    }
+
+    #[test]
+    fn test_auto_ack_false_suppresses_shared_publish_acks() {
+        let mut engine = MqttEngine::new(
+            MqttClientOptions::builder()
+                .auto_ack(false)
+                .mqtt_version(5)
+                .build(),
+        );
+        engine.is_connected = true;
+
+        let qos1 = MqttPublish::new_with_prop(
+            1,
+            "t/qos1".to_string(),
+            Some(42),
+            b"payload".to_vec(),
+            false,
+            false,
+            Vec::new(),
+        );
+        let events = engine.handle_incoming(&MqttPacket::Publish5(qos1).to_bytes().unwrap());
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, MqttEvent::MessageReceived(_))));
+        assert!(
+            engine.take_outgoing().is_empty(),
+            "auto_ack(false) must suppress PUBACK"
+        );
+
+        let qos2 = MqttPublish::new_with_prop(
+            2,
+            "t/qos2".to_string(),
+            Some(43),
+            b"payload".to_vec(),
+            false,
+            false,
+            Vec::new(),
+        );
+        let events = engine.handle_incoming(&MqttPacket::Publish5(qos2).to_bytes().unwrap());
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, MqttEvent::MessageReceived(_))));
+        assert!(
+            engine.take_outgoing().is_empty(),
+            "auto_ack(false) must suppress PUBREC"
+        );
+    }
+
+    #[test]
+    fn test_auto_ack_false_suppresses_shared_pubrel_ack() {
+        let mut engine = MqttEngine::new(
+            MqttClientOptions::builder()
+                .auto_ack(false)
+                .mqtt_version(5)
+                .build(),
+        );
+        engine.is_connected = true;
+
+        let pubrel = MqttPacket::PubRel5(MqttPubRel::new(44, 0, Vec::new()));
+        let events = engine.handle_incoming(&pubrel.to_bytes().unwrap());
+        assert!(events.is_empty());
+        assert!(
+            engine.take_outgoing().is_empty(),
+            "auto_ack(false) must suppress PUBCOMP"
+        );
+    }
+
+    #[test]
+    fn test_auto_ack_false_suppresses_stream_publish_and_pubrel_acks() {
+        let mut engine = MqttEngine::new(
+            MqttClientOptions::builder()
+                .auto_ack(false)
+                .mqtt_version(5)
+                .build(),
+        );
+        engine.is_connected = true;
+
+        let publish = MqttPublish::new_with_prop(
+            1,
+            "t/1".to_string(),
+            Some(45),
+            b"payload".to_vec(),
+            false,
+            false,
+            Vec::new(),
+        );
+        let (events, resp) = engine.ingest_stream_packet(MqttPacket::Publish5(publish), 5);
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, MqttEvent::MessageReceived(_))));
+        assert!(resp.is_empty(), "auto_ack(false) must suppress PUBACK");
+
+        let pubrel = MqttPacket::PubRel5(MqttPubRel::new(46, 0, Vec::new()));
+        let (events, resp) = engine.ingest_stream_packet(pubrel, 5);
+        assert!(events.is_empty());
+        assert!(resp.is_empty(), "auto_ack(false) must suppress PUBCOMP");
+    }
+
+    #[test]
+    fn test_auto_ack_false_suppresses_v3_publish_ack() {
+        let mut engine = MqttEngine::new(
+            MqttClientOptions::builder()
+                .auto_ack(false)
+                .mqtt_version(3)
+                .build(),
+        );
+        engine.is_connected = true;
+
+        let publish = crate::mqtt_serde::mqttv3::publish::MqttPublish::new(
+            "t/v3".to_string(),
+            1,
+            b"payload".to_vec(),
+            Some(47),
+            false,
+            false,
+        );
+        let events = engine.handle_incoming(&MqttPacket::Publish3(publish).to_bytes().unwrap());
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, MqttEvent::MessageReceived(_))));
+        assert!(
+            engine.take_outgoing().is_empty(),
+            "auto_ack(false) must suppress v3 PUBACK"
         );
     }
 
