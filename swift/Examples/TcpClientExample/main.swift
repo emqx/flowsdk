@@ -122,6 +122,12 @@ func handleEvent(_ event: MqttEventFfi, engine: MqttEngineFfi, fd: Int32,
         print("ℹ Reconnect attempt \(attempt) in \(delayMs)ms")
     case .pingResponse(let success):
         print("ℹ Ping response: success=\(success)")
+    case .streamClosed(_, _, _):
+        break
+    case .streamReset(_, _):
+        break
+    case .streamStopped(_, _):
+        break
     case .unsubscribed(_):
         break
     }

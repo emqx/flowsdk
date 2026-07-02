@@ -199,6 +199,12 @@ while nowMs(since: engineStartMs) < runDurationMs {
             print("ℹ Reconnect attempt \(attempt) in \(delayMs)ms")
         case .pingResponse(let success):
             print("ℹ Ping response: success=\(success)")
+        case .streamClosed(let streamId, let reason, let byPeer):
+            print("ℹ Stream \(streamId) closed: \(reason), byPeer=\(byPeer)")
+        case .streamReset(let streamId, let errorCode):
+            print("ℹ Stream \(streamId) reset: errorCode=\(errorCode)")
+        case .streamStopped(let streamId, let errorCode):
+            print("ℹ Stream \(streamId) stopped: errorCode=\(errorCode)")
         case .unsubscribed(_):
             break
         }
