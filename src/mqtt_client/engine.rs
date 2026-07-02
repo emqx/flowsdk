@@ -1081,22 +1081,19 @@ impl MqttEngine {
                     responses.push(rel);
                 }
             }
-            MqttPacket::PubRel5(rel) => {
-                if self.options.auto_ack {
-                    responses.push(MqttPacket::PubComp5(MqttPubComp::new(
-                        rel.packet_id,
-                        0,
-                        Vec::new(),
-                    )));
-                }
+            MqttPacket::PubRel5(rel) if self.options.auto_ack => {
+                responses.push(MqttPacket::PubComp5(MqttPubComp::new(
+                    rel.packet_id,
+                    0,
+                    Vec::new(),
+                )));
             }
-            MqttPacket::PubRel3(rel) => {
-                if self.options.auto_ack {
-                    responses.push(MqttPacket::PubComp3(
-                        crate::mqtt_serde::mqttv3::pubcomp::MqttPubComp::new(rel.message_id),
-                    ));
-                }
+            MqttPacket::PubRel3(rel) if self.options.auto_ack => {
+                responses.push(MqttPacket::PubComp3(
+                    crate::mqtt_serde::mqttv3::pubcomp::MqttPubComp::new(rel.message_id),
+                ));
             }
+            MqttPacket::PubRel5(_) | MqttPacket::PubRel3(_) => {}
             MqttPacket::PubComp5(comp) => {
                 if let Some(entry) = self.inflight_queue.acknowledge(comp.packet_id) {
                     events.push(MqttEvent::Published(PublishResult {
@@ -1704,7 +1701,7 @@ impl QuicMqttEngine {
 
     fn append_control_outgoing_bytes(
         control_outgoing: &mut Vec<u8>,
-        early_stream_journal: &mut Vec<EarlyStreamJournal>,
+        early_stream_journal: &mut [EarlyStreamJournal],
         zero_rtt_status: QuicZeroRttStatus,
         control_stream: Option<StreamId>,
         bytes: &[u8],
@@ -1911,6 +1908,7 @@ impl QuicMqttEngine {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_stream_stopped_fields(
         control_stream: &mut Option<StreamId>,
         data_streams: &mut HashMap<StreamId, QuicStream>,
@@ -1973,6 +1971,7 @@ impl QuicMqttEngine {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_stream_reset_fields(
         control_stream: &mut Option<StreamId>,
         data_streams: &mut HashMap<StreamId, QuicStream>,
@@ -2035,6 +2034,7 @@ impl QuicMqttEngine {
         );
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn handle_stream_closed_fields(
         control_stream: &mut Option<StreamId>,
         data_streams: &mut HashMap<StreamId, QuicStream>,
