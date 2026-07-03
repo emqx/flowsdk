@@ -216,16 +216,7 @@ fn map_event(event: MqttEvent) -> Option<MqttEventFFI> {
         MqttEvent::Error(err) => Some(MqttEventFFI::Error {
             message: format!("{:?}", err),
         }),
-        MqttEvent::TransportClosed {
-            reason,
-            by_peer,
-            error_code,
-        } => Some(MqttEventFFI::Error {
-            message: format!(
-                "transport closed: {} (by_peer={}, error_code={:?})",
-                reason, by_peer, error_code
-            ),
-        }),
+        MqttEvent::TransportClosed { .. } => None,
         MqttEvent::StreamClosed {
             stream_id,
             reason,
@@ -249,9 +240,7 @@ fn map_event(event: MqttEvent) -> Option<MqttEventFFI> {
             stream_id,
             error_code,
         }),
-        MqttEvent::ZeroRttStatusChanged { status } => Some(MqttEventFFI::Error {
-            message: format!("unsupported QUIC 0-RTT status event over FFI: {:?}", status),
-        }),
+        MqttEvent::ZeroRttStatusChanged { .. } => None,
         MqttEvent::ReconnectNeeded => Some(MqttEventFFI::ReconnectNeeded),
         MqttEvent::ReconnectScheduled { attempt, delay } => {
             Some(MqttEventFFI::ReconnectScheduled {
@@ -259,6 +248,32 @@ fn map_event(event: MqttEvent) -> Option<MqttEventFFI> {
                 delay_ms: delay.as_millis() as u64,
             })
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flowsdk::mqtt_client::engine::QuicZeroRttStatus;
+
+    #[test]
+    fn zero_rtt_status_event_is_not_reported_as_ffi_error() {
+        let event = MqttEvent::ZeroRttStatusChanged {
+            status: QuicZeroRttStatus::Attempted,
+        };
+
+        assert!(map_event(event).is_none());
+    }
+
+    #[test]
+    fn transport_closed_event_is_not_reported_as_ffi_error() {
+        let event = MqttEvent::TransportClosed {
+            reason: "connection closed".to_string(),
+            by_peer: true,
+            error_code: Some(0),
+        };
+
+        assert!(map_event(event).is_none());
     }
 }
 
