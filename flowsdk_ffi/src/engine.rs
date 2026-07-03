@@ -255,6 +255,7 @@ fn map_event(event: MqttEvent) -> Option<MqttEventFFI> {
 mod tests {
     use super::*;
     use flowsdk::mqtt_client::engine::QuicZeroRttStatus;
+    use std::time::Duration;
 
     #[test]
     fn zero_rtt_status_event_is_not_reported_as_ffi_error() {
@@ -274,6 +275,56 @@ mod tests {
         };
 
         assert!(map_event(event).is_none());
+    }
+
+    #[test]
+    fn maps_stream_and_reconnect_events() {
+        assert!(matches!(
+            map_event(MqttEvent::StreamClosed {
+                stream_id: 7,
+                reason: "recv_finished".to_string(),
+                by_peer: true,
+            }),
+            Some(MqttEventFFI::StreamClosed {
+                stream_id: 7,
+                by_peer: true,
+                ..
+            })
+        ));
+        assert!(matches!(
+            map_event(MqttEvent::StreamReset {
+                stream_id: 8,
+                error_code: 42,
+            }),
+            Some(MqttEventFFI::StreamReset {
+                stream_id: 8,
+                error_code: 42,
+            })
+        ));
+        assert!(matches!(
+            map_event(MqttEvent::StreamStopped {
+                stream_id: 9,
+                error_code: 43,
+            }),
+            Some(MqttEventFFI::StreamStopped {
+                stream_id: 9,
+                error_code: 43,
+            })
+        ));
+        assert!(matches!(
+            map_event(MqttEvent::ReconnectNeeded),
+            Some(MqttEventFFI::ReconnectNeeded)
+        ));
+        assert!(matches!(
+            map_event(MqttEvent::ReconnectScheduled {
+                attempt: 3,
+                delay: Duration::from_millis(250),
+            }),
+            Some(MqttEventFFI::ReconnectScheduled {
+                attempt: 3,
+                delay_ms: 250,
+            })
+        ));
     }
 }
 
