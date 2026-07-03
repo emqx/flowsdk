@@ -93,7 +93,24 @@ pub enum MqttEvent {
     Published(PublishResult),
     Subscribed(SubscribeResult),
     Unsubscribed(UnsubscribeResult),
+    /// Incoming PUBLISH metadata.
+    ///
+    /// Emitted immediately before `MessageReceived`. `stream` identifies the
+    /// logical channel when the packet arrived on a QUIC data stream.
+    PublishReceived {
+        packet_id: Option<u16>,
+        stream: Option<u64>,
+    },
     MessageReceived(MqttMessage),
+    /// Incoming QoS 2 PUBREL received.
+    ///
+    /// Exposed so manual-ack clients can wait for PUBREL before sending PUBCOMP.
+    /// `stream` identifies the logical channel when the packet arrived on a QUIC
+    /// data stream.
+    PubRelReceived {
+        packet_id: u16,
+        stream: Option<u64>,
+    },
     PingResponse(PingResult),
     Error(MqttClientError),
     /// The underlying QUIC transport connection was lost or closed, with details
@@ -975,6 +992,10 @@ impl MqttEngine {
             MqttPacket::Publish5(p) => {
                 let qos = p.qos;
                 let pid = p.packet_id;
+                events.push(MqttEvent::PublishReceived {
+                    packet_id: pid,
+                    stream,
+                });
                 events.push(MqttEvent::MessageReceived(p));
 
                 if self.options.auto_ack && qos == 1 {
@@ -1000,6 +1021,10 @@ impl MqttEngine {
                     p.dup,
                     Vec::new(),
                 );
+                events.push(MqttEvent::PublishReceived {
+                    packet_id: pid,
+                    stream,
+                });
                 events.push(MqttEvent::MessageReceived(p5));
 
                 if self.options.auto_ack && qos == 1 {
@@ -1081,19 +1106,30 @@ impl MqttEngine {
                     responses.push(rel);
                 }
             }
-            MqttPacket::PubRel5(rel) if self.options.auto_ack => {
-                responses.push(MqttPacket::PubComp5(MqttPubComp::new(
-                    rel.packet_id,
-                    0,
-                    Vec::new(),
-                )));
+            MqttPacket::PubRel5(rel) => {
+                events.push(MqttEvent::PubRelReceived {
+                    packet_id: rel.packet_id,
+                    stream,
+                });
+                if self.options.auto_ack {
+                    responses.push(MqttPacket::PubComp5(MqttPubComp::new(
+                        rel.packet_id,
+                        0,
+                        Vec::new(),
+                    )));
+                }
             }
-            MqttPacket::PubRel3(rel) if self.options.auto_ack => {
-                responses.push(MqttPacket::PubComp3(
-                    crate::mqtt_serde::mqttv3::pubcomp::MqttPubComp::new(rel.message_id),
-                ));
+            MqttPacket::PubRel3(rel) => {
+                events.push(MqttEvent::PubRelReceived {
+                    packet_id: rel.message_id,
+                    stream,
+                });
+                if self.options.auto_ack {
+                    responses.push(MqttPacket::PubComp3(
+                        crate::mqtt_serde::mqttv3::pubcomp::MqttPubComp::new(rel.message_id),
+                    ));
+                }
             }
-            MqttPacket::PubRel5(_) | MqttPacket::PubRel3(_) => {}
             MqttPacket::PubComp5(comp) => {
                 if let Some(entry) = self.inflight_queue.acknowledge(comp.packet_id) {
                     events.push(MqttEvent::Published(PublishResult {
