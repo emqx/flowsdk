@@ -3875,7 +3875,13 @@ mod tests {
 
         let pubrel = MqttPacket::PubRel5(MqttPubRel::new(44, 0, Vec::new()));
         let events = engine.handle_incoming(&pubrel.to_bytes().unwrap());
-        assert!(events.is_empty());
+        assert!(matches!(
+            events.as_slice(),
+            [MqttEvent::PubRelReceived {
+                packet_id: 44,
+                stream: None
+            }]
+        ));
         assert!(
             engine.take_outgoing().is_empty(),
             "auto_ack(false) must suppress PUBCOMP"
@@ -3909,7 +3915,13 @@ mod tests {
 
         let pubrel = MqttPacket::PubRel5(MqttPubRel::new(46, 0, Vec::new()));
         let (events, resp) = engine.ingest_stream_packet(pubrel, 5);
-        assert!(events.is_empty());
+        assert!(matches!(
+            events.as_slice(),
+            [MqttEvent::PubRelReceived {
+                packet_id: 46,
+                stream: Some(5)
+            }]
+        ));
         assert!(resp.is_empty(), "auto_ack(false) must suppress PUBCOMP");
     }
 
