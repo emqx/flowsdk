@@ -4236,6 +4236,60 @@ mod tests {
 
     #[cfg(feature = "quic-proto")]
     #[test]
+    fn test_control_stream_stop_and_peer_close_emit_disconnect() {
+        use quinn_proto::{Dir, Side, StreamId};
+
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+        let control = StreamId::new(Side::Client, Dir::Bi, 0);
+        engine.control_stream = Some(control);
+        engine.control_outgoing.extend_from_slice(&[1, 2, 3]);
+        engine.control_finishing = true;
+        engine.mqtt_engine.is_connected = true;
+
+        let mut events = Vec::new();
+        engine.handle_stream_stopped(control, VarInt::from_u32(11), &mut events);
+
+        assert!(matches!(
+            events.as_slice(),
+            [
+                MqttEvent::StreamStopped {
+                    stream_id,
+                    error_code: 11
+                },
+                MqttEvent::Disconnected(None)
+            ] if *stream_id == u64::from(control)
+        ));
+        assert_eq!(engine.control_stream, None);
+        assert!(engine.control_outgoing.is_empty());
+        assert!(!engine.control_finishing);
+        assert!(engine.control_finished);
+        assert!(!engine.mqtt_engine.is_connected());
+
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+        engine.control_stream = Some(control);
+        engine.mqtt_engine.is_connected = true;
+
+        events.clear();
+        engine.handle_stream_closed(control, "recv_finished", true, &mut events);
+
+        assert!(matches!(
+            events.as_slice(),
+            [
+                MqttEvent::StreamClosed {
+                    stream_id,
+                    reason,
+                    by_peer: true
+                },
+                MqttEvent::Disconnected(None)
+            ] if *stream_id == u64::from(control) && reason == "recv_finished"
+        ));
+        assert_eq!(engine.control_stream, None);
+        assert!(engine.control_finished);
+        assert!(!engine.mqtt_engine.is_connected());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
     fn test_controls_require_connection() {
         let mut engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
 
@@ -4300,6 +4354,208 @@ mod tests {
         rustls::ClientConfig::builder()
             .with_root_certificates(rustls::RootCertStore::empty())
             .with_no_client_auth()
+    }
+
+    #[cfg(feature = "quic-proto")]
+    fn connected_quic_engine_without_peer_limits() -> QuicMqttEngine {
+        let mut engine = QuicMqttEngine::new(
+            MqttClientOptions::builder()
+                .max_outgoing_packet_count(1)
+                .build(),
+        )
+        .unwrap();
+        engine
+            .connect(
+                "127.0.0.1:4433".parse().unwrap(),
+                "localhost",
+                quic_test_crypto_config(),
+                Instant::now(),
+            )
+            .unwrap();
+        engine.mqtt_engine.is_connected = true;
+        engine
+    }
+
+    #[cfg(feature = "quic-proto")]
+    fn mqtt_connected_quic_engine() -> QuicMqttEngine {
+        let mut engine = QuicMqttEngine::new(
+            MqttClientOptions::builder()
+                .max_outgoing_packet_count(1)
+                .build(),
+        )
+        .unwrap();
+        engine.mqtt_engine.connect();
+        let _ = engine.mqtt_engine.take_outgoing();
+        let events = engine
+            .mqtt_engine
+            .handle_incoming(&[0x20, 0x03, 0x00, 0x00, 0x00]);
+        assert!(matches!(events.as_slice(), [MqttEvent::Connected(_)]));
+        engine
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_quic_data_stream_api_routes_commands_and_reuses_defaults() {
+        use quinn_proto::{Dir, Side, StreamId};
+
+        // GIVEN: A QUIC connection exists, but no peer transport parameters have
+        // been received to grant client-initiated bidirectional stream capacity.
+        let mut engine = connected_quic_engine_without_peer_limits();
+
+        // WHEN: The caller asks the public API to open a new data stream.
+        // THEN: The request fails instead of creating untracked stream state.
+        assert!(matches!(
+            engine.open_data_stream(),
+            Err(MqttClientError::InternalError { .. })
+        ));
+
+        // GIVEN: A connected MQTT session with one known QUIC data stream.
+        let mut engine = mqtt_connected_quic_engine();
+        let stream_id = StreamId::new(Side::Client, Dir::Bi, 1);
+        engine
+            .data_streams
+            .insert(stream_id, QuicStream::new(1024, 5, 1));
+        let stream = u64::from(stream_id);
+        assert_eq!(engine.data_stream_count(), 1);
+        assert!(engine.control_stream_id().is_none());
+
+        // WHEN: A publish is targeted at that explicit stream.
+        // THEN: The MQTT packet is encoded, tracked, and buffered on the stream.
+        let publish_pid = engine
+            .publish_on(
+                stream,
+                PublishCommand::simple("topic/a", b"payload".to_vec(), 1, false),
+            )
+            .unwrap();
+        assert_eq!(publish_pid, Some(1));
+        assert!(engine
+            .data_streams
+            .values()
+            .any(|ds| ds.pending_packets == 1 && !ds.outgoing.is_empty()));
+
+        let bad_stream = stream + 4;
+        // WHEN: A publish targets an unknown stream handle.
+        // THEN: The API rejects the command before allocating MQTT state.
+        assert!(matches!(
+            engine.publish_on(
+                bad_stream,
+                PublishCommand::simple("topic/b", b"payload".to_vec(), 0, false)
+            ),
+            Err(MqttClientError::InvalidState { .. })
+        ));
+
+        // GIVEN: A fresh engine that has not registered the previous stream id.
+        let mut engine = mqtt_connected_quic_engine();
+        // WHEN: A subscribe uses a handle from another engine instance.
+        // THEN: The handle is treated as unknown and rejected.
+        let sub_pid = engine
+            .subscribe_on(stream, SubscribeCommand::single("topic/sub", 0))
+            .expect_err("stream handle from another engine must be rejected");
+        assert!(matches!(sub_pid, MqttClientError::InvalidState { .. }));
+
+        // GIVEN: The stream handle is registered on this engine.
+        engine
+            .data_streams
+            .insert(stream_id, QuicStream::new(1024, 5, 1));
+        // WHEN: A subscribe is targeted at the explicit stream.
+        // THEN: The SUBSCRIBE packet is allocated and buffered on that stream.
+        let sub_pid = engine
+            .subscribe_on(stream, SubscribeCommand::single("topic/sub", 0))
+            .unwrap();
+        assert_eq!(sub_pid, 1);
+
+        // GIVEN: A connected MQTT session with one known QUIC data stream.
+        let mut engine = mqtt_connected_quic_engine();
+        engine
+            .data_streams
+            .insert(stream_id, QuicStream::new(1024, 5, 1));
+        // WHEN: An unsubscribe is targeted at the explicit stream.
+        // THEN: The UNSUBSCRIBE packet is allocated and buffered on that stream.
+        let unsub_pid = engine
+            .unsubscribe_on(
+                stream,
+                UnsubscribeCommand::from_topics(vec!["topic/sub".to_string()]),
+            )
+            .unwrap();
+        assert_eq!(unsub_pid, 1);
+
+        // GIVEN: The default publish stream is already known.
+        let mut engine = mqtt_connected_quic_engine();
+        engine
+            .data_streams
+            .insert(stream_id, QuicStream::new(1024, 5, 1));
+        engine.default_pub_stream = Some(stream_id);
+        // WHEN: The high-level publish API is used.
+        // THEN: It reuses the default publish stream instead of opening another.
+        let publish_pid = engine
+            .publish(PublishCommand::simple(
+                "topic/default",
+                b"x".to_vec(),
+                1,
+                false,
+            ))
+            .unwrap();
+        assert_eq!(publish_pid, Some(1));
+        let default_pub = engine.default_pub_stream.unwrap();
+        assert_eq!(engine.ensure_default_pub_stream().unwrap(), default_pub);
+
+        // GIVEN: The default subscribe stream is already known.
+        let mut engine = mqtt_connected_quic_engine();
+        engine
+            .data_streams
+            .insert(stream_id, QuicStream::new(1024, 5, 2));
+        engine.default_sub_stream = Some(stream_id);
+        // WHEN: The high-level subscribe and unsubscribe APIs are used.
+        // THEN: Both commands reuse the default subscribe stream.
+        let sub_pid = engine
+            .subscribe(SubscribeCommand::single("topic/default", 0))
+            .unwrap();
+        assert_eq!(sub_pid, 1);
+        let default_sub = engine.default_sub_stream.unwrap();
+        let unsub_pid = engine
+            .unsubscribe(UnsubscribeCommand::from_topics(vec![
+                "topic/default".to_string()
+            ]))
+            .unwrap();
+        assert_eq!(unsub_pid, 2);
+        assert_eq!(engine.ensure_default_sub_stream().unwrap(), default_sub);
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn test_quic_data_stream_capacity_and_finished_errors() {
+        use quinn_proto::{Dir, Side, StreamId};
+
+        let mut engine = mqtt_connected_quic_engine();
+        let stream_id = StreamId::new(Side::Client, Dir::Bi, 1);
+        engine
+            .data_streams
+            .insert(stream_id, QuicStream::new(1024, 5, 1));
+        let stream = u64::from(stream_id);
+
+        engine
+            .data_streams
+            .get_mut(&stream_id)
+            .unwrap()
+            .pending_packets = 1;
+        assert!(matches!(
+            engine.publish_on(
+                stream,
+                PublishCommand::simple("topic/full", b"payload".to_vec(), 1, false)
+            ),
+            Err(MqttClientError::BufferFull {
+                buffer_type,
+                capacity: 1,
+            }) if buffer_type == "quic_stream_outgoing"
+        ));
+
+        let ds = engine.data_streams.get_mut(&stream_id).unwrap();
+        ds.pending_packets = 0;
+        ds.finished = true;
+        assert!(matches!(
+            engine.subscribe_on(stream, SubscribeCommand::single("topic/finished", 0)),
+            Err(MqttClientError::InvalidState { .. })
+        ));
     }
 
     #[cfg(feature = "quic-proto")]
