@@ -1784,8 +1784,16 @@ impl TokioClientWorker {
                     }
                     self.event_handler.on_unsubscribed(&res).await;
                 }
+                MqttEvent::PublishReceived { .. } => {
+                    // Low-level delivery metadata; MessageReceived carries the
+                    // application payload for this client.
+                }
                 MqttEvent::MessageReceived(publish) => {
                     self.event_handler.on_message_received(&publish).await;
+                }
+                MqttEvent::PubRelReceived { .. } => {
+                    // Low-level manual QoS2 acknowledgement detail; the tokio
+                    // client continues to use the engine's normal auto-ack path.
                 }
                 MqttEvent::PingResponse(res) => {
                     if let Some(tx) = self.pending_ping.take() {

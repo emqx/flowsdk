@@ -537,8 +537,15 @@ fn test_incoming_publish_qos1() {
     ));
     let events = engine.handle_incoming(&publish.to_bytes().unwrap());
 
-    assert_eq!(events.len(), 1);
-    match &events[0] {
+    assert_eq!(events.len(), 2);
+    assert!(matches!(
+        events[0],
+        MqttEvent::PublishReceived {
+            packet_id: Some(100),
+            stream: None
+        }
+    ));
+    match &events[1] {
         MqttEvent::MessageReceived(p) => {
             assert_eq!(p.topic_name, "t");
             assert_eq!(p.payload, b"data");
@@ -673,8 +680,15 @@ fn test_incoming_publish_qos2() {
     ));
     let events = engine.handle_incoming(&publish.to_bytes().unwrap());
 
-    assert_eq!(events.len(), 1);
-    match &events[0] {
+    assert_eq!(events.len(), 2);
+    match events[0] {
+        MqttEvent::PublishReceived { packet_id, stream } => {
+            assert_eq!(packet_id, Some(pid));
+            assert_eq!(stream, None);
+        }
+        _ => panic!("Expected PublishReceived event"),
+    }
+    match &events[1] {
         MqttEvent::MessageReceived(p) => {
             assert_eq!(p.qos, 2);
             assert_eq!(p.packet_id, Some(pid));

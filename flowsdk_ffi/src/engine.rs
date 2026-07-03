@@ -81,7 +81,7 @@ impl MqttEngineFFI {
     pub fn handle_incoming(&self, data: Vec<u8>) -> Vec<MqttEventFFI> {
         let mut engine = self.engine.lock().unwrap();
         let events = engine.handle_incoming(&data);
-        let mapped: Vec<_> = events.into_iter().map(map_event).collect();
+        let mapped: Vec<_> = events.into_iter().filter_map(map_event).collect();
         self.events.lock().unwrap().extend(mapped.iter().cloned());
         mapped
     }
@@ -90,7 +90,7 @@ impl MqttEngineFFI {
         let now = self.start_time + Duration::from_millis(now_ms);
         let mut engine = self.engine.lock().unwrap();
         let events = engine.handle_tick(now);
-        let mapped: Vec<_> = events.into_iter().map(map_event).collect();
+        let mapped: Vec<_> = events.into_iter().filter_map(map_event).collect();
         self.events.lock().unwrap().extend(mapped.iter().cloned());
         mapped
     }
@@ -116,7 +116,7 @@ impl MqttEngineFFI {
     pub fn take_events(&self) -> Vec<MqttEventFFI> {
         let mut events = std::mem::take(&mut *self.events.lock().unwrap());
         let engine_events = self.engine.lock().unwrap().take_events();
-        events.extend(engine_events.into_iter().map(map_event));
+        events.extend(engine_events.into_iter().filter_map(map_event));
         events
     }
 
@@ -183,79 +183,82 @@ impl MqttEngineFFI {
     }
 }
 
-fn map_event(event: MqttEvent) -> MqttEventFFI {
+fn map_event(event: MqttEvent) -> Option<MqttEventFFI> {
     match event {
-        MqttEvent::Connected(res) => MqttEventFFI::Connected(ConnectionResultFFI {
+        MqttEvent::Connected(res) => Some(MqttEventFFI::Connected(ConnectionResultFFI {
             reason_code: res.reason_code,
             session_present: res.session_present,
-        }),
-        MqttEvent::Disconnected(code) => MqttEventFFI::Disconnected { reason_code: code },
-        MqttEvent::MessageReceived(msg) => MqttEventFFI::MessageReceived(MqttMessageFFI {
+        })),
+        MqttEvent::Disconnected(code) => Some(MqttEventFFI::Disconnected { reason_code: code }),
+        MqttEvent::PublishReceived { .. } | MqttEvent::PubRelReceived { .. } => None,
+        MqttEvent::MessageReceived(msg) => Some(MqttEventFFI::MessageReceived(MqttMessageFFI {
             topic: msg.topic_name,
             payload: msg.payload,
             qos: msg.qos,
             retain: msg.retain,
-        }),
-        MqttEvent::Published(res) => MqttEventFFI::Published(PublishResultFFI {
+        })),
+        MqttEvent::Published(res) => Some(MqttEventFFI::Published(PublishResultFFI {
             packet_id: res.packet_id,
             reason_code: res.reason_code,
             qos: res.qos,
-        }),
-        MqttEvent::Subscribed(res) => MqttEventFFI::Subscribed(SubscribeResultFFI {
+        })),
+        MqttEvent::Subscribed(res) => Some(MqttEventFFI::Subscribed(SubscribeResultFFI {
             packet_id: res.packet_id,
             reason_codes: res.reason_codes,
-        }),
-        MqttEvent::Unsubscribed(res) => MqttEventFFI::Unsubscribed(UnsubscribeResultFFI {
+        })),
+        MqttEvent::Unsubscribed(res) => Some(MqttEventFFI::Unsubscribed(UnsubscribeResultFFI {
             packet_id: res.packet_id,
             reason_codes: res.reason_codes,
-        }),
-        MqttEvent::PingResponse(res) => MqttEventFFI::PingResponse {
+        })),
+        MqttEvent::PingResponse(res) => Some(MqttEventFFI::PingResponse {
             success: res.success,
-        },
-        MqttEvent::Error(err) => MqttEventFFI::Error {
+        }),
+        MqttEvent::Error(err) => Some(MqttEventFFI::Error {
             message: format!("{:?}", err),
-        },
+        }),
         MqttEvent::TransportClosed {
             reason,
             by_peer,
             error_code,
-        } => MqttEventFFI::Error {
+        } => Some(MqttEventFFI::Error {
             message: format!(
                 "transport closed: {} (by_peer={}, error_code={:?})",
                 reason, by_peer, error_code
             ),
-        },
+        }),
         MqttEvent::StreamClosed {
             stream_id,
             reason,
             by_peer,
-        } => MqttEventFFI::StreamClosed {
+        } => Some(MqttEventFFI::StreamClosed {
             stream_id,
             reason,
             by_peer,
-        },
+        }),
         MqttEvent::StreamReset {
             stream_id,
             error_code,
-        } => MqttEventFFI::StreamReset {
+        } => Some(MqttEventFFI::StreamReset {
             stream_id,
             error_code,
-        },
+        }),
         MqttEvent::StreamStopped {
             stream_id,
             error_code,
-        } => MqttEventFFI::StreamStopped {
+        } => Some(MqttEventFFI::StreamStopped {
             stream_id,
             error_code,
-        },
-        MqttEvent::ZeroRttStatusChanged { status } => MqttEventFFI::Error {
+        }),
+        MqttEvent::ZeroRttStatusChanged { status } => Some(MqttEventFFI::Error {
             message: format!("unsupported QUIC 0-RTT status event over FFI: {:?}", status),
-        },
-        MqttEvent::ReconnectNeeded => MqttEventFFI::ReconnectNeeded,
-        MqttEvent::ReconnectScheduled { attempt, delay } => MqttEventFFI::ReconnectScheduled {
-            attempt,
-            delay_ms: delay.as_millis() as u64,
-        },
+        }),
+        MqttEvent::ReconnectNeeded => Some(MqttEventFFI::ReconnectNeeded),
+        MqttEvent::ReconnectScheduled { attempt, delay } => {
+            Some(MqttEventFFI::ReconnectScheduled {
+                attempt,
+                delay_ms: delay.as_millis() as u64,
+            })
+        }
     }
 }
 
@@ -374,7 +377,7 @@ impl TlsMqttEngineFFI {
     pub fn handle_tick(&self, now_ms: u64) -> Vec<MqttEventFFI> {
         let now = self.start_time + Duration::from_millis(now_ms);
         let events = self.engine.lock().unwrap().handle_tick(now);
-        let mapped: Vec<_> = events.into_iter().map(map_event).collect();
+        let mapped: Vec<_> = events.into_iter().filter_map(map_event).collect();
         self.events.lock().unwrap().extend(mapped.iter().cloned());
         mapped
     }
@@ -382,7 +385,7 @@ impl TlsMqttEngineFFI {
     pub fn take_events(&self) -> Vec<MqttEventFFI> {
         let mut events = std::mem::take(&mut *self.events.lock().unwrap());
         let engine_events = self.engine.lock().unwrap().take_events();
-        events.extend(engine_events.into_iter().map(map_event));
+        events.extend(engine_events.into_iter().filter_map(map_event));
         events
     }
 
@@ -644,7 +647,7 @@ impl QuicMqttEngineFFI {
         let now = self.start_time + Duration::from_millis(now_ms);
         let mut engine = self.engine.lock().unwrap();
         let events = engine.handle_tick(now);
-        let mapped: Vec<_> = events.into_iter().map(map_event).collect();
+        let mapped: Vec<_> = events.into_iter().filter_map(map_event).collect();
         self.events.lock().unwrap().extend(mapped.iter().cloned());
         mapped
     }
@@ -652,7 +655,7 @@ impl QuicMqttEngineFFI {
     pub fn take_events(&self) -> Vec<MqttEventFFI> {
         let mut events = std::mem::take(&mut *self.events.lock().unwrap());
         let engine_events = self.engine.lock().unwrap().take_events();
-        events.extend(engine_events.into_iter().map(map_event));
+        events.extend(engine_events.into_iter().filter_map(map_event));
         events
     }
 
