@@ -349,6 +349,8 @@ jobs:
           lcov2.info
           lcov3.info
           target/llvm-cov-target/cargo-llvm-cov.profdata
+          target/llvm-cov-target/cargo-llvm-cov2.profdata
+          target/integration-llvm-cov2.profdata
           target/llvm-cov-target/*.profraw
         retention-days: 7
 
