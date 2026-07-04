@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["MqttEvent"],"struct":["MqttEngine","QuicMqttEngine"],"type":["MqttMessage"]};
+window.SIDEBAR_ITEMS = {"enum":["MqttEvent","QuicZeroRttStatus"],"struct":["MqttEngine","QuicMqttEngine","QuicZeroRttConfig"],"type":["MqttMessage"]};
