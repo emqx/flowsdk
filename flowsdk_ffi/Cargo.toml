@@ -1,6 +1,6 @@
 [package]
 name = "flowsdk_ffi"
-version = "0.4.2"
+version = "0.5.1"
 edition = "2021"
 description = "FFI bindings for FlowSDK, allowing multi-language integration."
 license = "MPL-2.0"
@@ -18,7 +18,7 @@ path = "src/bin/uniffi-bindgen.rs"
 required-features = ["uniffi-bindings"]
 
 [dependencies]
-flowsdk = { path = "..", version = "0.4.1", default-features = false }
+flowsdk = { path = "..", version = "0.5.1", default-features = false }
 libc = "0.2"
 serde = { version = "1.0", features = ["derive"], optional = true }
 uniffi = { version = "0.28", features = ["cli"], optional = true }
