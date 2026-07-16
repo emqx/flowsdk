@@ -13,7 +13,7 @@ use std::time::{Duration, Instant};
 
 use crate::config::BenchConfig;
 use crate::connection::{ConnState, Connection};
-use crate::stats::BenchStats;
+use crate::stats::{BenchStats, ErrorKind};
 use crate::worker_common::{
     decode_user_data, encode_user_data, WorkerResult, OP_CONNECT, OP_RECV, OP_SEND,
 };
@@ -107,7 +107,7 @@ pub fn run_worker(
                     }
                     Err(e) => {
                         eprintln!("worker {}: socket creation failed: {}", worker_id, e);
-                        stats.errors.fetch_add(1, Ordering::Relaxed);
+                        stats.record_error(ErrorKind::Socket);
                         stats.clients_done.fetch_add(1, Ordering::Relaxed);
                         done_count += 1;
                         connect_budget -= 1.0;
@@ -232,8 +232,8 @@ pub fn run_worker(
             let events = conn.handle_tick();
             if !events.is_empty() {
                 let outcome = conn.process_events(events);
-                if outcome.error {
-                    stats.errors.fetch_add(1, Ordering::Relaxed);
+                for _ in 0..outcome.errors {
+                    stats.record_error(ErrorKind::Mqtt);
                 }
                 if outcome.acked > 0 {
                     stats
@@ -311,7 +311,7 @@ fn handle_connect_complete(
             std::io::Error::from_raw_os_error(-result)
         );
         conn.state = ConnState::Failed;
-        stats.errors.fetch_add(1, Ordering::Relaxed);
+        stats.record_error(ErrorKind::Connect);
         stats.clients_done.fetch_add(1, Ordering::Relaxed);
         return;
     }
@@ -343,7 +343,7 @@ fn handle_send_complete(
                 std::io::Error::from_raw_os_error(err_code)
             );
         }
-        mark_failed(conn, stats, done_count);
+        mark_failed(conn, stats, done_count, ErrorKind::Send);
         return;
     }
 
@@ -396,7 +396,7 @@ fn handle_recv_complete(
             }
         }
         if conn.state != ConnState::Done && conn.state != ConnState::Disconnecting {
-            mark_failed(conn, stats, done_count);
+            mark_failed(conn, stats, done_count, ErrorKind::Receive);
         }
         return;
     }
@@ -415,8 +415,8 @@ fn handle_recv_complete(
                 .messages_acked
                 .fetch_add(outcome.acked, Ordering::Relaxed);
         }
-        if outcome.error {
-            stats.errors.fetch_add(1, Ordering::Relaxed);
+        for _ in 0..outcome.errors {
+            stats.record_error(ErrorKind::Mqtt);
         }
     }
 
@@ -458,10 +458,15 @@ fn handle_recv_complete(
     }
 }
 
-fn mark_failed(conn: &mut Connection, stats: &BenchStats, done_count: &mut usize) {
+fn mark_failed(
+    conn: &mut Connection,
+    stats: &BenchStats,
+    done_count: &mut usize,
+    error_kind: ErrorKind,
+) {
     if conn.state != ConnState::Failed && conn.state != ConnState::Done {
         conn.state = ConnState::Failed;
-        stats.errors.fetch_add(1, Ordering::Relaxed);
+        stats.record_error(error_kind);
         stats.clients_done.fetch_add(1, Ordering::Relaxed);
         *done_count += 1;
     }

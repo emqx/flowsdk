@@ -13,7 +13,7 @@ use std::time::Instant;
 
 use crate::config::BenchConfig;
 use crate::connection::{QuicConnState, QuicConnection};
-use crate::stats::BenchStats;
+use crate::stats::{BenchStats, ErrorKind};
 use crate::worker_common::{decode_user_data, encode_user_data, WorkerResult, OP_RECV, OP_SEND};
 
 pub fn run_quic_worker(
@@ -92,7 +92,7 @@ pub fn run_quic_worker(
                             unsafe {
                                 libc::close(fd);
                             }
-                            stats.errors.fetch_add(1, Ordering::Relaxed);
+                            stats.record_error(ErrorKind::Connect);
                             stats.clients_done.fetch_add(1, Ordering::Relaxed);
                             done_count += 1;
                             connect_budget -= 1.0;
@@ -117,7 +117,7 @@ pub fn run_quic_worker(
                                         unsafe {
                                             libc::close(fd);
                                         }
-                                        stats.errors.fetch_add(1, Ordering::Relaxed);
+                                        stats.record_error(ErrorKind::Connect);
                                         stats.clients_done.fetch_add(1, Ordering::Relaxed);
                                         done_count += 1;
                                     }
@@ -131,7 +131,7 @@ pub fn run_quic_worker(
                                 unsafe {
                                     libc::close(fd);
                                 }
-                                stats.errors.fetch_add(1, Ordering::Relaxed);
+                                stats.record_error(ErrorKind::Connect);
                                 stats.clients_done.fetch_add(1, Ordering::Relaxed);
                                 done_count += 1;
                             }
@@ -140,7 +140,7 @@ pub fn run_quic_worker(
                     }
                     Err(e) => {
                         eprintln!("worker {}: UDP socket creation failed: {}", worker_id, e);
-                        stats.errors.fetch_add(1, Ordering::Relaxed);
+                        stats.record_error(ErrorKind::Socket);
                         stats.clients_done.fetch_add(1, Ordering::Relaxed);
                         done_count += 1;
                         connect_budget -= 1.0;
@@ -227,8 +227,8 @@ pub fn run_quic_worker(
                             .messages_acked
                             .fetch_add(outcome.acked, Ordering::Relaxed);
                     }
-                    if outcome.error {
-                        stats.errors.fetch_add(1, Ordering::Relaxed);
+                    for _ in 0..outcome.errors {
+                        stats.record_error(ErrorKind::Mqtt);
                     }
                 }
 
@@ -346,7 +346,7 @@ fn handle_send_complete(
             conn.client_index,
             std::io::Error::from_raw_os_error(err_code)
         );
-        mark_failed(conn, stats, done_count);
+        mark_failed(conn, stats, done_count, ErrorKind::Send);
         return;
     }
 
@@ -384,7 +384,7 @@ fn handle_recv_complete(
             }
         }
         if conn.state != QuicConnState::Done && conn.state != QuicConnState::Disconnecting {
-            mark_failed(conn, stats, done_count);
+            mark_failed(conn, stats, done_count, ErrorKind::Receive);
         }
         return;
     }
@@ -406,8 +406,8 @@ fn handle_recv_complete(
                 .messages_acked
                 .fetch_add(outcome.acked, Ordering::Relaxed);
         }
-        if outcome.error {
-            stats.errors.fetch_add(1, Ordering::Relaxed);
+        for _ in 0..outcome.errors {
+            stats.record_error(ErrorKind::Mqtt);
         }
     }
 
@@ -434,10 +434,15 @@ fn handle_recv_complete(
     }
 }
 
-fn mark_failed(conn: &mut QuicConnection, stats: &BenchStats, done_count: &mut usize) {
+fn mark_failed(
+    conn: &mut QuicConnection,
+    stats: &BenchStats,
+    done_count: &mut usize,
+    error_kind: ErrorKind,
+) {
     if conn.state != QuicConnState::Failed && conn.state != QuicConnState::Done {
         conn.state = QuicConnState::Failed;
-        stats.errors.fetch_add(1, Ordering::Relaxed);
+        stats.record_error(error_kind);
         stats.clients_done.fetch_add(1, Ordering::Relaxed);
         *done_count += 1;
     }

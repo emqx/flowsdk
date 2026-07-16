@@ -132,8 +132,8 @@ Connections are round-robin distributed across the source addresses.
 ### Live stats (printed every second)
 
 ```
-[  5s] Connected: 5000/100000 | Sent: 0 | Acked: 0 | Errors: 0 | Rate: 0 msg/s
-[105s] Connected: 100000/100000 | Sent: 4500000 | Acked: 4499800 | Errors: 3 | Rate: 52000 msg/s
+[  5s] Connected: 5000/100000 | Sent: 0/10000000 | Acked: 0 | Errors: 0 (socket:0 connect:0 send:0 recv:0 mqtt:0) | Rate: 0 msg/s
+[105s] Connected: 100000/100000 | Sent: 4500000/10000000 | Acked: 4499800 | Errors: 3 (socket:0 connect:1 send:1 recv:0 mqtt:1) | Rate: 52000 msg/s
 ```
 
 ### Final summary
@@ -155,6 +155,11 @@ Connections are round-robin distributed across the source addresses.
   Total Sent:      10000000
   Total Acked:     9999997
   Errors:          3
+    Socket:        0
+    Connect:       1
+    Send:          1
+    Receive:       0
+    MQTT:          1
   Duration:        192.34 s
   Throughput:      51991.23 msg/s
 ------------------------------------------------------------
