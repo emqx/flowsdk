@@ -252,6 +252,7 @@ impl Connection {
 pub struct EventOutcome {
     pub connected: bool,
     pub acked: u64,
+    pub puback_no_match: u64,
     pub mqtt_connect_errors: u64,
     pub mqtt_publish_errors: u64,
     pub mqtt_client_errors: u64,
@@ -452,6 +453,9 @@ impl QuicConnection {
                 }
                 MqttEvent::Published(result) => {
                     if result.is_success() {
+                        if result.qos == 1 && result.reason_code == Some(0x10) {
+                            outcome.puback_no_match += 1;
+                        }
                         self.messages_acked += 1;
                         outcome.acked += 1;
                         if let Some(sent_at) = self.latency_pending.pop_front() {

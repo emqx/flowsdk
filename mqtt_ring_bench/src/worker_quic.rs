@@ -451,6 +451,7 @@ fn mark_failed(
 }
 
 fn record_mqtt_outcome(stats: &BenchStats, outcome: &EventOutcome) {
+    stats.record_puback_no_match(outcome.puback_no_match);
     stats.record_errors(ErrorKind::MqttConnect, outcome.mqtt_connect_errors);
     stats.record_errors(ErrorKind::MqttPublish, outcome.mqtt_publish_errors);
     stats.record_errors(ErrorKind::MqttClient, outcome.mqtt_client_errors);

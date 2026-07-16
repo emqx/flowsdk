@@ -15,7 +15,8 @@ use crate::config::BenchConfig;
 use crate::connection::{ConnState, Connection, EventOutcome};
 use crate::stats::{BenchStats, ErrorKind};
 use crate::worker_common::{
-    decode_user_data, encode_user_data, WorkerResult, OP_CONNECT, OP_RECV, OP_SEND,
+    cancel_pending_operations, decode_user_data, encode_user_data, pending_user_data, WorkerResult,
+    OP_CONNECT, OP_RECV, OP_SEND,
 };
 
 /// Each Connection is Box-allocated so its buffers have stable addresses
@@ -475,6 +476,7 @@ fn mark_failed(
 }
 
 fn record_mqtt_outcome(stats: &BenchStats, outcome: &EventOutcome) {
+    stats.record_puback_no_match(outcome.puback_no_match);
     stats.record_errors(ErrorKind::MqttConnect, outcome.mqtt_connect_errors);
     stats.record_errors(ErrorKind::MqttPublish, outcome.mqtt_publish_errors);
     stats.record_errors(ErrorKind::MqttClient, outcome.mqtt_client_errors);
