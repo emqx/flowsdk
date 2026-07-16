@@ -7,10 +7,24 @@ pub struct BenchStats {
     pub messages_sent: AtomicU64,
     pub messages_acked: AtomicU64,
     pub errors: AtomicU64,
+    pub socket_errors: AtomicU64,
+    pub connect_errors: AtomicU64,
+    pub send_errors: AtomicU64,
+    pub receive_errors: AtomicU64,
+    pub mqtt_errors: AtomicU64,
     pub clients_connected: AtomicU64,
     pub clients_done: AtomicU64,
     pub start_time: Instant,
     pub stopped: AtomicBool,
+}
+
+#[derive(Clone, Copy)]
+pub enum ErrorKind {
+    Socket,
+    Connect,
+    Send,
+    Receive,
+    Mqtt,
 }
 
 impl BenchStats {
@@ -19,6 +33,11 @@ impl BenchStats {
             messages_sent: AtomicU64::new(0),
             messages_acked: AtomicU64::new(0),
             errors: AtomicU64::new(0),
+            socket_errors: AtomicU64::new(0),
+            connect_errors: AtomicU64::new(0),
+            send_errors: AtomicU64::new(0),
+            receive_errors: AtomicU64::new(0),
+            mqtt_errors: AtomicU64::new(0),
             clients_connected: AtomicU64::new(0),
             clients_done: AtomicU64::new(0),
             start_time: Instant::now(),
@@ -26,11 +45,27 @@ impl BenchStats {
         }
     }
 
+    pub fn record_error(&self, kind: ErrorKind) {
+        self.errors.fetch_add(1, Ordering::Relaxed);
+        match kind {
+            ErrorKind::Socket => self.socket_errors.fetch_add(1, Ordering::Relaxed),
+            ErrorKind::Connect => self.connect_errors.fetch_add(1, Ordering::Relaxed),
+            ErrorKind::Send => self.send_errors.fetch_add(1, Ordering::Relaxed),
+            ErrorKind::Receive => self.receive_errors.fetch_add(1, Ordering::Relaxed),
+            ErrorKind::Mqtt => self.mqtt_errors.fetch_add(1, Ordering::Relaxed),
+        };
+    }
+
     pub fn snapshot(&self) -> StatsSnapshot {
         StatsSnapshot {
             sent: self.messages_sent.load(Ordering::Relaxed),
             acked: self.messages_acked.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
+            socket_errors: self.socket_errors.load(Ordering::Relaxed),
+            connect_errors: self.connect_errors.load(Ordering::Relaxed),
+            send_errors: self.send_errors.load(Ordering::Relaxed),
+            receive_errors: self.receive_errors.load(Ordering::Relaxed),
+            mqtt_errors: self.mqtt_errors.load(Ordering::Relaxed),
             connected: self.clients_connected.load(Ordering::Relaxed),
             done: self.clients_done.load(Ordering::Relaxed),
             elapsed: self.start_time.elapsed(),
@@ -42,6 +77,11 @@ pub struct StatsSnapshot {
     pub sent: u64,
     pub acked: u64,
     pub errors: u64,
+    pub socket_errors: u64,
+    pub connect_errors: u64,
+    pub send_errors: u64,
+    pub receive_errors: u64,
+    pub mqtt_errors: u64,
     pub connected: u64,
     pub done: u64,
     pub elapsed: Duration,
@@ -101,6 +141,11 @@ pub fn print_final_summary(
         println!("  Total Acked:     {}", snap.acked);
     }
     println!("  Errors:          {}", snap.errors);
+    println!("    Socket:        {}", snap.socket_errors);
+    println!("    Connect:       {}", snap.connect_errors);
+    println!("    Send:          {}", snap.send_errors);
+    println!("    Receive:       {}", snap.receive_errors);
+    println!("    MQTT:          {}", snap.mqtt_errors);
     println!("  Duration:        {:.2} s", duration_secs);
     println!("  Throughput:      {:.2} msg/s", throughput);
 
@@ -138,4 +183,31 @@ pub fn print_final_summary(
 
 fn ms(d: Duration) -> f64 {
     d.as_secs_f64() * 1000.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BenchStats, ErrorKind};
+
+    #[test]
+    fn records_error_breakdown() {
+        let stats = BenchStats::new();
+        for kind in [
+            ErrorKind::Socket,
+            ErrorKind::Connect,
+            ErrorKind::Send,
+            ErrorKind::Receive,
+            ErrorKind::Mqtt,
+        ] {
+            stats.record_error(kind);
+        }
+
+        let snapshot = stats.snapshot();
+        assert_eq!(snapshot.errors, 5);
+        assert_eq!(snapshot.socket_errors, 1);
+        assert_eq!(snapshot.connect_errors, 1);
+        assert_eq!(snapshot.send_errors, 1);
+        assert_eq!(snapshot.receive_errors, 1);
+        assert_eq!(snapshot.mqtt_errors, 1);
+    }
 }

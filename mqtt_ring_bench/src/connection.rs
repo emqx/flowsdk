@@ -149,7 +149,7 @@ impl Connection {
                         outcome.connected = true;
                     } else {
                         self.state = ConnState::Failed;
-                        outcome.error = true;
+                        outcome.errors += 1;
                     }
                 }
                 MqttEvent::Published(result) => {
@@ -160,17 +160,17 @@ impl Connection {
                             self.latency_samples.push(sent_at.elapsed());
                         }
                     } else {
-                        outcome.error = true;
+                        outcome.errors += 1;
                     }
                 }
                 MqttEvent::Error(_) => {
-                    outcome.error = true;
+                    outcome.errors += 1;
                 }
                 MqttEvent::Disconnected(_) | MqttEvent::ReconnectNeeded
                     if self.state != ConnState::Disconnecting && self.state != ConnState::Done =>
                 {
                     self.state = ConnState::Failed;
-                    outcome.error = true;
+                    outcome.errors += 1;
                 }
                 _ => {}
             }
@@ -250,7 +250,7 @@ impl Connection {
 pub struct EventOutcome {
     pub connected: bool,
     pub acked: u64,
-    pub error: bool,
+    pub errors: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -440,7 +440,7 @@ impl QuicConnection {
                         outcome.connected = true;
                     } else {
                         self.state = QuicConnState::Failed;
-                        outcome.error = true;
+                        outcome.errors += 1;
                     }
                 }
                 MqttEvent::Published(result) => {
@@ -451,18 +451,18 @@ impl QuicConnection {
                             self.latency_samples.push(sent_at.elapsed());
                         }
                     } else {
-                        outcome.error = true;
+                        outcome.errors += 1;
                     }
                 }
                 MqttEvent::Error(_) => {
-                    outcome.error = true;
+                    outcome.errors += 1;
                 }
                 MqttEvent::Disconnected(_) | MqttEvent::ReconnectNeeded
                     if self.state != QuicConnState::Disconnecting
                         && self.state != QuicConnState::Done =>
                 {
                     self.state = QuicConnState::Failed;
-                    outcome.error = true;
+                    outcome.errors += 1;
                 }
 
                 _ => {}
