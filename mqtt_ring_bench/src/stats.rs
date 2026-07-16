@@ -12,6 +12,10 @@ pub struct BenchStats {
     pub send_errors: AtomicU64,
     pub receive_errors: AtomicU64,
     pub mqtt_errors: AtomicU64,
+    pub mqtt_connect_errors: AtomicU64,
+    pub mqtt_publish_errors: AtomicU64,
+    pub mqtt_client_errors: AtomicU64,
+    pub mqtt_disconnect_errors: AtomicU64,
     pub clients_connected: AtomicU64,
     pub clients_done: AtomicU64,
     pub start_time: Instant,
@@ -24,7 +28,10 @@ pub enum ErrorKind {
     Connect,
     Send,
     Receive,
-    Mqtt,
+    MqttConnect,
+    MqttPublish,
+    MqttClient,
+    MqttDisconnect,
 }
 
 impl BenchStats {
@@ -38,6 +45,10 @@ impl BenchStats {
             send_errors: AtomicU64::new(0),
             receive_errors: AtomicU64::new(0),
             mqtt_errors: AtomicU64::new(0),
+            mqtt_connect_errors: AtomicU64::new(0),
+            mqtt_publish_errors: AtomicU64::new(0),
+            mqtt_client_errors: AtomicU64::new(0),
+            mqtt_disconnect_errors: AtomicU64::new(0),
             clients_connected: AtomicU64::new(0),
             clients_done: AtomicU64::new(0),
             start_time: Instant::now(),
@@ -46,13 +57,44 @@ impl BenchStats {
     }
 
     pub fn record_error(&self, kind: ErrorKind) {
-        self.errors.fetch_add(1, Ordering::Relaxed);
+        self.record_errors(kind, 1);
+    }
+
+    pub fn record_errors(&self, kind: ErrorKind, count: u64) {
+        if count == 0 {
+            return;
+        }
+        self.errors.fetch_add(count, Ordering::Relaxed);
         match kind {
-            ErrorKind::Socket => self.socket_errors.fetch_add(1, Ordering::Relaxed),
-            ErrorKind::Connect => self.connect_errors.fetch_add(1, Ordering::Relaxed),
-            ErrorKind::Send => self.send_errors.fetch_add(1, Ordering::Relaxed),
-            ErrorKind::Receive => self.receive_errors.fetch_add(1, Ordering::Relaxed),
-            ErrorKind::Mqtt => self.mqtt_errors.fetch_add(1, Ordering::Relaxed),
+            ErrorKind::Socket => {
+                self.socket_errors.fetch_add(count, Ordering::Relaxed);
+            }
+            ErrorKind::Connect => {
+                self.connect_errors.fetch_add(count, Ordering::Relaxed);
+            }
+            ErrorKind::Send => {
+                self.send_errors.fetch_add(count, Ordering::Relaxed);
+            }
+            ErrorKind::Receive => {
+                self.receive_errors.fetch_add(count, Ordering::Relaxed);
+            }
+            ErrorKind::MqttConnect => {
+                self.mqtt_errors.fetch_add(count, Ordering::Relaxed);
+                self.mqtt_connect_errors.fetch_add(count, Ordering::Relaxed);
+            }
+            ErrorKind::MqttPublish => {
+                self.mqtt_errors.fetch_add(count, Ordering::Relaxed);
+                self.mqtt_publish_errors.fetch_add(count, Ordering::Relaxed);
+            }
+            ErrorKind::MqttClient => {
+                self.mqtt_errors.fetch_add(count, Ordering::Relaxed);
+                self.mqtt_client_errors.fetch_add(count, Ordering::Relaxed);
+            }
+            ErrorKind::MqttDisconnect => {
+                self.mqtt_errors.fetch_add(count, Ordering::Relaxed);
+                self.mqtt_disconnect_errors
+                    .fetch_add(count, Ordering::Relaxed);
+            }
         };
     }
 
@@ -66,6 +108,10 @@ impl BenchStats {
             send_errors: self.send_errors.load(Ordering::Relaxed),
             receive_errors: self.receive_errors.load(Ordering::Relaxed),
             mqtt_errors: self.mqtt_errors.load(Ordering::Relaxed),
+            mqtt_connect_errors: self.mqtt_connect_errors.load(Ordering::Relaxed),
+            mqtt_publish_errors: self.mqtt_publish_errors.load(Ordering::Relaxed),
+            mqtt_client_errors: self.mqtt_client_errors.load(Ordering::Relaxed),
+            mqtt_disconnect_errors: self.mqtt_disconnect_errors.load(Ordering::Relaxed),
             connected: self.clients_connected.load(Ordering::Relaxed),
             done: self.clients_done.load(Ordering::Relaxed),
             elapsed: self.start_time.elapsed(),
@@ -82,6 +128,10 @@ pub struct StatsSnapshot {
     pub send_errors: u64,
     pub receive_errors: u64,
     pub mqtt_errors: u64,
+    pub mqtt_connect_errors: u64,
+    pub mqtt_publish_errors: u64,
+    pub mqtt_client_errors: u64,
+    pub mqtt_disconnect_errors: u64,
     pub connected: u64,
     pub done: u64,
     pub elapsed: Duration,
@@ -146,6 +196,10 @@ pub fn print_final_summary(
     println!("    Send:          {}", snap.send_errors);
     println!("    Receive:       {}", snap.receive_errors);
     println!("    MQTT:          {}", snap.mqtt_errors);
+    println!("      CONNECT:     {}", snap.mqtt_connect_errors);
+    println!("      PUBLISH:     {}", snap.mqtt_publish_errors);
+    println!("      Client:      {}", snap.mqtt_client_errors);
+    println!("      Disconnect:  {}", snap.mqtt_disconnect_errors);
     println!("  Duration:        {:.2} s", duration_secs);
     println!("  Throughput:      {:.2} msg/s", throughput);
 
@@ -197,17 +251,24 @@ mod tests {
             ErrorKind::Connect,
             ErrorKind::Send,
             ErrorKind::Receive,
-            ErrorKind::Mqtt,
+            ErrorKind::MqttConnect,
+            ErrorKind::MqttPublish,
+            ErrorKind::MqttClient,
+            ErrorKind::MqttDisconnect,
         ] {
             stats.record_error(kind);
         }
 
         let snapshot = stats.snapshot();
-        assert_eq!(snapshot.errors, 5);
+        assert_eq!(snapshot.errors, 8);
         assert_eq!(snapshot.socket_errors, 1);
         assert_eq!(snapshot.connect_errors, 1);
         assert_eq!(snapshot.send_errors, 1);
         assert_eq!(snapshot.receive_errors, 1);
-        assert_eq!(snapshot.mqtt_errors, 1);
+        assert_eq!(snapshot.mqtt_errors, 4);
+        assert_eq!(snapshot.mqtt_connect_errors, 1);
+        assert_eq!(snapshot.mqtt_publish_errors, 1);
+        assert_eq!(snapshot.mqtt_client_errors, 1);
+        assert_eq!(snapshot.mqtt_disconnect_errors, 1);
     }
 }

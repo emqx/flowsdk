@@ -12,7 +12,7 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::config::BenchConfig;
-use crate::connection::{QuicConnState, QuicConnection};
+use crate::connection::{EventOutcome, QuicConnState, QuicConnection};
 use crate::stats::{BenchStats, ErrorKind};
 use crate::worker_common::{decode_user_data, encode_user_data, WorkerResult, OP_RECV, OP_SEND};
 
@@ -227,8 +227,9 @@ pub fn run_quic_worker(
                             .messages_acked
                             .fetch_add(outcome.acked, Ordering::Relaxed);
                     }
-                    for _ in 0..outcome.errors {
-                        stats.record_error(ErrorKind::Mqtt);
+                    record_mqtt_outcome(stats.as_ref(), &outcome);
+                    if outcome.failed {
+                        finish_mqtt_failure(stats.as_ref(), &mut done_count);
                     }
                 }
 
@@ -406,8 +407,9 @@ fn handle_recv_complete(
                 .messages_acked
                 .fetch_add(outcome.acked, Ordering::Relaxed);
         }
-        for _ in 0..outcome.errors {
-            stats.record_error(ErrorKind::Mqtt);
+        record_mqtt_outcome(stats, &outcome);
+        if outcome.failed {
+            finish_mqtt_failure(stats, done_count);
         }
     }
 
@@ -446,6 +448,18 @@ fn mark_failed(
         stats.clients_done.fetch_add(1, Ordering::Relaxed);
         *done_count += 1;
     }
+}
+
+fn record_mqtt_outcome(stats: &BenchStats, outcome: &EventOutcome) {
+    stats.record_errors(ErrorKind::MqttConnect, outcome.mqtt_connect_errors);
+    stats.record_errors(ErrorKind::MqttPublish, outcome.mqtt_publish_errors);
+    stats.record_errors(ErrorKind::MqttClient, outcome.mqtt_client_errors);
+    stats.record_errors(ErrorKind::MqttDisconnect, outcome.mqtt_disconnect_errors);
+}
+
+fn finish_mqtt_failure(stats: &BenchStats, done_count: &mut usize) {
+    stats.clients_done.fetch_add(1, Ordering::Relaxed);
+    *done_count += 1;
 }
 
 fn submit_front_send(ring: &mut IoUring, key: usize, conn: &mut QuicConnection) {

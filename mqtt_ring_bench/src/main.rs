@@ -97,10 +97,11 @@ fn main() {
             prev_sent = snap.sent;
             let secs = snap.elapsed.as_secs();
             eprint!(
-                "\r[{:>4}s] Connected: {}/{} | Sent: {}/{} | Acked: {} | Errors: {} (socket:{} connect:{} send:{} recv:{} mqtt:{}) | Rate: {} msg/s   ",
+                "\r[{:>4}s] Connected: {}/{} | Sent: {}/{} | Acked: {} | Errors: {} (socket:{} connect:{} send:{} recv:{} mqtt:{} [conn:{} pub:{} client:{} disc:{}]) | Rate: {} msg/s   ",
                 secs, snap.connected, total_clients, snap.sent, total_messages, snap.acked, snap.errors,
                 snap.socket_errors, snap.connect_errors, snap.send_errors, snap.receive_errors,
-                snap.mqtt_errors, rate
+                snap.mqtt_errors, snap.mqtt_connect_errors, snap.mqtt_publish_errors,
+                snap.mqtt_client_errors, snap.mqtt_disconnect_errors, rate
             );
             if snap.done >= total_clients || stats_reporter.stopped.load(Ordering::Relaxed) {
                 eprintln!();
