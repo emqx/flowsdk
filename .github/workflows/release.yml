@@ -1,17 +1,29 @@
 name: Release
+run-name: >-
+  Release ${{ inputs.release_ref || github.ref_name }}
+  using ${{ inputs.release_script_ref || github.ref_name }}
+  ${{ inputs.dry_run && '(dry run)' || '' }}
 permissions:
   contents: read
 
 on:
   workflow_dispatch:
     inputs:
-      ref:
-        description: 'Ref to release'
+      release_ref:
+        description: 'Branch, tag, or SHA to build and test (defaults to the selected workflow branch)'
         required: false
         default: ''
-      ref_name:
-        description: 'Tag to (re)release'
+        type: string
+      release_script_ref:
+        description: 'Branch containing this release workflow (must match "Use workflow from")'
         required: false
+        default: ''
+        type: string
+      dry_run:
+        description: 'Build and validate packages without publishing crates or creating/uploading a release'
+        required: true
+        default: true
+        type: boolean
 
   push:
     tags:
@@ -26,19 +38,50 @@ jobs:
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
+      tag: ${{ steps.get_version.outputs.tag }}
     
     steps:
-    - name: Get version from tag
+    - name: Validate release workflow branch
+      if: github.event_name == 'workflow_dispatch' && inputs.release_script_ref != ''
+      shell: bash
+      env:
+        EXPECTED_REF: ${{ inputs.release_script_ref }}
+        WORKFLOW_REF: ${{ github.ref_name }}
+      run: |
+        EXPECTED_REF="${EXPECTED_REF#refs/heads/}"
+        if [ "$EXPECTED_REF" != "$WORKFLOW_REF" ]; then
+          echo "Error: release_script_ref ($EXPECTED_REF) does not match the branch selected in 'Use workflow from' ($WORKFLOW_REF)."
+          exit 1
+        fi
+
+    - name: Checkout code
+      uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_ref || github.ref_name) || github.ref }}
+
+    - name: Get release version
       id: get_version
-      run: echo "version=${GITHUB_REF#refs/tags/}" >> $GITHUB_OUTPUT
+      shell: bash
+      run: |
+        if [ "${{ github.event_name }}" = "push" ]; then
+          TAG="${GITHUB_REF_NAME}"
+          VERSION="${TAG#v}"
+        else
+          VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          TAG="v${VERSION}"
+        fi
+        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "tag=$TAG" >> "$GITHUB_OUTPUT"
 
     - name: Create Release
       id: create_release
+      if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
       uses: actions/create-release@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
-        tag_name: ${{ github.ref }}
+        tag_name: ${{ steps.get_version.outputs.tag }}
+        commitish: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_ref || github.ref_name) || github.sha }}
         release_name: FlowSDK ${{ steps.get_version.outputs.version }}
         body: |
           ## FlowSDK ${{ steps.get_version.outputs.version }}
@@ -57,7 +100,7 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v4
         with:
-          ref: ${{ github.event.inputs.ref }}
+          ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_ref || github.ref_name) || github.ref }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -69,8 +112,10 @@ jobs:
           repo-token: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Verify Tag matches Cargo.toml
+        env:
+          RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
         run: |
-          TAG_VERSION=${GITHUB_REF#refs/tags/v}
+          TAG_VERSION=$RELEASE_VERSION
           CORE_VERSION=$(grep "^version" Cargo.toml | head -n 1 | cut -d '"' -f 2)
           FFI_VERSION=$(grep "^version" flowsdk_ffi/Cargo.toml | head -n 1 | cut -d '"' -f 2)
           
@@ -90,18 +135,37 @@ jobs:
           
           echo "✅ Versions match confirmed!"
 
+      # crates.io cannot publish git-only features. Keep the OpenSSL fork for
+      # repository builds, but omit those unavailable features from the public
+      # package manifest. The regular Quinn/ring QUIC features remain available.
+      - name: Prepare crates.io manifests
+        shell: bash
+        run: |
+          sed -i '/^quinn-openssl = /d' Cargo.toml
+          sed -i '/^quinn-proto-openssl = /d' Cargo.toml
+          sed -i '/^quic-openssl = /d' Cargo.toml
+          sed -i '/^quic-proto-openssl = /d' Cargo.toml
+          sed -i '/^quinn-proto-openssl = /d' flowsdk_ffi/Cargo.toml
+          sed -i '/^quic-openssl = \[/,/^\]/d' flowsdk_ffi/Cargo.toml
+
       - name: Publish flowsdk (Core)
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p flowsdk
+        run: cargo publish -p flowsdk ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
 
       - name: Wait for Index Propagation
+        if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
         run: sleep 40
 
       - name: Publish flowsdk_ffi (Bindings)
+        if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         run: cargo publish -p flowsdk_ffi
+
+      - name: Validate flowsdk_ffi (Bindings)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: cargo check -p flowsdk_ffi
 
   build-and-upload:
     name: Build binaries
@@ -117,13 +181,13 @@ jobs:
             os: ubuntu-latest
             asset_name_suffix: linux-amd64
           - target: aarch64-unknown-linux-gnu
-            os: ubuntu-latest
+            os: ubuntu-24.04-arm
             asset_name_suffix: linux-arm64
-          - target: x86_64-apple-darwin
-            os: macos-latest
-            asset_name_suffix: macos-amd64
+          #- target: x86_64-apple-darwin
+          #  os: macos-15-intel
+          #  asset_name_suffix: macos-amd64
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-15
             asset_name_suffix: macos-arm64
           - target: x86_64-pc-windows-msvc
             os: windows-latest
@@ -133,7 +197,7 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
       with:
-        ref: ${{ github.event.inputs.ref }}
+        ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_ref || github.ref_name) || github.ref }}
 
     - name: Install Rust
       uses: dtolnay/rust-toolchain@stable
@@ -145,18 +209,6 @@ jobs:
       with:
         version: '25.x'
         repo-token: ${{ secrets.GITHUB_TOKEN }}
-
-    - name: Install cross-compilation tools (Linux ARM64)
-      if: matrix.target == 'aarch64-unknown-linux-gnu'
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y gcc-aarch64-linux-gnu
-
-    - name: Configure cross-compilation (Linux ARM64)
-      if: matrix.target == 'aarch64-unknown-linux-gnu'
-      run: |
-        echo "[target.aarch64-unknown-linux-gnu]" >> ~/.cargo/config.toml
-        echo "linker = \"aarch64-linux-gnu-gcc\"" >> ~/.cargo/config.toml
 
     - name: Cache dependencies
       uses: actions/cache@v4
@@ -193,7 +245,7 @@ jobs:
         Compress-Archive -Path release-package/* -DestinationPath flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.zip
 
     - name: Upload Release Asset (Unix)
-      if: runner.os != 'Windows'
+      if: runner.os != 'Windows' && (github.event_name != 'workflow_dispatch' || !inputs.dry_run)
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -204,7 +256,7 @@ jobs:
         asset_content_type: application/gzip
 
     - name: Upload Release Asset (Windows)
-      if: runner.os == 'Windows'
+      if: runner.os == 'Windows' && (github.event_name != 'workflow_dispatch' || !inputs.dry_run)
       uses: actions/upload-release-asset@v1
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
