@@ -176,6 +176,10 @@ jobs:
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
         run: cargo check -p flowsdk_ffi
 
+      - name: Validate flowsdk_ffi (Bindings)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: cargo check -p flowsdk_ffi
+
   build-and-upload:
     name: Build binaries
     needs: create-release
