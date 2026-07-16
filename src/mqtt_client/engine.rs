@@ -194,6 +194,9 @@ pub struct MqttEngine {
     is_connected: bool,
     last_packet_sent: Instant,
     last_packet_received: Instant,
+    /// Timestamp of the outstanding PINGREQ, if any. A connection timeout is
+    /// only valid after this request has not received a PINGRESP in time.
+    ping_sent_at: Option<Instant>,
 
     // Buffers and Parsers
     parser: MqttParser,
@@ -248,6 +251,7 @@ impl MqttEngine {
             is_connected: false,
             last_packet_sent: Instant::now(),
             last_packet_received: Instant::now(),
+            ping_sent_at: None,
             parser,
             outgoing_buffer: VecDeque::new(),
             stream_retransmissions: VecDeque::new(),
@@ -279,6 +283,7 @@ impl MqttEngine {
 
     pub fn handle_connection_lost(&mut self) {
         self.is_connected = false;
+        self.ping_sent_at = None;
     }
 
     /// Reset all transport-tied state for a fresh underlying transport (e.g. a
@@ -301,6 +306,7 @@ impl MqttEngine {
         let now = Instant::now();
         self.last_packet_sent = now;
         self.last_packet_received = now;
+        self.ping_sent_at = None;
     }
 
     /// Schedule the next reconnection attempt using exponential backoff.
@@ -404,7 +410,7 @@ impl MqttEngine {
     /// # Operations
     /// 1. **Reconnection**: If disconnected and it's time to reconnect, emits `ReconnectNeeded`.
     /// 2. **Keep-Alive**: Sends `PINGREQ` if no control packets have been sent within the Keep-Alive interval.
-    /// 3. **Timeout Detection**: Detects dead connections (no data received for Keep-Alive * multiplier) -> Disconnects and schedules reconnect.
+    /// 3. **Timeout Detection**: Detects dead connections when a PINGREQ is unanswered for Keep-Alive * multiplier, then schedules reconnect.
     /// 4. **Retransmissions** (MQTT v3.1.1): Resends unacknowledged QoS 1/2 packets.
     pub fn handle_tick(&mut self, now: Instant) -> Vec<MqttEvent> {
         // Handle reconnection timer when disconnected
@@ -420,25 +426,31 @@ impl MqttEngine {
 
         let keep_alive = Duration::from_secs(self.options.keep_alive as u64);
 
-        // 1. Keep-alive: Send PING if needed (unless automatic keep-alive disabled)
-        if self.options.auto_keepalive
-            && keep_alive > Duration::ZERO
-            && now.duration_since(self.last_packet_sent) >= keep_alive
-        {
-            self.send_ping();
-            self.last_packet_sent = now;
-        }
-
-        // 2. Connection timeout: Detect dead connection
+        // 1. A PINGRESP is only required after we actually send a PINGREQ. In
+        // particular, QoS 0 publishing may be continuously outbound and have
+        // no broker responses at all, so `last_packet_received` alone cannot
+        // establish that the connection has timed out.
+        let ping_timeout = keep_alive * self.options.ping_timeout_multiplier;
         if keep_alive > Duration::ZERO
-            && now.duration_since(self.last_packet_received)
-                >= keep_alive * self.options.ping_timeout_multiplier
+            && self
+                .ping_sent_at
+                .is_some_and(|sent_at| now.duration_since(sent_at) >= ping_timeout)
         {
             self.events.push(MqttEvent::ReconnectNeeded);
             self.handle_connection_lost();
             // Schedule reconnection with backoff
             self.schedule_reconnect(now);
             return self.take_events();
+        }
+
+        // 2. Keep-alive: Send PING only while otherwise idle, and do not send
+        // another one until the outstanding PINGREQ is answered or times out.
+        if self.ping_sent_at.is_none()
+            && self.options.auto_keepalive
+            && keep_alive > Duration::ZERO
+            && now.duration_since(self.last_packet_sent) >= keep_alive
+        {
+            let _ = self.send_ping_at(now);
         }
 
         // 3. Retransmissions
@@ -484,8 +496,7 @@ impl MqttEngine {
     ///
     /// Prioritizes:
     /// 1. Reconnection attempts (if disconnected).
-    /// 2. Keep-alive PINGs.
-    /// 3. Connection timeout checks.
+    /// 2. Keep-alive PINGs and their response timeout.
     /// 4. Packet retransmissions.
     pub fn next_tick_at(&self) -> Option<Instant> {
         // 1. Reconnection timer (highest priority when disconnected)
@@ -496,18 +507,15 @@ impl MqttEngine {
         let mut next = None;
         let keep_alive = Duration::from_secs(self.options.keep_alive as u64);
 
-        // 2. Keep-alive timer (send PING) — only when automatic keep-alive is on
-        if self.options.auto_keepalive && keep_alive > Duration::ZERO {
-            let ping_deadline = self.last_packet_sent + keep_alive;
-            next = Some(ping_deadline);
-        }
-
-        // 3. Connection timeout (detect dead connection)
+        // 2. A PINGREQ response timeout takes precedence over another PINGREQ.
         if keep_alive > Duration::ZERO {
-            let timeout = keep_alive * self.options.ping_timeout_multiplier;
-            let timeout_deadline = self.last_packet_received + timeout;
-            if next.is_none() || timeout_deadline < next.unwrap() {
+            if let Some(ping_sent_at) = self.ping_sent_at {
+                let timeout_deadline =
+                    ping_sent_at + keep_alive * self.options.ping_timeout_multiplier;
                 next = Some(timeout_deadline);
+            } else if self.options.auto_keepalive {
+                let ping_deadline = self.last_packet_sent + keep_alive;
+                next = Some(ping_deadline);
             }
         }
 
@@ -1074,6 +1082,7 @@ impl MqttEngine {
                 }));
             }
             MqttPacket::PingResp5(_) | MqttPacket::PingResp3(_) => {
+                self.ping_sent_at = None;
                 events.push(MqttEvent::PingResponse(PingResult { success: true }));
             }
             MqttPacket::PubRec5(rec) => {
@@ -1170,15 +1179,21 @@ impl MqttEngine {
     /// Queue a PINGREQ, ignoring a full outgoing buffer (best-effort, used by the
     /// automatic keep-alive timer).
     pub fn send_ping(&mut self) {
-        let packet = self.pingreq_packet();
-        let _ = self.enqueue_packet(packet);
+        let _ = self.send_ping_at(Instant::now());
     }
 
     /// Queue a PINGREQ, propagating [`MqttClientError::BufferFull`] if the
     /// outgoing buffer is full, so callers can confirm it was actually queued.
     pub fn try_send_ping(&mut self) -> Result<(), MqttClientError> {
+        self.send_ping_at(Instant::now())
+    }
+
+    fn send_ping_at(&mut self, now: Instant) -> Result<(), MqttClientError> {
         let packet = self.pingreq_packet();
-        self.enqueue_packet(packet)
+        self.enqueue_packet(packet)?;
+        self.last_packet_sent = now;
+        self.ping_sent_at = Some(now);
+        Ok(())
     }
 
     pub fn enqueue_packet(&mut self, packet: MqttPacket) -> Result<(), MqttClientError> {
@@ -4078,6 +4093,39 @@ mod tests {
             !on.outgoing_buffer.is_empty(),
             "PINGREQ expected when auto_keepalive is enabled"
         );
+    }
+
+    #[test]
+    fn keepalive_does_not_timeout_active_qos0_publisher() {
+        let mut engine = MqttEngine::new(
+            MqttClientOptions::builder()
+                .keep_alive(1)
+                .ping_timeout_multiplier(2)
+                .build(),
+        );
+        engine.is_connected = true;
+
+        let now = Instant::now();
+        engine.last_packet_sent = now;
+        // QoS 0 publishes do not receive acknowledgements, so this timestamp
+        // may be stale while the client is actively transmitting.
+        engine.last_packet_received = now - Duration::from_secs(3);
+
+        assert!(engine.handle_tick(now).is_empty());
+        assert!(engine.ping_sent_at.is_none());
+        assert!(engine.is_connected());
+
+        let ping_at = now + Duration::from_millis(1100);
+        assert!(engine.handle_tick(ping_at).is_empty());
+        assert_eq!(engine.ping_sent_at, Some(ping_at));
+
+        assert!(engine
+            .handle_tick(ping_at + Duration::from_secs(1))
+            .is_empty());
+        let events = engine.handle_tick(ping_at + Duration::from_millis(2100));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, MqttEvent::ReconnectNeeded)));
     }
 
     #[cfg(feature = "quic-proto")]
