@@ -149,7 +149,8 @@ impl Connection {
                         outcome.connected = true;
                     } else {
                         self.state = ConnState::Failed;
-                        outcome.errors += 1;
+                        outcome.mqtt_connect_errors += 1;
+                        outcome.failed = true;
                     }
                 }
                 MqttEvent::Published(result) => {
@@ -160,17 +161,18 @@ impl Connection {
                             self.latency_samples.push(sent_at.elapsed());
                         }
                     } else {
-                        outcome.errors += 1;
+                        outcome.mqtt_publish_errors += 1;
                     }
                 }
                 MqttEvent::Error(_) => {
-                    outcome.errors += 1;
+                    outcome.mqtt_client_errors += 1;
                 }
                 MqttEvent::Disconnected(_) | MqttEvent::ReconnectNeeded
                     if self.state != ConnState::Disconnecting && self.state != ConnState::Done =>
                 {
                     self.state = ConnState::Failed;
-                    outcome.errors += 1;
+                    outcome.mqtt_disconnect_errors += 1;
+                    outcome.failed = true;
                 }
                 _ => {}
             }
@@ -250,7 +252,11 @@ impl Connection {
 pub struct EventOutcome {
     pub connected: bool,
     pub acked: u64,
-    pub errors: u64,
+    pub mqtt_connect_errors: u64,
+    pub mqtt_publish_errors: u64,
+    pub mqtt_client_errors: u64,
+    pub mqtt_disconnect_errors: u64,
+    pub failed: bool,
 }
 
 // ---------------------------------------------------------------------------
@@ -440,7 +446,8 @@ impl QuicConnection {
                         outcome.connected = true;
                     } else {
                         self.state = QuicConnState::Failed;
-                        outcome.errors += 1;
+                        outcome.mqtt_connect_errors += 1;
+                        outcome.failed = true;
                     }
                 }
                 MqttEvent::Published(result) => {
@@ -451,18 +458,19 @@ impl QuicConnection {
                             self.latency_samples.push(sent_at.elapsed());
                         }
                     } else {
-                        outcome.errors += 1;
+                        outcome.mqtt_publish_errors += 1;
                     }
                 }
                 MqttEvent::Error(_) => {
-                    outcome.errors += 1;
+                    outcome.mqtt_client_errors += 1;
                 }
                 MqttEvent::Disconnected(_) | MqttEvent::ReconnectNeeded
                     if self.state != QuicConnState::Disconnecting
                         && self.state != QuicConnState::Done =>
                 {
                     self.state = QuicConnState::Failed;
-                    outcome.errors += 1;
+                    outcome.mqtt_disconnect_errors += 1;
+                    outcome.failed = true;
                 }
 
                 _ => {}
