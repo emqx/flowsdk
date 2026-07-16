@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 pub struct BenchStats {
     pub messages_sent: AtomicU64,
     pub messages_acked: AtomicU64,
+    pub puback_no_match: AtomicU64,
     pub errors: AtomicU64,
     pub socket_errors: AtomicU64,
     pub connect_errors: AtomicU64,
@@ -39,6 +40,7 @@ impl BenchStats {
         Self {
             messages_sent: AtomicU64::new(0),
             messages_acked: AtomicU64::new(0),
+            puback_no_match: AtomicU64::new(0),
             errors: AtomicU64::new(0),
             socket_errors: AtomicU64::new(0),
             connect_errors: AtomicU64::new(0),
@@ -58,6 +60,10 @@ impl BenchStats {
 
     pub fn record_error(&self, kind: ErrorKind) {
         self.record_errors(kind, 1);
+    }
+
+    pub fn record_puback_no_match(&self, count: u64) {
+        self.puback_no_match.fetch_add(count, Ordering::Relaxed);
     }
 
     pub fn record_errors(&self, kind: ErrorKind, count: u64) {
@@ -102,6 +108,7 @@ impl BenchStats {
         StatsSnapshot {
             sent: self.messages_sent.load(Ordering::Relaxed),
             acked: self.messages_acked.load(Ordering::Relaxed),
+            puback_no_match: self.puback_no_match.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
             socket_errors: self.socket_errors.load(Ordering::Relaxed),
             connect_errors: self.connect_errors.load(Ordering::Relaxed),
@@ -122,6 +129,7 @@ impl BenchStats {
 pub struct StatsSnapshot {
     pub sent: u64,
     pub acked: u64,
+    pub puback_no_match: u64,
     pub errors: u64,
     pub socket_errors: u64,
     pub connect_errors: u64,
@@ -189,6 +197,7 @@ pub fn print_final_summary(
     println!("  Total Sent:      {}", snap.sent);
     if config.qos > 0 {
         println!("  Total Acked:     {}", snap.acked);
+        println!("  PubAckNoMatch:   {}", snap.puback_no_match);
     }
     println!("  Errors:          {}", snap.errors);
     println!("    Socket:        {}", snap.socket_errors);
@@ -258,9 +267,11 @@ mod tests {
         ] {
             stats.record_error(kind);
         }
+        stats.record_puback_no_match(2);
 
         let snapshot = stats.snapshot();
         assert_eq!(snapshot.errors, 8);
+        assert_eq!(snapshot.puback_no_match, 2);
         assert_eq!(snapshot.socket_errors, 1);
         assert_eq!(snapshot.connect_errors, 1);
         assert_eq!(snapshot.send_errors, 1);

@@ -185,8 +185,9 @@ pub struct PublishResult {
 
 impl PublishResult {
     pub fn is_success(&self) -> bool {
-        // Compatible with older Rust: Option::map_or instead of is_none_or
-        self.reason_code.is_none_or(|code| code == 0) // QoS 0 or reason code 0
+        // MQTT 5 reason codes below 0x80 are successful outcomes. This includes
+        // 0x10 (No matching subscribers) for PUBACK/PUBREC.
+        self.reason_code.is_none_or(|code| code < 0x80)
     }
 
     /// Returns a description of the PUBACK/PUBREC reason code
@@ -195,6 +196,26 @@ impl PublishResult {
             None => "Success (QoS 0)",
             Some(code) => reason_code_to_string(code),
         }
+    }
+}
+
+#[cfg(test)]
+mod publish_result_tests {
+    use super::PublishResult;
+
+    fn result(reason_code: u8) -> PublishResult {
+        PublishResult {
+            packet_id: Some(1),
+            reason_code: Some(reason_code),
+            properties: None,
+            qos: 1,
+        }
+    }
+
+    #[test]
+    fn mqtt5_no_matching_subscribers_is_successful() {
+        assert!(result(0x10).is_success());
+        assert!(!result(0x80).is_success());
     }
 }
 
