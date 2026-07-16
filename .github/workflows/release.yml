@@ -38,6 +38,7 @@ jobs:
     outputs:
       upload_url: ${{ steps.create_release.outputs.upload_url }}
       version: ${{ steps.get_version.outputs.version }}
+      crate_version: ${{ steps.get_version.outputs.crate_version }}
       tag: ${{ steps.get_version.outputs.tag }}
     
     steps:
@@ -64,14 +65,23 @@ jobs:
       shell: bash
       run: |
         if [ "${{ github.event_name }}" = "push" ]; then
-          TAG="${GITHUB_REF_NAME}"
-          VERSION="${TAG#v}"
+          TAG="${GITHUB_REF_NAME#refs/tags/}"
+          CRATE_VERSION="${TAG#v}"
+          CRATE_VERSION="${CRATE_VERSION#V}"
         else
-          VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
-          TAG="v${VERSION}"
+          CRATE_VERSION=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          CRATE_VERSION="${CRATE_VERSION#v}"
+          CRATE_VERSION="${CRATE_VERSION#V}"
+          TAG="v${CRATE_VERSION}"
         fi
-        echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+        echo "version=$CRATE_VERSION" >> "$GITHUB_OUTPUT"
+        echo "crate_version=$CRATE_VERSION" >> "$GITHUB_OUTPUT"
         echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+    - name: Resolve release commit
+      id: release_commit
+      shell: bash
+      run: echo "sha=$(git rev-parse HEAD^{commit})" >> "$GITHUB_OUTPUT"
 
     - name: Create Release
       id: create_release
@@ -81,7 +91,7 @@ jobs:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       with:
         tag_name: ${{ steps.get_version.outputs.tag }}
-        commitish: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_ref || github.ref_name) || github.sha }}
+        commitish: ${{ steps.release_commit.outputs.sha }}
         release_name: FlowSDK ${{ steps.get_version.outputs.version }}
         body: |
           ## FlowSDK ${{ steps.get_version.outputs.version }}
@@ -113,23 +123,22 @@ jobs:
 
       - name: Verify Tag matches Cargo.toml
         env:
-          RELEASE_VERSION: ${{ needs.create-release.outputs.version }}
+          CRATE_VERSION: ${{ needs.create-release.outputs.crate_version }}
         run: |
-          TAG_VERSION=$RELEASE_VERSION
           CORE_VERSION=$(grep "^version" Cargo.toml | head -n 1 | cut -d '"' -f 2)
           FFI_VERSION=$(grep "^version" flowsdk_ffi/Cargo.toml | head -n 1 | cut -d '"' -f 2)
           
-          echo "Tag: $TAG_VERSION"
+          echo "Crate version: $CRATE_VERSION"
           echo "Core: $CORE_VERSION"
           echo "FFI:  $FFI_VERSION"
 
-          if [ "$TAG_VERSION" != "$CORE_VERSION" ]; then
-            echo "Error: Tag ($TAG_VERSION) mismatch with Core ($CORE_VERSION)"
+          if [ "$CRATE_VERSION" != "$CORE_VERSION" ]; then
+            echo "Error: Crate version ($CRATE_VERSION) mismatch with Core ($CORE_VERSION)"
             exit 1
           fi
           
-          if [ "$TAG_VERSION" != "$FFI_VERSION" ]; then
-            echo "Error: Tag ($TAG_VERSION) mismatch with FFI ($FFI_VERSION)"
+          if [ "$CRATE_VERSION" != "$FFI_VERSION" ]; then
+            echo "Error: Crate version ($CRATE_VERSION) mismatch with FFI ($FFI_VERSION)"
             exit 1
           fi
           
@@ -151,7 +160,7 @@ jobs:
       - name: Publish flowsdk (Core)
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p flowsdk ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
+        run: cargo publish -p flowsdk --allow-dirty ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
 
       - name: Wait for Index Propagation
         if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
@@ -161,7 +170,11 @@ jobs:
         if: github.event_name != 'workflow_dispatch' || !inputs.dry_run
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-        run: cargo publish -p flowsdk_ffi
+        run: cargo publish -p flowsdk_ffi --allow-dirty ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run && '--dry-run' || '' }}
+
+      - name: Validate flowsdk_ffi (Bindings)
+        if: github.event_name == 'workflow_dispatch' && inputs.dry_run
+        run: cargo check -p flowsdk_ffi
 
       - name: Validate flowsdk_ffi (Bindings)
         if: github.event_name == 'workflow_dispatch' && inputs.dry_run
@@ -220,26 +233,35 @@ jobs:
         key: ${{ runner.os }}-release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build release binaries
+      run: cargo build --release --workspace --target ${{ matrix.target }}
+
+    - name: Build Linux examples and mqtt_ring_bench
+      if: runner.os == 'Linux'
       run: |
-        cd mqtt_grpc_duality
-        cargo build --release --target ${{ matrix.target }}
+        cargo build --release --package flowsdk --examples --features quic-openssl --target ${{ matrix.target }}
+        cargo build --release --package mqtt_ring_bench --features quic --target ${{ matrix.target }}
 
     - name: Create release package (Unix)
       if: runner.os != 'Windows'
       run: |
         mkdir -p release-package
-        cp mqtt_grpc_duality/target/${{ matrix.target }}/release/r-proxy release-package/
-        cp mqtt_grpc_duality/target/${{ matrix.target }}/release/s-proxy release-package/
+        cp target/${{ matrix.target }}/release/r-proxy release-package/
+        cp target/${{ matrix.target }}/release/s-proxy release-package/
         cp README.md release-package/
         cp mqtt_grpc_duality/README.md release-package/PROXY-README.md
+        if [ "$RUNNER_OS" = "Linux" ]; then
+          mkdir -p release-package/examples
+          find target/${{ matrix.target }}/release/examples -maxdepth 1 -type f -perm -111 -exec cp {} release-package/examples/ \;
+          cp target/${{ matrix.target }}/release/mqtt_ring_bench release-package/
+        fi
         tar -czf flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.tar.gz -C release-package .
 
     - name: Create release package (Windows)
       if: runner.os == 'Windows'
       run: |
         mkdir release-package
-        cp mqtt_grpc_duality/target/${{ matrix.target }}/release/r-proxy.exe release-package/
-        cp mqtt_grpc_duality/target/${{ matrix.target }}/release/s-proxy.exe release-package/
+        cp target/${{ matrix.target }}/release/r-proxy.exe release-package/
+        cp target/${{ matrix.target }}/release/s-proxy.exe release-package/
         cp README.md release-package/
         cp mqtt_grpc_duality/README.md release-package/PROXY-README.md
         Compress-Archive -Path release-package/* -DestinationPath flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.zip
