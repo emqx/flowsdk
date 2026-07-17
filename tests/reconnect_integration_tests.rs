@@ -154,7 +154,7 @@ async fn test_auto_reconnect_on_broker_restart() {
         .reconnect_base_delay_ms(300) // 300ms initial delay
         .reconnect_max_delay_ms(1000) // 1s max delay
         .max_reconnect_attempts(0) // Unlimited
-        .ping_timeout_multiplier(2) // Timeout after 6 seconds (3s * 2)
+        .ping_timeout_multiplier(2) // Wait up to 6 seconds for PINGRESP
         .build();
 
     let handler = ReconnectTestHandler::new();
@@ -186,7 +186,7 @@ async fn test_auto_reconnect_on_broker_restart() {
             println!("\n🔵 Phase 2: Stopping broker to simulate connection loss");
             stop_mosquitto(broker);
 
-            // Wait for connection loss detection (should happen within keep_alive * multiplier)
+            // Wait for EOF or keep-alive processing to detect the stopped broker.
             println!("⏳ Waiting for connection loss detection (up to 8 seconds)...");
             sleep(Duration::from_secs(8)).await;
 
