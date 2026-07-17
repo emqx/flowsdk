@@ -129,9 +129,15 @@ fn test_keep_alive_timeout() {
         .unwrap();
     engine.handle_incoming(&connack);
 
-    // Advance time past keep_alive * multiplier (60s * 2 = 120s)
-    let much_later = now + Duration::from_secs(121);
-    let events = engine.handle_tick(much_later);
+    // First expire the idle keep-alive interval so the engine sends PINGREQ.
+    let ping_at = now + Duration::from_secs(61);
+    assert!(engine.handle_tick(ping_at).is_empty());
+    assert!(engine.is_connected());
+
+    // The timeout starts when PINGREQ is sent, not at the start of the idle
+    // interval. No PINGRESP within 60s * 2 marks the connection as lost.
+    let timeout_at = ping_at + Duration::from_secs(121);
+    let events = engine.handle_tick(timeout_at);
 
     assert!(!engine.is_connected());
     assert!(events

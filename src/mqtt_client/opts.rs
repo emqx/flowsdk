@@ -104,8 +104,8 @@ pub struct MqttClientOptions {
     pub retransmission_timeout_ms: u64,
 
     /// Ping timeout multiplier
-    /// - Connection is considered dead if no packet received for keep_alive * multiplier
-    /// - Default: 2 (wait 2x keep_alive before timing out)
+    /// - After sending PINGREQ, wait keep_alive * multiplier for PINGRESP
+    /// - Default: 2 (wait 2x keep_alive for PINGRESP before timing out)
     pub ping_timeout_multiplier: u32,
 
     /// Maximum number of outgoing packets in the internal outgoing queue
@@ -567,7 +567,8 @@ impl MqttClientOptions {
 
     /// Set the ping timeout multiplier
     ///
-    /// Connection is considered dead if no packet received for `keep_alive * multiplier`.
+    /// After sending PINGREQ, the connection is considered dead if PINGRESP is
+    /// not received within `keep_alive * multiplier`.
     ///
     /// # Example
     /// ```
@@ -575,7 +576,7 @@ impl MqttClientOptions {
     ///
     /// let options = MqttClientOptions::builder()
     ///     .keep_alive(60)
-    ///     .ping_timeout_multiplier(3)  // Timeout after 180 seconds
+    ///     .ping_timeout_multiplier(3)  // Wait 180 seconds for PINGRESP
     ///     .build();
     /// ```
     pub fn ping_timeout_multiplier(mut self, multiplier: u32) -> Self {
