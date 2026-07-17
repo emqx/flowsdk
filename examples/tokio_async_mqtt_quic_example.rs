@@ -137,10 +137,10 @@ impl TokioMqttEventHandler for QuicExampleHandler {
 
 /// Initialize the default crypto provider for rustls (required in 0.23+)
 fn init_crypto() {
-    #[cfg(feature = "quic")]
-    {
-        let _ = rustls_openssl::default_provider().install_default();
-    }
+    #[cfg(feature = "quic-proto-openssl")]
+    let _ = rustls_openssl::default_provider().install_default();
+    #[cfg(not(feature = "quic-proto-openssl"))]
+    let _ = rustls::crypto::ring::default_provider().install_default();
 }
 
 async fn run_example(test_mode: bool) -> Result<(), Box<dyn std::error::Error>> {

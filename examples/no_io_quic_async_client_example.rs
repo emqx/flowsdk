@@ -87,7 +87,10 @@ impl Future for ProtocolDriver {
 
 /// Demonstrates how to use the QuicMqttEngine as a non-tokio async driver.
 pub fn run_example(exit_when_rcvd: bool) -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "quic-proto-openssl")]
     let _ = rustls_openssl::default_provider().install_default();
+    #[cfg(not(feature = "quic-proto-openssl"))]
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let mqtt_opts = MqttClientOptions::builder()
         .client_id("no-io-quic-async-client")
         .peer("broker.emqx.io:14567")
