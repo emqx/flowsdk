@@ -190,10 +190,10 @@ jobs:
     strategy:
       matrix:
         include:
-          - target: x86_64-unknown-linux-gnu
+          - target: x86_64-unknown-linux-musl
             os: ubuntu-latest
             asset_name_suffix: linux-amd64
-          - target: aarch64-unknown-linux-gnu
+          - target: aarch64-unknown-linux-musl
             os: ubuntu-24.04-arm
             asset_name_suffix: linux-arm64
           #- target: x86_64-apple-darwin
@@ -217,6 +217,12 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
+    - name: Install musl toolchain
+      if: runner.os == 'Linux'
+      run: |
+        sudo apt-get update
+        sudo apt-get install --yes musl-tools
+
     - name: Install protoc
       uses: arduino/setup-protoc@v3
       with:
@@ -233,12 +239,17 @@ jobs:
         key: ${{ runner.os }}-release-${{ matrix.target }}-${{ hashFiles('**/Cargo.lock') }}
 
     - name: Build release binaries
+      if: runner.os != 'Linux'
       run: cargo build --release --workspace --target ${{ matrix.target }}
 
-    - name: Build Linux examples and mqtt_ring_bench
+    - name: Build static Linux release binaries
       if: runner.os == 'Linux'
+      env:
+        CC_x86_64_unknown_linux_musl: musl-gcc
+        CC_aarch64_unknown_linux_musl: musl-gcc
       run: |
-        cargo build --release --package flowsdk --examples --features quic-openssl --target ${{ matrix.target }}
+        cargo build --release --package mqtt-grpc-proxy --target ${{ matrix.target }}
+        cargo build --release --package flowsdk --examples --no-default-features --features quic,rustls-tls --target ${{ matrix.target }}
         cargo build --release --package mqtt_ring_bench --features quic --target ${{ matrix.target }}
 
     - name: Create release package (Unix)
@@ -251,7 +262,9 @@ jobs:
         cp mqtt_grpc_duality/README.md release-package/PROXY-README.md
         if [ "$RUNNER_OS" = "Linux" ]; then
           mkdir -p release-package/examples
-          find target/${{ matrix.target }}/release/examples -maxdepth 1 -type f -perm -111 -exec cp {} release-package/examples/ \;
+          while IFS= read -r example; do
+            cp target/${{ matrix.target }}/release/examples/"$example" release-package/examples/
+          done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "flowsdk") | .targets[] | select(.kind | index("example")) | .name')
           cp target/${{ matrix.target }}/release/mqtt_ring_bench release-package/
         fi
         tar -czf flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.tar.gz -C release-package .

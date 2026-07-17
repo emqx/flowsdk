@@ -83,11 +83,6 @@ strict-protocol-compliance = []
 # DO NOT enable in production builds
 protocol-testing = []
 
-# Force static linking of the C runtime
-# usage: cargo build --target aarch64-unknown-linux-musl --examples --features quic
-[target.aarch64-unknown-linux-musl]
-rustflags = ["-C", "target-feature=+crt-static"]
-
 [profile.release-small]
 inherits = "release"
 opt-level = "z"

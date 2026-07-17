@@ -10,7 +10,10 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(feature = "quic-proto-openssl")]
     let _ = rustls_openssl::default_provider().install_default();
+    #[cfg(not(feature = "quic-proto-openssl"))]
+    let _ = rustls::crypto::ring::default_provider().install_default();
     let mqtt_opts = MqttClientOptions::builder()
         .client_id("no-io-quic-client")
         .peer("broker.emqx.io:14567")
