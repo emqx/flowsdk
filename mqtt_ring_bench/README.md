@@ -80,12 +80,17 @@ OPTIONS:
     --connect-rate <N>        Connections/sec during ramp-up [default: 1000]
     --socket-buf <BYTES>      SO_RCVBUF/SO_SNDBUF per socket [default: 2048]
     --parser-buf <BYTES>      MQTT parser buffer per connection [default: 1500]
+    --shutdown-mode <MODE>    Ctrl-C behavior: immediate or graceful [default: immediate]
     --ifaddr <ADDRS>          Source IPs to bind (round-robin)
     --quic                    Use MQTT over QUIC (UDP) instead of TCP
     --quic-insecure           Skip TLS certificate verification (testing only)
     --server-name <NAME>      TLS SNI server name [default: --host value]
     -h, --help                Print help
 ```
+
+`--shutdown-mode immediate` exits on the first Ctrl-C and lets the kernel tear
+down pending io_uring operations. Use `--shutdown-mode graceful` to explicitly
+cancel and reap pending operations before closing sockets and exiting.
 
 ## Examples
 

@@ -1,7 +1,25 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use clap::{ArgAction, Parser};
+use clap::{ArgAction, Parser, ValueEnum};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum ShutdownMode {
+    /// Exit immediately and let the kernel tear down the io_uring instances.
+    #[default]
+    Immediate,
+    /// Explicitly cancel and reap every pending operation before exiting.
+    Graceful,
+}
+
+impl ShutdownMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Immediate => "immediate",
+            Self::Graceful => "graceful",
+        }
+    }
+}
 
 pub struct BenchConfig {
     pub addr: SocketAddr,
@@ -19,6 +37,7 @@ pub struct BenchConfig {
     pub connect_rate: usize,
     pub socket_buf: usize,
     pub parser_buf: usize,
+    pub shutdown_mode: ShutdownMode,
     /// Source IP addresses to bind outgoing connections to (round-robin).
     /// Empty means OS picks the source address.
     pub ifaddrs: Vec<IpAddr>,
@@ -78,6 +97,10 @@ struct BenchArgs {
     #[arg(long = "parser-buf", default_value_t = 1500)]
     parser_buf: usize,
 
+    /// Ctrl-C behavior: immediate kernel teardown or explicit cancellation.
+    #[arg(long = "shutdown-mode", value_enum, default_value = "immediate")]
+    shutdown_mode: ShutdownMode,
+
     /// Source IP addresses to bind outgoing connections to (round-robin).
     /// Supports single, comma-separated, or last-octet range syntax.
     #[arg(long = "ifaddr")]
@@ -111,6 +134,7 @@ impl Default for BenchConfig {
             connect_rate: 1000,
             socket_buf: 2048,
             parser_buf: 1500,
+            shutdown_mode: ShutdownMode::Immediate,
             ifaddrs: Vec::new(),
             quic: false,
             quic_insecure: false,
@@ -149,6 +173,7 @@ pub fn parse_args() -> BenchConfig {
         connect_rate: args.connect_rate,
         socket_buf: args.socket_buf,
         parser_buf: args.parser_buf,
+        shutdown_mode: args.shutdown_mode,
         ifaddrs: Vec::new(),
         quic: args.quic,
         quic_insecure: args.quic_insecure,
@@ -236,4 +261,24 @@ fn parse_ifaddrs(val: &str) -> Vec<IpAddr> {
         }
     }
     addrs
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shutdown_mode_defaults_to_immediate() {
+        let args = BenchArgs::try_parse_from(["mqtt_ring_bench"]).unwrap();
+
+        assert_eq!(args.shutdown_mode, ShutdownMode::Immediate);
+    }
+
+    #[test]
+    fn graceful_shutdown_mode_can_be_selected() {
+        let args =
+            BenchArgs::try_parse_from(["mqtt_ring_bench", "--shutdown-mode", "graceful"]).unwrap();
+
+        assert_eq!(args.shutdown_mode, ShutdownMode::Graceful);
+    }
 }

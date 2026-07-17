@@ -49,7 +49,15 @@ fn main() {
 
     // Ctrl+C handler
     let stats_ctrlc = Arc::clone(&stats);
+    let shutdown_mode = config.shutdown_mode;
     ctrlc::set_handler(move || {
+        if shutdown_mode == config::ShutdownMode::Immediate {
+            eprintln!("\nInterrupted, exiting immediately...");
+            unsafe {
+                libc::_exit(130);
+            }
+        }
+
         if stats_ctrlc.stopped.swap(true, Ordering::SeqCst) {
             eprintln!("\nInterrupted again, forcing exit...");
             unsafe {
@@ -158,6 +166,7 @@ fn print_banner(config: &config::BenchConfig) {
     eprintln!("  MQTT:       v{}", config.mqtt_version);
     eprintln!("  Socket buf: {} bytes", config.socket_buf);
     eprintln!("  Parser buf: {} bytes", config.parser_buf);
+    eprintln!("  Shutdown:   {}", config.shutdown_mode.as_str());
     if config.ifaddrs.is_empty() {
         eprintln!("  Bind addrs: (OS default)");
     } else {
