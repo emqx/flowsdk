@@ -262,9 +262,9 @@ jobs:
         cp mqtt_grpc_duality/README.md release-package/PROXY-README.md
         if [ "$RUNNER_OS" = "Linux" ]; then
           mkdir -p release-package/examples
-          while IFS= read -r example; do
-            cp target/${{ matrix.target }}/release/examples/"$example" release-package/examples/
-          done < <(cargo metadata --no-deps --format-version 1 | jq -r '.packages[] | select(.name == "flowsdk") | .targets[] | select(.kind | index("example")) | .name')
+          cargo metadata --no-deps --format-version 1 \
+            | jq -r '.packages[] | select(.name == "flowsdk") | .targets[] | select(.kind | index("example")) | .name' \
+            | xargs -r -I{} cp target/${{ matrix.target }}/release/examples/{} release-package/examples/
           cp target/${{ matrix.target }}/release/mqtt_ring_bench release-package/
         fi
         tar -czf flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.tar.gz -C release-package .
