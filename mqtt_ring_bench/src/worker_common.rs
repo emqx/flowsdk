@@ -12,6 +12,8 @@ pub const OP_SEND: u64 = 1;
 pub const OP_RECV: u64 = 2;
 
 const CANCEL_USER_DATA_BIT: u64 = 1 << 63;
+// Keep cancellation-triggered async-poll task work bounded on older kernels.
+const SHUTDOWN_CANCEL_BATCH: usize = 32;
 const SHUTDOWN_WAIT: Duration = Duration::from_millis(100);
 
 pub fn encode_user_data(conn_key: usize, op: u64) -> u64 {
@@ -42,26 +44,49 @@ pub fn pending_user_data(
 /// Cancel and reap every operation before its socket and backing buffers are dropped.
 pub fn cancel_pending_operations(ring: &mut IoUring, pending: Vec<u64>) -> io::Result<()> {
     let mut shutdown = ShutdownCompletions::new(&pending);
+    drain_shutdown_completions(ring, &mut shutdown);
 
-    for target in pending {
-        let cancel_data = cancel_user_data(target);
-        let cancel = opcode::AsyncCancel::new(target)
-            .build()
-            .user_data(cancel_data);
-
-        loop {
-            if unsafe { ring.submission().push(&cancel) }.is_ok() {
-                shutdown.cancellations.insert(cancel_data);
-                break;
-            }
-            submit_shutdown_batch(ring, &mut shutdown)?;
+    for pending_batch in pending.chunks(SHUTDOWN_CANCEL_BATCH) {
+        let batch: Vec<_> = pending_batch
+            .iter()
+            .filter(|target| shutdown.operations.contains(target))
+            .copied()
+            .collect();
+        if batch.is_empty() {
+            continue;
         }
+
+        for &target in &batch {
+            let cancel_data = cancel_user_data(target);
+            let cancel = opcode::AsyncCancel::new(target)
+                .build()
+                .user_data(cancel_data);
+
+            loop {
+                if unsafe { ring.submission().push(&cancel) }.is_ok() {
+                    shutdown.cancellations.insert(cancel_data);
+                    break;
+                }
+                submit_shutdown_batch(ring, &mut shutdown)?;
+            }
+        }
+
+        submit_shutdown_batch(ring, &mut shutdown)?;
+        wait_for_shutdown_batch(ring, &mut shutdown, &batch)?;
     }
 
-    submit_shutdown_batch(ring, &mut shutdown)?;
-    while !shutdown.is_empty() {
-        drain_shutdown_completions(ring, &mut shutdown);
-        if shutdown.is_empty() {
+    debug_assert!(shutdown.is_empty());
+    Ok(())
+}
+
+fn wait_for_shutdown_batch(
+    ring: &mut IoUring,
+    shutdown: &mut ShutdownCompletions,
+    targets: &[u64],
+) -> io::Result<()> {
+    while !shutdown.batch_is_complete(targets) {
+        drain_shutdown_completions(ring, shutdown);
+        if shutdown.batch_is_complete(targets) {
             break;
         }
 
@@ -118,6 +143,13 @@ impl ShutdownCompletions {
 
     fn is_empty(&self) -> bool {
         self.operations.is_empty() && self.cancellations.is_empty()
+    }
+
+    fn batch_is_complete(&self, targets: &[u64]) -> bool {
+        targets.iter().all(|target| {
+            !self.operations.contains(target)
+                && !self.cancellations.contains(&cancel_user_data(*target))
+        })
     }
 
     fn record(&mut self, user_data: u64, result: i32) {
@@ -196,6 +228,22 @@ mod tests {
 
         shutdown.record(target, -libc::ECANCELED);
         assert!(shutdown.is_empty());
+    }
+
+    #[test]
+    fn completed_batch_does_not_wait_for_later_targets() {
+        let current = encode_user_data(123, OP_RECV);
+        let later = encode_user_data(456, OP_RECV);
+        let cancel = cancel_user_data(current);
+        let mut shutdown = ShutdownCompletions::new(&[current, later]);
+        shutdown.cancellations.insert(cancel);
+
+        shutdown.record(current, -libc::ECANCELED);
+        assert!(!shutdown.batch_is_complete(&[current]));
+
+        shutdown.record(cancel, 0);
+        assert!(shutdown.batch_is_complete(&[current]));
+        assert!(!shutdown.is_empty());
     }
 
     #[test]
