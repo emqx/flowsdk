@@ -254,15 +254,39 @@ pub fn run_worker(
         }
     }
 
-    // Collect latency samples
+    let pending = conns
+        .iter()
+        .flat_map(|(key, conn)| {
+            pending_user_data(
+                key,
+                conn.state == ConnState::TcpConnecting,
+                conn.send_pending,
+                conn.recv_pending,
+            )
+        })
+        .collect();
+    // Cancel ring operations before shutting down sockets. Bulk shutdown first can
+    // wake thousands of async-poll receives into task_work on older kernels.
+    if let Err(error) = cancel_pending_operations(&mut ring, pending) {
+        eprintln!("worker {}: io_uring shutdown failed: {}", worker_id, error);
+        unsafe {
+            libc::_exit(if stats.stopped.load(Ordering::Relaxed) {
+                130
+            } else {
+                1
+            });
+        }
+    }
+
+    // The kernel no longer references connection buffers, so they can be dropped safely.
     let mut all_samples = Vec::new();
     for (_, conn) in conns.iter_mut() {
         all_samples.append(&mut conn.latency_samples);
     }
 
-    // Close fds
     for (_, conn) in conns.iter() {
         unsafe {
+            libc::shutdown(conn.fd, libc::SHUT_RDWR);
             libc::close(conn.fd);
         }
     }

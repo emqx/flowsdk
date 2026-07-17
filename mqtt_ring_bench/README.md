@@ -41,6 +41,9 @@ QUIC avoids TCP's mandatory send/recv buffers. The main cost is the quinn-proto 
 
 Requires Rust 1.70+. Linux-only (io_uring).
 
+The first Ctrl-C makes each worker cancel and drain its own outstanding socket operations before
+printing a partial summary and exiting with status 130. A second Ctrl-C forces immediate exit.
+
 ```bash
 # Native build on Linux (TCP only)
 cargo build -p mqtt_ring_bench --release
