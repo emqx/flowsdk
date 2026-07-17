@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["ConnState","QuicConnState"],"struct":["Connection","EventOutcome","QuicConnection"]};
+window.SIDEBAR_ITEMS = {"enum":["ConnState","QuicConnState"],"struct":["Connection","EventOutcome","QuicConnection","TcpSendQueue"]};

@@ -92,8 +92,8 @@ Default: None</li>
 </ul>
 </div><span id="structfield.ping_timeout_multiplier" class="structfield section-header"><a href="#structfield.ping_timeout_multiplier" class="anchor field">§</a><code>ping_timeout_multiplier: <a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.u32.html">u32</a></code></span><div class="docblock"><p>Ping timeout multiplier</p>
 <ul>
-<li>Connection is considered dead if no packet received for keep_alive * multiplier</li>
-<li>Default: 2 (wait 2x keep_alive before timing out)</li>
+<li>After sending PINGREQ, wait keep_alive * multiplier for PINGRESP</li>
+<li>Default: 2 (wait 2x keep_alive for PINGRESP before timing out)</li>
 </ul>
 </div><span id="structfield.max_outgoing_packet_count" class="structfield section-header"><a href="#structfield.max_outgoing_packet_count" class="anchor field">§</a><code>max_outgoing_packet_count: <a class="primitive" href="https://doc.rust-lang.org/1.97.1/std/primitive.usize.html">usize</a></code></span><div class="docblock"><p>Maximum number of outgoing packets in the internal outgoing queue
 before they are handed off to the network layer (Default: 1000)</p>

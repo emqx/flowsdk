@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["create_socket","handle_connect_complete","handle_recv_complete","handle_send_complete","mark_failed","run_worker","submit_recv","submit_send"]};
+window.SIDEBAR_ITEMS = {"fn":["create_socket","finish_mqtt_failure","handle_connect_complete","handle_recv_complete","handle_send_complete","mark_failed","record_mqtt_outcome","run_worker","submit_recv","submit_send"]};

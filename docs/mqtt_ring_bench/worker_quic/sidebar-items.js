@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["create_udp_socket","handle_recv_complete","handle_send_complete","mark_failed","run_quic_worker","submit_front_send","submit_recv","udp_connect"]};
+window.SIDEBAR_ITEMS = {"fn":["create_udp_socket","finish_mqtt_failure","handle_recv_complete","handle_send_complete","mark_failed","record_mqtt_outcome","run_quic_worker","submit_front_send","submit_recv","udp_connect"]};

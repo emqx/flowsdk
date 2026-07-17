@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"constant":["OP_CONNECT","OP_RECV","OP_SEND"],"fn":["decode_user_data","encode_user_data"],"struct":["WorkerResult"]};
+window.SIDEBAR_ITEMS = {"constant":["CANCEL_USER_DATA_BIT","OP_CONNECT","OP_RECV","OP_SEND","SHUTDOWN_WAIT"],"fn":["cancel_pending_operations","cancel_target","cancel_user_data","decode_user_data","drain_shutdown_completions","encode_user_data","pending_user_data","submit_shutdown_batch"],"struct":["ShutdownCompletions","WorkerResult"]};
