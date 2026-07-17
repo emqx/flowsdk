@@ -50,8 +50,13 @@ fn main() {
     // Ctrl+C handler
     let stats_ctrlc = Arc::clone(&stats);
     ctrlc::set_handler(move || {
-        eprintln!("\nInterrupted, stopping...");
-        stats_ctrlc.stopped.store(true, Ordering::SeqCst);
+        if stats_ctrlc.stopped.swap(true, Ordering::SeqCst) {
+            eprintln!("\nInterrupted again, forcing exit...");
+            unsafe {
+                libc::_exit(130);
+            }
+        }
+        eprintln!("\nInterrupted, cancelling pending I/O...");
     })
     .expect("failed to set Ctrl+C handler");
 
@@ -124,6 +129,9 @@ fn main() {
     let merged = stats::merge_latency_samples(all_samples);
     let snap = stats.snapshot();
     stats::print_final_summary(&config, &snap, &merged);
+    if stats.stopped.load(Ordering::SeqCst) {
+        std::process::exit(130);
+    }
 }
 
 #[cfg(target_os = "linux")]

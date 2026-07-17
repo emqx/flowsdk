@@ -22,12 +22,56 @@ pub enum ConnState {
     Failed,
 }
 
+/// Keeps the buffer referenced by an in-flight io_uring Send SQE stable.
+///
+/// Receive and timer processing can produce more MQTT output before that send
+/// completes. Mutating or replacing `current` could reallocate its storage and
+/// invalidate the raw pointer held by the kernel, so new output is stored in
+/// `queued` and promoted only after the current send has fully completed.
+#[derive(Default)]
+struct TcpSendQueue {
+    current: Vec<u8>,
+    offset: usize,
+    queued: VecDeque<Vec<u8>>,
+}
+
+impl TcpSendQueue {
+    fn enqueue(&mut self, data: Vec<u8>, send_pending: bool) {
+        if data.is_empty() {
+            return;
+        }
+
+        if !send_pending && !self.has_pending() {
+            self.current = data;
+            self.offset = 0;
+        } else {
+            self.queued.push_back(data);
+        }
+    }
+
+    fn has_pending(&self) -> bool {
+        self.offset < self.current.len()
+    }
+
+    fn pending_slice(&self) -> &[u8] {
+        &self.current[self.offset..]
+    }
+
+    fn advance(&mut self, count: usize) {
+        debug_assert!(count <= self.pending_slice().len());
+        self.offset += count;
+        if !self.has_pending() {
+            self.current = self.queued.pop_front().unwrap_or_default();
+            self.offset = 0;
+        }
+    }
+}
+
 pub struct Connection {
     pub fd: RawFd,
     pub mqtt: NoIoMqttClient,
     pub state: ConnState,
-    pub send_buf: Vec<u8>,
-    pub send_offset: usize,
+    send_queue: TcpSendQueue,
     pub recv_buf: Vec<u8>,
     pub messages_sent: u64,
     pub messages_acked: u64,
@@ -62,8 +106,7 @@ impl Connection {
             fd,
             mqtt: NoIoMqttClient::new(options),
             state: ConnState::TcpConnecting,
-            send_buf: Vec::new(),
-            send_offset: 0,
+            send_queue: TcpSendQueue::default(),
             recv_buf: vec![0u8; config.parser_buf.max(1500)],
             messages_sent: 0,
             messages_acked: 0,
@@ -85,7 +128,12 @@ impl Connection {
     }
 
     pub fn handle_incoming(&mut self, data: &[u8]) -> Vec<MqttEvent> {
-        self.mqtt.handle_incoming(data)
+        let events = self.mqtt.handle_incoming(data);
+        // A PUBACK can release a queued QoS 1/2 PUBLISH into the engine's
+        // outgoing buffer. Drain it now rather than relying on a later publish
+        // attempt, which does not happen once this connection starts draining.
+        self.take_outgoing();
+        events
     }
 
     pub fn try_publish(&mut self, config: &BenchConfig) -> bool {
@@ -95,7 +143,7 @@ impl Connection {
         if self.messages_sent >= self.messages_target {
             return false;
         }
-        if self.send_offset < self.send_buf.len() {
+        if self.send_queue.has_pending() {
             return false;
         }
         if let Some(next) = self.next_publish_at {
@@ -155,6 +203,9 @@ impl Connection {
                 }
                 MqttEvent::Published(result) => {
                     if result.is_success() {
+                        if result.qos == 1 && result.reason_code == Some(0x10) {
+                            outcome.puback_no_match += 1;
+                        }
                         self.messages_acked += 1;
                         outcome.acked += 1;
                         if let Some(sent_at) = self.latency_pending.pop_front() {
@@ -221,30 +272,66 @@ impl Connection {
 
     pub fn take_outgoing(&mut self) {
         let out = self.mqtt.take_outgoing();
-        if !out.is_empty() {
-            if self.send_offset >= self.send_buf.len() {
-                self.send_buf = out;
-                self.send_offset = 0;
-            } else {
-                self.send_buf.extend_from_slice(&out);
-            }
-        }
+        self.send_queue.enqueue(out, self.send_pending);
     }
 
     pub fn has_pending_send(&self) -> bool {
-        self.send_offset < self.send_buf.len()
+        self.send_queue.has_pending()
     }
 
     pub fn pending_send_slice(&self) -> &[u8] {
-        &self.send_buf[self.send_offset..]
+        self.send_queue.pending_slice()
     }
 
     pub fn advance_send(&mut self, n: usize) {
-        self.send_offset += n;
-        if self.send_offset >= self.send_buf.len() {
-            self.send_buf.clear();
-            self.send_offset = 0;
-        }
+        self.send_queue.advance(n);
+    }
+}
+
+#[cfg(test)]
+mod tcp_send_queue_tests {
+    use super::TcpSendQueue;
+
+    #[test]
+    fn enqueue_during_in_flight_send_keeps_current_buffer_stable() {
+        let mut queue = TcpSendQueue::default();
+        queue.enqueue(vec![1, 2, 3, 4], false);
+        let current_ptr = queue.pending_slice().as_ptr();
+
+        queue.enqueue(vec![5, 6], true);
+
+        assert_eq!(queue.pending_slice().as_ptr(), current_ptr);
+        assert_eq!(queue.pending_slice(), &[1, 2, 3, 4]);
+        assert_eq!(queue.queued.front().map(Vec::as_slice), Some(&[5, 6][..]));
+    }
+
+    #[test]
+    fn partial_completion_does_not_promote_queued_data() {
+        let mut queue = TcpSendQueue::default();
+        queue.enqueue(vec![1, 2, 3, 4], false);
+        queue.enqueue(vec![5, 6], true);
+
+        queue.advance(2);
+
+        assert_eq!(queue.pending_slice(), &[3, 4]);
+        assert_eq!(queue.queued.front().map(Vec::as_slice), Some(&[5, 6][..]));
+    }
+
+    #[test]
+    fn full_completions_promote_queued_data_in_fifo_order() {
+        let mut queue = TcpSendQueue::default();
+        queue.enqueue(vec![1, 2], false);
+        queue.enqueue(vec![3, 4], true);
+        queue.enqueue(vec![5, 6], true);
+
+        queue.advance(2);
+        assert_eq!(queue.pending_slice(), &[3, 4]);
+
+        queue.advance(2);
+        assert_eq!(queue.pending_slice(), &[5, 6]);
+
+        queue.advance(2);
+        assert!(!queue.has_pending());
     }
 }
 
