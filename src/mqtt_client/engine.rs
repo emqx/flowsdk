@@ -33,6 +33,7 @@ use crate::mqtt_serde::mqttv5::{
     pubcompv5::MqttPubComp, publishv5::MqttPublish, pubrecv5::MqttPubRec, pubrelv5::MqttPubRel,
     subscribev5, unsubscribev5,
 };
+use crate::mqtt_serde::parser::leveled::{ParseLevel, ParsedPacket, VariableHeader};
 use crate::mqtt_serde::parser::stream::MqttParser;
 use crate::mqtt_session::ClientSession;
 use crate::priority_queue::PriorityQueue;
@@ -95,8 +96,9 @@ pub enum MqttEvent {
     Unsubscribed(UnsubscribeResult),
     /// Incoming PUBLISH metadata.
     ///
-    /// Emitted immediately before `MessageReceived`. `stream` identifies the
-    /// logical channel when the packet arrived on a QUIC data stream.
+    /// With full parsing this is emitted immediately before `MessageReceived`.
+    /// Reduced parser levels emit only this metadata event. `stream` identifies
+    /// the logical channel when the packet arrived on a QUIC data stream.
     PublishReceived {
         packet_id: Option<u16>,
         stream: Option<u64>,
@@ -273,6 +275,19 @@ impl MqttEngine {
         std::mem::take(&mut self.events)
     }
 
+    /// Select how deeply subsequent incoming packets are parsed.
+    ///
+    /// Reduced levels are intended for packet-counting workloads. Callers must
+    /// complete connection setup at [`ParseLevel::Full`] before switching.
+    pub fn set_parse_level(&mut self, level: ParseLevel) {
+        self.parser.set_parse_level(level);
+    }
+
+    /// Return the parser depth used for subsequent incoming packets.
+    pub fn parse_level(&self) -> ParseLevel {
+        self.parser.parse_level()
+    }
+
     pub fn options(&self) -> &MqttClientOptions {
         &self.options
     }
@@ -377,14 +392,24 @@ impl MqttEngine {
                 break;
             }
 
-            match self.parser.next_packet() {
-                Ok(Some(packet)) => {
+            match self.parser.next_parsed() {
+                Ok(Some(ParsedPacket::Full(packet))) => {
                     self.last_packet_received = Instant::now();
                     let (packet_events, responses) = self.handle_packet(packet, None);
                     self.events.extend(packet_events);
                     // Single-stream transports (TCP/TLS, QUIC control stream) send
                     // responses back over the same shared outgoing buffer.
                     for response in responses {
+                        let _ = self.enqueue_packet(response);
+                    }
+                }
+                Ok(Some(packet)) => {
+                    self.last_packet_received = Instant::now();
+                    let (event, response) = self.handle_reduced_packet(packet, None);
+                    if let Some(event) = event {
+                        self.events.push(event);
+                    }
+                    if let Some(response) = response {
                         let _ = self.enqueue_packet(response);
                     }
                 }
@@ -397,6 +422,140 @@ impl MqttEngine {
         }
         self.process_queue();
         self.take_events()
+    }
+
+    fn handle_reduced_packet(
+        &mut self,
+        packet: ParsedPacket,
+        stream: Option<u64>,
+    ) -> (Option<MqttEvent>, Option<MqttPacket>) {
+        let mut event = None;
+        let mut response = None;
+
+        match packet {
+            ParsedPacket::TypeOnly(packet) => match packet.packet_type {
+                crate::mqtt_serde::control_packet::ControlPacketType::PUBLISH => {
+                    let qos = (packet.flags >> 1) & 0x03;
+                    if qos == 0 {
+                        event = Some(MqttEvent::PublishReceived {
+                            packet_id: None,
+                            stream,
+                        });
+                    } else {
+                        event = Some(MqttEvent::Error(MqttClientError::ProtocolViolation {
+                            message: format!(
+                                "type-only parser cannot acknowledge incoming QoS {} PUBLISH",
+                                qos
+                            ),
+                        }));
+                    }
+                }
+                crate::mqtt_serde::control_packet::ControlPacketType::PINGRESP => {
+                    self.ping_sent_at = None;
+                    event = Some(MqttEvent::PingResponse(PingResult { success: true }));
+                }
+                crate::mqtt_serde::control_packet::ControlPacketType::DISCONNECT => {
+                    self.is_connected = false;
+                    event = Some(MqttEvent::Disconnected(None));
+                }
+                _ => {}
+            },
+            ParsedPacket::HeadersParsed(packet) => match packet.variable_header {
+                VariableHeader::PublishV5 { qos, packet_id, .. } => {
+                    event = Some(MqttEvent::PublishReceived { packet_id, stream });
+                    if self.options.auto_ack && qos == 1 {
+                        if let Some(packet_id) = packet_id {
+                            response = Some(MqttPacket::PubAck5(MqttPubAck::new(
+                                packet_id,
+                                0,
+                                Vec::new(),
+                            )));
+                        }
+                    } else if self.options.auto_ack && qos == 2 {
+                        if let Some(packet_id) = packet_id {
+                            response = Some(MqttPacket::PubRec5(MqttPubRec::new(
+                                packet_id,
+                                0,
+                                Vec::new(),
+                            )));
+                        }
+                    }
+                }
+                VariableHeader::PublishV3 {
+                    qos, message_id, ..
+                } => {
+                    event = Some(MqttEvent::PublishReceived {
+                        packet_id: message_id,
+                        stream,
+                    });
+                    if self.options.auto_ack && qos == 1 {
+                        if let Some(message_id) = message_id {
+                            response = Some(MqttPacket::PubAck3(
+                                crate::mqtt_serde::mqttv3::puback::MqttPubAck::new(message_id),
+                            ));
+                        }
+                    } else if self.options.auto_ack && qos == 2 {
+                        if let Some(message_id) = message_id {
+                            response = Some(MqttPacket::PubRec3(
+                                crate::mqtt_serde::mqttv3::pubrec::MqttPubRec::new(message_id),
+                            ));
+                        }
+                    }
+                }
+                VariableHeader::PubRelV5 { packet_id, .. } => {
+                    event = Some(MqttEvent::PubRelReceived { packet_id, stream });
+                    if self.options.auto_ack {
+                        response = Some(MqttPacket::PubComp5(MqttPubComp::new(
+                            packet_id,
+                            0,
+                            Vec::new(),
+                        )));
+                    }
+                }
+                VariableHeader::PacketIdOnlyV3 { message_id }
+                    if packet.packet_type
+                        == crate::mqtt_serde::control_packet::ControlPacketType::PUBREL =>
+                {
+                    event = Some(MqttEvent::PubRelReceived {
+                        packet_id: message_id,
+                        stream,
+                    });
+                    if self.options.auto_ack {
+                        response = Some(MqttPacket::PubComp3(
+                            crate::mqtt_serde::mqttv3::pubcomp::MqttPubComp::new(message_id),
+                        ));
+                    }
+                }
+                VariableHeader::Empty
+                    if packet.packet_type
+                        == crate::mqtt_serde::control_packet::ControlPacketType::PINGRESP =>
+                {
+                    self.ping_sent_at = None;
+                    event = Some(MqttEvent::PingResponse(PingResult { success: true }));
+                }
+                VariableHeader::DisconnectV5 { reason_code, .. } => {
+                    self.is_connected = false;
+                    event = Some(MqttEvent::Disconnected(Some(reason_code)));
+                }
+                VariableHeader::Empty
+                    if packet.packet_type
+                        == crate::mqtt_serde::control_packet::ControlPacketType::DISCONNECT =>
+                {
+                    self.is_connected = false;
+                    event = Some(MqttEvent::Disconnected(None));
+                }
+                _ => {}
+            },
+            ParsedPacket::RawBody(_) => {
+                event = Some(MqttEvent::Error(MqttClientError::InvalidState {
+                    expected: "Full, HeadersParsed, or TypeOnly parser level".to_string(),
+                    actual: "RawBody parser level".to_string(),
+                }));
+            }
+            ParsedPacket::Full(_) => unreachable!("full packets use handle_packet"),
+        }
+
+        (event, response)
     }
 
     pub fn mqtt_version(&self) -> u8 {
@@ -695,15 +854,43 @@ impl MqttEngine {
         packet: MqttPacket,
         stream: u64,
     ) -> (Vec<MqttEvent>, Vec<u8>) {
-        self.last_packet_received = Instant::now();
-        let (packet_events, responses) = self.handle_packet(packet, Some(stream));
-        self.events.extend(packet_events);
+        let mut events = Vec::new();
+        let response =
+            self.ingest_parsed_stream_packet_into(ParsedPacket::Full(packet), stream, &mut events);
+        (events, response)
+    }
 
+    fn ingest_parsed_stream_packet_into(
+        &mut self,
+        packet: ParsedPacket,
+        stream: u64,
+        events: &mut Vec<MqttEvent>,
+    ) -> Vec<u8> {
+        self.last_packet_received = Instant::now();
+        events.extend(self.take_events());
         let mut response_bytes = Vec::new();
-        for response in responses {
-            match response.to_bytes() {
-                Ok(bytes) => response_bytes.extend(bytes),
-                Err(e) => self.events.push(MqttEvent::Error(MqttClientError::from(e))),
+        match packet {
+            ParsedPacket::Full(packet) => {
+                let (packet_events, responses) = self.handle_packet(packet, Some(stream));
+                events.extend(packet_events);
+                for response in responses {
+                    match response.to_bytes() {
+                        Ok(bytes) => response_bytes.extend(bytes),
+                        Err(e) => events.push(MqttEvent::Error(MqttClientError::from(e))),
+                    }
+                }
+            }
+            packet => {
+                let (event, response) = self.handle_reduced_packet(packet, Some(stream));
+                if let Some(event) = event {
+                    events.push(event);
+                }
+                if let Some(response) = response {
+                    match response.to_bytes() {
+                        Ok(bytes) => response_bytes.extend(bytes),
+                        Err(e) => events.push(MqttEvent::Error(MqttClientError::from(e))),
+                    }
+                }
             }
         }
         if !response_bytes.is_empty() {
@@ -713,8 +900,9 @@ impl MqttEngine {
         // Acknowledgements may have freed inflight capacity; flush any control
         // packets waiting in the priority queue (these target the control path).
         self.process_queue();
+        events.extend(self.take_events());
 
-        (self.take_events(), response_bytes)
+        response_bytes
     }
 
     /// Queue a SUBSCRIBE packet.
@@ -1575,6 +1763,18 @@ impl QuicMqttEngine {
         })
     }
 
+    /// Select the parser depth for the control stream and all QUIC data streams.
+    pub fn set_parse_level(&mut self, level: ParseLevel) {
+        self.mqtt_engine.set_parse_level(level);
+        for stream in self.data_streams.values_mut() {
+            stream.parser.set_parse_level(level);
+        }
+    }
+
+    pub fn parse_level(&self) -> ParseLevel {
+        self.mqtt_engine.parse_level()
+    }
+
     pub fn connect(
         &mut self,
         server_addr: std::net::SocketAddr,
@@ -1832,6 +2032,7 @@ impl QuicMqttEngine {
         parser_buffer_size: usize,
         mqtt_version: u8,
         max_packets: usize,
+        parse_level: ParseLevel,
         control_stream: &mut Option<StreamId>,
         data_streams: &mut HashMap<StreamId, QuicStream>,
         default_pub_stream: &mut Option<StreamId>,
@@ -1866,16 +2067,15 @@ impl QuicMqttEngine {
                 EarlyStreamRole::DefaultPub
                 | EarlyStreamRole::DefaultSub
                 | EarlyStreamRole::ExplicitData => {
-                    data_streams.insert(
-                        stream_id,
-                        QuicStream::with_outgoing(
-                            parser_buffer_size,
-                            mqtt_version,
-                            max_packets,
-                            journal.bytes,
-                            journal.packet_count,
-                        ),
+                    let mut stream = QuicStream::with_outgoing(
+                        parser_buffer_size,
+                        mqtt_version,
+                        max_packets,
+                        journal.bytes,
+                        journal.packet_count,
                     );
+                    stream.parser.set_parse_level(parse_level);
+                    data_streams.insert(stream_id, stream);
                     match journal.role {
                         EarlyStreamRole::DefaultPub => *default_pub_stream = Some(stream_id),
                         EarlyStreamRole::DefaultSub => *default_sub_stream = Some(stream_id),
@@ -2224,6 +2424,7 @@ impl QuicMqttEngine {
         let parser_buffer_size = self.mqtt_engine.options().parser_buffer_size;
         let mqtt_version = self.mqtt_engine.mqtt_version();
         let max_packets = self.mqtt_engine.options().max_outgoing_packet_count;
+        let parse_level = self.mqtt_engine.parse_level();
 
         // Drive QUIC Connection
         if let Some(conn) = &mut self.connection {
@@ -2308,6 +2509,7 @@ impl QuicMqttEngine {
                                         parser_buffer_size,
                                         mqtt_version,
                                         max_packets,
+                                        parse_level,
                                         &mut self.control_stream,
                                         &mut self.data_streams,
                                         &mut self.default_pub_stream,
@@ -2359,7 +2561,9 @@ impl QuicMqttEngine {
             // 2. Accept server-initiated bidirectional streams as data streams.
             while let Some(stream_id) = conn.streams().accept(Dir::Bi) {
                 self.data_streams.entry(stream_id).or_insert_with(|| {
-                    QuicStream::new(parser_buffer_size, mqtt_version, max_packets)
+                    let mut stream = QuicStream::new(parser_buffer_size, mqtt_version, max_packets);
+                    stream.parser.set_parse_level(parse_level);
+                    stream
                 });
             }
 
@@ -2718,6 +2922,7 @@ impl QuicMqttEngine {
         let parser_buffer_size = self.mqtt_engine.options().parser_buffer_size;
         let mqtt_version = self.mqtt_engine.mqtt_version();
         let max_packets = self.mqtt_engine.options().max_outgoing_packet_count;
+        let parse_level = self.mqtt_engine.parse_level();
 
         let conn = self
             .connection
@@ -2734,10 +2939,9 @@ impl QuicMqttEngine {
                     message: "QUIC stream limit reached: cannot open new data stream".to_string(),
                 })?;
 
-        self.data_streams.insert(
-            stream_id,
-            QuicStream::new(parser_buffer_size, mqtt_version, max_packets),
-        );
+        let mut stream = QuicStream::new(parser_buffer_size, mqtt_version, max_packets);
+        stream.parser.set_parse_level(parse_level);
+        self.data_streams.insert(stream_id, stream);
         if self.zero_rtt_status == QuicZeroRttStatus::Attempted {
             Self::journal_stream_open(&mut self.early_stream_journal, stream_id, role);
         }
@@ -2830,7 +3034,7 @@ impl QuicMqttEngine {
             // Fetch the next packet only while there is buffer capacity; drops the
             // `data_streams` borrow before calling into the engine.
             let packet = match data_streams.get_mut(&stream_id) {
-                Some(ds) if ds.pending_packets < ds.max_packets => match ds.parser.next_packet() {
+                Some(ds) if ds.pending_packets < ds.max_packets => match ds.parser.next_parsed() {
                     Ok(Some(packet)) => packet,
                     Ok(None) => break,
                     Err(e) => {
@@ -2842,8 +3046,8 @@ impl QuicMqttEngine {
                 _ => break,
             };
 
-            let (evs, resp) = mqtt_engine.ingest_stream_packet(packet, u64::from(stream_id));
-            events.extend(evs);
+            let resp =
+                mqtt_engine.ingest_parsed_stream_packet_into(packet, u64::from(stream_id), events);
             if !resp.is_empty() {
                 if let Some(ds) = data_streams.get_mut(&stream_id) {
                     // If the send side has been finished/reset we can no longer
@@ -3392,6 +3596,98 @@ mod tests {
             MqttEvent::PingResponse(_) => {}
             _ => panic!("Expected second PingResponse"),
         }
+    }
+
+    #[test]
+    fn reduced_type_only_parser_counts_fragmented_qos0_publish_without_payload_event() {
+        let mut engine = MqttEngine::new(MqttClientOptions::builder().mqtt_version(5).build());
+        engine.set_parse_level(ParseLevel::TypeOnly);
+        let publish = MqttPublish::new_with_prop(
+            0,
+            "bench/events".to_string(),
+            None,
+            b"payload".to_vec(),
+            false,
+            false,
+            Vec::new(),
+        );
+        let bytes = MqttPacket::Publish5(publish).to_bytes().unwrap();
+
+        assert!(engine.handle_incoming(&bytes[..2]).is_empty());
+        let events = engine.handle_incoming(&bytes[2..]);
+
+        assert!(matches!(
+            events.as_slice(),
+            [MqttEvent::PublishReceived {
+                packet_id: None,
+                stream: None
+            }]
+        ));
+        assert!(engine.take_outgoing().is_empty());
+    }
+
+    #[test]
+    fn reduced_headers_parser_generates_qos2_handshake_without_payload_event() {
+        let mut engine = MqttEngine::new(MqttClientOptions::builder().mqtt_version(5).build());
+        engine.set_parse_level(ParseLevel::HeadersParsed);
+        let publish = MqttPublish::new_with_prop(
+            2,
+            "bench/events".to_string(),
+            Some(42),
+            b"payload".to_vec(),
+            false,
+            false,
+            Vec::new(),
+        );
+
+        let events = engine.handle_incoming(&MqttPacket::Publish5(publish).to_bytes().unwrap());
+        assert!(matches!(
+            events.as_slice(),
+            [MqttEvent::PublishReceived {
+                packet_id: Some(42),
+                stream: None
+            }]
+        ));
+        assert_eq!(engine.take_outgoing()[0] & 0xf0, 0x50);
+
+        let pubrel = MqttPacket::PubRel5(MqttPubRel::new(42, 0, Vec::new()));
+        let events = engine.handle_incoming(&pubrel.to_bytes().unwrap());
+        assert!(matches!(
+            events.as_slice(),
+            [MqttEvent::PubRelReceived {
+                packet_id: 42,
+                stream: None
+            }]
+        ));
+        assert_eq!(engine.take_outgoing()[0] & 0xf0, 0x70);
+    }
+
+    #[test]
+    fn reduced_headers_parser_handles_fragmented_v3_qos1_publish() {
+        let mut engine = MqttEngine::new(MqttClientOptions::builder().mqtt_version(4).build());
+        engine.set_parse_level(ParseLevel::HeadersParsed);
+        let publish = crate::mqtt_serde::mqttv3::publish::MqttPublish::new(
+            "bench/events".to_string(),
+            1,
+            b"payload".to_vec(),
+            Some(7),
+            false,
+            false,
+        );
+        let bytes = MqttPacket::Publish3(publish).to_bytes().unwrap();
+        let split = bytes.len() / 2;
+
+        assert!(engine.handle_incoming(&bytes[..split]).is_empty());
+        let events = engine.handle_incoming(&bytes[split..]);
+
+        assert!(matches!(
+            events.as_slice(),
+            [MqttEvent::PublishReceived {
+                packet_id: Some(7),
+                stream: None
+            }]
+        ));
+        assert_eq!(engine.take_outgoing()[0] & 0xf0, 0x40);
     }
 
     use crate::mqtt_client::commands::PublishCommand;
@@ -4439,6 +4735,53 @@ mod tests {
             .handle_incoming(&[0x20, 0x03, 0x00, 0x00, 0x00]);
         assert!(matches!(events.as_slice(), [MqttEvent::Connected(_)]));
         engine
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn reduced_parse_level_applies_to_quic_data_streams() {
+        use quinn_proto::{Dir, Side, StreamId};
+
+        let mut engine = mqtt_connected_quic_engine();
+        let stream_id = StreamId::new(Side::Server, Dir::Bi, 0);
+        engine
+            .data_streams
+            .insert(stream_id, QuicStream::new(1024, 5, 2));
+        engine.set_parse_level(ParseLevel::HeadersParsed);
+
+        let publish = MqttPublish::new_with_prop(
+            1,
+            "bench/events".to_string(),
+            Some(12),
+            b"payload".to_vec(),
+            false,
+            false,
+            Vec::new(),
+        );
+        engine
+            .data_streams
+            .get_mut(&stream_id)
+            .unwrap()
+            .parser
+            .feed(&MqttPacket::Publish5(publish).to_bytes().unwrap());
+        let mut events = Vec::new();
+        QuicMqttEngine::drain_data_stream(
+            &mut engine.data_streams,
+            &mut engine.mqtt_engine,
+            stream_id,
+            &mut events,
+        );
+
+        assert_eq!(engine.parse_level(), ParseLevel::HeadersParsed);
+        assert!(matches!(
+            events.as_slice(),
+            [MqttEvent::PublishReceived {
+                packet_id: Some(12),
+                stream: Some(_)
+            }]
+        ));
+        let response = &engine.data_streams.get(&stream_id).unwrap().outgoing;
+        assert_eq!(response[0] & 0xf0, 0x40);
     }
 
     #[cfg(feature = "quic-proto")]

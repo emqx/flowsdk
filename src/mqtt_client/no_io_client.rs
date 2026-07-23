@@ -312,6 +312,15 @@ impl NoIoMqttClient {
         self.engine.take_events()
     }
 
+    /// Select how deeply subsequent incoming MQTT packets are parsed.
+    pub fn set_parse_level(&mut self, level: crate::mqtt_serde::ParseLevel) {
+        self.engine.set_parse_level(level);
+    }
+
+    pub fn parse_level(&self) -> crate::mqtt_serde::ParseLevel {
+        self.engine.parse_level()
+    }
+
     // ========================================================================
     // MQTT Operations
     // ========================================================================
