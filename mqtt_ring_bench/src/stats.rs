@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 
 pub struct BenchStats {
     pub messages_sent: AtomicU64,
+    pub messages_received: AtomicU64,
     pub messages_acked: AtomicU64,
     pub puback_no_match: AtomicU64,
     pub errors: AtomicU64,
@@ -14,10 +15,12 @@ pub struct BenchStats {
     pub receive_errors: AtomicU64,
     pub mqtt_errors: AtomicU64,
     pub mqtt_connect_errors: AtomicU64,
+    pub mqtt_subscribe_errors: AtomicU64,
     pub mqtt_publish_errors: AtomicU64,
     pub mqtt_client_errors: AtomicU64,
     pub mqtt_disconnect_errors: AtomicU64,
     pub clients_connected: AtomicU64,
+    pub clients_subscribed: AtomicU64,
     pub clients_done: AtomicU64,
     pub start_time: Instant,
     pub stopped: AtomicBool,
@@ -30,6 +33,7 @@ pub enum ErrorKind {
     Send,
     Receive,
     MqttConnect,
+    MqttSubscribe,
     MqttPublish,
     MqttClient,
     MqttDisconnect,
@@ -39,6 +43,7 @@ impl BenchStats {
     pub fn new() -> Self {
         Self {
             messages_sent: AtomicU64::new(0),
+            messages_received: AtomicU64::new(0),
             messages_acked: AtomicU64::new(0),
             puback_no_match: AtomicU64::new(0),
             errors: AtomicU64::new(0),
@@ -48,10 +53,12 @@ impl BenchStats {
             receive_errors: AtomicU64::new(0),
             mqtt_errors: AtomicU64::new(0),
             mqtt_connect_errors: AtomicU64::new(0),
+            mqtt_subscribe_errors: AtomicU64::new(0),
             mqtt_publish_errors: AtomicU64::new(0),
             mqtt_client_errors: AtomicU64::new(0),
             mqtt_disconnect_errors: AtomicU64::new(0),
             clients_connected: AtomicU64::new(0),
+            clients_subscribed: AtomicU64::new(0),
             clients_done: AtomicU64::new(0),
             start_time: Instant::now(),
             stopped: AtomicBool::new(false),
@@ -88,6 +95,11 @@ impl BenchStats {
                 self.mqtt_errors.fetch_add(count, Ordering::Relaxed);
                 self.mqtt_connect_errors.fetch_add(count, Ordering::Relaxed);
             }
+            ErrorKind::MqttSubscribe => {
+                self.mqtt_errors.fetch_add(count, Ordering::Relaxed);
+                self.mqtt_subscribe_errors
+                    .fetch_add(count, Ordering::Relaxed);
+            }
             ErrorKind::MqttPublish => {
                 self.mqtt_errors.fetch_add(count, Ordering::Relaxed);
                 self.mqtt_publish_errors.fetch_add(count, Ordering::Relaxed);
@@ -107,6 +119,7 @@ impl BenchStats {
     pub fn snapshot(&self) -> StatsSnapshot {
         StatsSnapshot {
             sent: self.messages_sent.load(Ordering::Relaxed),
+            received: self.messages_received.load(Ordering::Relaxed),
             acked: self.messages_acked.load(Ordering::Relaxed),
             puback_no_match: self.puback_no_match.load(Ordering::Relaxed),
             errors: self.errors.load(Ordering::Relaxed),
@@ -116,10 +129,12 @@ impl BenchStats {
             receive_errors: self.receive_errors.load(Ordering::Relaxed),
             mqtt_errors: self.mqtt_errors.load(Ordering::Relaxed),
             mqtt_connect_errors: self.mqtt_connect_errors.load(Ordering::Relaxed),
+            mqtt_subscribe_errors: self.mqtt_subscribe_errors.load(Ordering::Relaxed),
             mqtt_publish_errors: self.mqtt_publish_errors.load(Ordering::Relaxed),
             mqtt_client_errors: self.mqtt_client_errors.load(Ordering::Relaxed),
             mqtt_disconnect_errors: self.mqtt_disconnect_errors.load(Ordering::Relaxed),
             connected: self.clients_connected.load(Ordering::Relaxed),
+            subscribed: self.clients_subscribed.load(Ordering::Relaxed),
             done: self.clients_done.load(Ordering::Relaxed),
             elapsed: self.start_time.elapsed(),
         }
@@ -128,6 +143,7 @@ impl BenchStats {
 
 pub struct StatsSnapshot {
     pub sent: u64,
+    pub received: u64,
     pub acked: u64,
     pub puback_no_match: u64,
     pub errors: u64,
@@ -137,10 +153,12 @@ pub struct StatsSnapshot {
     pub receive_errors: u64,
     pub mqtt_errors: u64,
     pub mqtt_connect_errors: u64,
+    pub mqtt_subscribe_errors: u64,
     pub mqtt_publish_errors: u64,
     pub mqtt_client_errors: u64,
     pub mqtt_disconnect_errors: u64,
     pub connected: u64,
+    pub subscribed: u64,
     pub done: u64,
     pub elapsed: Duration,
 }
@@ -169,8 +187,12 @@ pub fn print_final_summary(
     latency_samples: &[Duration],
 ) {
     let duration_secs = snap.elapsed.as_secs_f64();
+    let messages = match config.action {
+        crate::config::BenchAction::Pub => snap.sent,
+        crate::config::BenchAction::Sub => snap.received,
+    };
     let throughput = if duration_secs > 0.0 {
-        snap.sent as f64 / duration_secs
+        messages as f64 / duration_secs
     } else {
         0.0
     };
@@ -186,18 +208,39 @@ pub fn print_final_summary(
         config.host, config.port, transport
     );
     println!("  MQTT Version:    {}", config.mqtt_version);
+    println!("  Action:          {}", config.action.as_str());
     println!("  Clients:         {}", config.clients);
     println!("  Workers:         {}", config.workers);
     println!("  QoS:             {}", config.qos);
-    println!("  Payload Size:    {} bytes", config.payload_size);
-    println!("  Messages/Client: {}", config.messages);
+    match config.action {
+        crate::config::BenchAction::Pub => {
+            println!("  Payload Size:    {} bytes", config.payload_size);
+            println!("  Messages/Client: {}", config.messages);
+        }
+        crate::config::BenchAction::Sub => {
+            let target = if config.messages == 0 {
+                "unbounded".to_string()
+            } else {
+                config.messages.to_string()
+            };
+            println!("  Receive Target:  {} per client", target);
+            println!("  Subscribed:      {}", snap.subscribed);
+        }
+    }
     println!("  Socket Buffers:  {} bytes", config.socket_buf);
     println!("  Parser Buffer:   {} bytes", config.parser_buf);
     println!("{dash}");
-    println!("  Total Sent:      {}", snap.sent);
-    if config.qos > 0 {
-        println!("  Total Acked:     {}", snap.acked);
-        println!("  PubAckNoMatch:   {}", snap.puback_no_match);
+    match config.action {
+        crate::config::BenchAction::Pub => {
+            println!("  Total Sent:      {}", snap.sent);
+            if config.qos > 0 {
+                println!("  Total Acked:     {}", snap.acked);
+                println!("  PubAckNoMatch:   {}", snap.puback_no_match);
+            }
+        }
+        crate::config::BenchAction::Sub => {
+            println!("  Total Received:  {}", snap.received);
+        }
     }
     println!("  Errors:          {}", snap.errors);
     println!("    Socket:        {}", snap.socket_errors);
@@ -206,13 +249,14 @@ pub fn print_final_summary(
     println!("    Receive:       {}", snap.receive_errors);
     println!("    MQTT:          {}", snap.mqtt_errors);
     println!("      CONNECT:     {}", snap.mqtt_connect_errors);
+    println!("      SUBSCRIBE:   {}", snap.mqtt_subscribe_errors);
     println!("      PUBLISH:     {}", snap.mqtt_publish_errors);
     println!("      Client:      {}", snap.mqtt_client_errors);
     println!("      Disconnect:  {}", snap.mqtt_disconnect_errors);
     println!("  Duration:        {:.2} s", duration_secs);
     println!("  Throughput:      {:.2} msg/s", throughput);
 
-    if !latency_samples.is_empty() {
+    if config.action == crate::config::BenchAction::Pub && !latency_samples.is_empty() {
         println!("{dash}");
         let label = if config.qos == 0 {
             "Latency (enqueue time)"
@@ -261,6 +305,7 @@ mod tests {
             ErrorKind::Send,
             ErrorKind::Receive,
             ErrorKind::MqttConnect,
+            ErrorKind::MqttSubscribe,
             ErrorKind::MqttPublish,
             ErrorKind::MqttClient,
             ErrorKind::MqttDisconnect,
@@ -270,14 +315,15 @@ mod tests {
         stats.record_puback_no_match(2);
 
         let snapshot = stats.snapshot();
-        assert_eq!(snapshot.errors, 8);
+        assert_eq!(snapshot.errors, 9);
         assert_eq!(snapshot.puback_no_match, 2);
         assert_eq!(snapshot.socket_errors, 1);
         assert_eq!(snapshot.connect_errors, 1);
         assert_eq!(snapshot.send_errors, 1);
         assert_eq!(snapshot.receive_errors, 1);
-        assert_eq!(snapshot.mqtt_errors, 4);
+        assert_eq!(snapshot.mqtt_errors, 5);
         assert_eq!(snapshot.mqtt_connect_errors, 1);
+        assert_eq!(snapshot.mqtt_subscribe_errors, 1);
         assert_eq!(snapshot.mqtt_publish_errors, 1);
         assert_eq!(snapshot.mqtt_client_errors, 1);
         assert_eq!(snapshot.mqtt_disconnect_errors, 1);

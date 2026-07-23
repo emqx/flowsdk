@@ -232,7 +232,7 @@ pub fn run_worker(
             let conn = &mut conns[key];
             let events = conn.handle_tick();
             if !events.is_empty() {
-                let outcome = conn.process_events(events);
+                let outcome = conn.process_events(events, &config);
                 record_mqtt_outcome(stats.as_ref(), &outcome);
                 if outcome.failed {
                     finish_mqtt_failure(stats.as_ref(), &mut done_count);
@@ -243,6 +243,7 @@ pub fn run_worker(
                         .fetch_add(outcome.acked, Ordering::Relaxed);
                 }
             }
+            conn.check_receive_complete();
             // PINGREQ / retransmits produce outgoing bytes without any event.
             if conn.has_pending_send() && !conn.send_pending {
                 submit_send(&mut ring, key, conn);
@@ -435,7 +436,7 @@ fn handle_recv_complete(
     let events = conn.handle_incoming(&data);
 
     if !events.is_empty() {
-        let outcome = conn.process_events(events);
+        let outcome = conn.process_events(events, config);
         if outcome.acked > 0 {
             stats
                 .messages_acked
@@ -446,6 +447,8 @@ fn handle_recv_complete(
             finish_mqtt_failure(stats, done_count);
         }
     }
+
+    conn.check_receive_complete();
 
     let drain_complete = matches!(conn.state, ConnState::Draining) && conn.check_drain_complete();
 
@@ -460,11 +463,20 @@ fn handle_recv_complete(
             conn.check_publish_complete();
             submit_recv(ring, key, conn);
         }
-        ConnState::MqttConnecting => {
+        ConnState::MqttConnecting | ConnState::Subscribing | ConnState::Receiving => {
             if conn.has_pending_send() && !conn.send_pending {
                 submit_send(ring, key, conn);
             }
             submit_recv(ring, key, conn);
+        }
+        ConnState::Disconnecting => {
+            if conn.has_pending_send() && !conn.send_pending {
+                submit_send(ring, key, conn);
+            } else if !conn.has_pending_send() && !conn.send_pending {
+                conn.state = ConnState::Done;
+                stats.clients_done.fetch_add(1, Ordering::Relaxed);
+                *done_count += 1;
+            }
         }
         ConnState::Draining if drain_complete => {
             if conn.has_pending_send() && !conn.send_pending {
@@ -500,8 +512,17 @@ fn mark_failed(
 }
 
 fn record_mqtt_outcome(stats: &BenchStats, outcome: &EventOutcome) {
+    if outcome.subscribed {
+        stats.clients_subscribed.fetch_add(1, Ordering::Relaxed);
+    }
+    if outcome.received > 0 {
+        stats
+            .messages_received
+            .fetch_add(outcome.received, Ordering::Relaxed);
+    }
     stats.record_puback_no_match(outcome.puback_no_match);
     stats.record_errors(ErrorKind::MqttConnect, outcome.mqtt_connect_errors);
+    stats.record_errors(ErrorKind::MqttSubscribe, outcome.mqtt_subscribe_errors);
     stats.record_errors(ErrorKind::MqttPublish, outcome.mqtt_publish_errors);
     stats.record_errors(ErrorKind::MqttClient, outcome.mqtt_client_errors);
     stats.record_errors(ErrorKind::MqttDisconnect, outcome.mqtt_disconnect_errors);

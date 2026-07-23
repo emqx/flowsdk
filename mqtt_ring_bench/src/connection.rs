@@ -2,20 +2,25 @@
 
 #[cfg(feature = "quic")]
 use flowsdk::mqtt_client::engine::QuicMqttEngine;
-use flowsdk::mqtt_client::{MqttClientOptions, MqttEvent, NoIoMqttClient, PublishCommand};
+use flowsdk::mqtt_client::{
+    MqttClientOptions, MqttEvent, NoIoMqttClient, PublishCommand, SubscribeCommand,
+};
+use flowsdk::mqtt_serde::ParseLevel;
 use std::collections::VecDeque;
 #[cfg(feature = "quic")]
 use std::net::SocketAddr;
 use std::os::fd::RawFd;
 use std::time::{Duration, Instant};
 
-use crate::config::BenchConfig;
+use crate::config::{BenchAction, BenchConfig};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ConnState {
     TcpConnecting,
     MqttConnecting,
     Publishing,
+    Subscribing,
+    Receiving,
     Draining,
     Disconnecting,
     Done,
@@ -83,6 +88,8 @@ pub struct Connection {
     pub send_pending: bool,
     pub client_index: usize,
     pub drain_deadline: Option<Instant>,
+    topic: String,
+    pub messages_received: u64,
 }
 
 impl Connection {
@@ -98,7 +105,7 @@ impl Connection {
             .reconnect(false)
             .auto_ack(true)
             .parser_buffer_size(config.parser_buf)
-            .max_outgoing_packet_count(config.messages.min(10_000) as usize)
+            .max_outgoing_packet_count(outgoing_packet_limit(config))
             .max_event_count(1000)
             .build();
 
@@ -118,6 +125,8 @@ impl Connection {
             send_pending: false,
             client_index,
             drain_deadline: None,
+            topic: config.topic_for_client(client_index),
+            messages_received: 0,
         }
     }
 
@@ -152,10 +161,9 @@ impl Connection {
             }
         }
 
-        let topic = format!("{}/{}", config.topic, self.client_index);
         let payload = vec![0x42u8; config.payload_size];
         let cmd = PublishCommand::builder()
-            .topic(&topic)
+            .topic(&self.topic)
             .payload(payload)
             .qos(config.qos)
             .build();
@@ -187,14 +195,20 @@ impl Connection {
         }
     }
 
-    pub fn process_events(&mut self, events: Vec<MqttEvent>) -> EventOutcome {
+    pub fn process_events(&mut self, events: Vec<MqttEvent>, config: &BenchConfig) -> EventOutcome {
         let mut outcome = EventOutcome::default();
         for event in events {
             match event {
                 MqttEvent::Connected(result) => {
                     if result.is_success() {
-                        self.state = ConnState::Publishing;
                         outcome.connected = true;
+                        if config.action == BenchAction::Pub {
+                            self.state = ConnState::Publishing;
+                        } else if self.start_subscribe(config.qos).is_err() {
+                            self.state = ConnState::Failed;
+                            outcome.mqtt_subscribe_errors += 1;
+                            outcome.failed = true;
+                        }
                     } else {
                         self.state = ConnState::Failed;
                         outcome.mqtt_connect_errors += 1;
@@ -215,6 +229,21 @@ impl Connection {
                         outcome.mqtt_publish_errors += 1;
                     }
                 }
+                MqttEvent::Subscribed(result) if config.action == BenchAction::Sub => {
+                    if result.is_success() {
+                        self.state = ConnState::Receiving;
+                        self.mqtt.set_parse_level(receive_parse_level(config.qos));
+                        outcome.subscribed = true;
+                    } else {
+                        self.state = ConnState::Failed;
+                        outcome.mqtt_subscribe_errors += 1;
+                        outcome.failed = true;
+                    }
+                }
+                MqttEvent::PublishReceived { .. } if config.action == BenchAction::Sub => {
+                    self.messages_received += 1;
+                    outcome.received += 1;
+                }
                 MqttEvent::Error(_) => {
                     outcome.mqtt_client_errors += 1;
                 }
@@ -229,6 +258,29 @@ impl Connection {
             }
         }
         outcome
+    }
+
+    fn start_subscribe(&mut self, qos: u8) -> Result<(), ()> {
+        self.mqtt
+            .subscribe(SubscribeCommand::single(&self.topic, qos))
+            .map_err(|_| ())?;
+        self.take_outgoing();
+        self.state = ConnState::Subscribing;
+        Ok(())
+    }
+
+    pub fn check_receive_complete(&mut self) -> bool {
+        if self.state != ConnState::Receiving
+            || self.messages_target == 0
+            || self.messages_received < self.messages_target
+        {
+            return false;
+        }
+
+        self.mqtt.disconnect();
+        self.take_outgoing();
+        self.state = ConnState::Disconnecting;
+        true
     }
 
     pub fn check_publish_complete(&mut self) {
@@ -335,13 +387,65 @@ mod tcp_send_queue_tests {
     }
 }
 
+#[cfg(test)]
+mod subscription_state_tests {
+    use super::{ConnState, Connection};
+    use crate::config::{BenchAction, BenchConfig};
+    use flowsdk::mqtt_serde::ParseLevel;
+
+    fn subscribing_connection() -> (Connection, BenchConfig) {
+        let config = BenchConfig {
+            action: BenchAction::Sub,
+            qos: 0,
+            topic: "bench/shared/#".to_string(),
+            ..BenchConfig::default()
+        };
+        let mut connection = Connection::new(-1, 0, &config);
+        connection.initiate_mqtt_connect();
+
+        let events = connection.handle_incoming(&[0x20, 0x03, 0x00, 0x00, 0x00]);
+        let outcome = connection.process_events(events, &config);
+        assert!(outcome.connected);
+        assert_eq!(connection.state, ConnState::Subscribing);
+        (connection, config)
+    }
+
+    #[test]
+    fn successful_suback_enters_reduced_receive_mode() {
+        let (mut connection, config) = subscribing_connection();
+
+        let events = connection.handle_incoming(&[0x90, 0x04, 0x00, 0x01, 0x00, 0x00]);
+        let outcome = connection.process_events(events, &config);
+
+        assert!(outcome.subscribed);
+        assert!(!outcome.failed);
+        assert_eq!(connection.state, ConnState::Receiving);
+        assert_eq!(connection.mqtt.parse_level(), ParseLevel::TypeOnly);
+    }
+
+    #[test]
+    fn rejected_suback_fails_subscription() {
+        let (mut connection, config) = subscribing_connection();
+
+        let events = connection.handle_incoming(&[0x90, 0x04, 0x00, 0x01, 0x00, 0x80]);
+        let outcome = connection.process_events(events, &config);
+
+        assert!(outcome.failed);
+        assert_eq!(outcome.mqtt_subscribe_errors, 1);
+        assert_eq!(connection.state, ConnState::Failed);
+    }
+}
+
 #[derive(Default)]
 pub struct EventOutcome {
     pub connected: bool,
+    pub subscribed: bool,
     pub acked: u64,
+    pub received: u64,
     pub puback_no_match: u64,
     pub mqtt_connect_errors: u64,
     pub mqtt_publish_errors: u64,
+    pub mqtt_subscribe_errors: u64,
     pub mqtt_client_errors: u64,
     pub mqtt_disconnect_errors: u64,
     pub failed: bool,
@@ -358,6 +462,10 @@ pub enum QuicConnState {
     Handshaking,
     /// MQTT PUBLISH phase.
     Publishing,
+    /// Waiting for SUBACK.
+    Subscribing,
+    /// Counting inbound PUBLISH packets.
+    Receiving,
     /// All publishes sent; waiting for remaining ACKs.
     Draining,
     /// DISCONNECT sent; finishing up.
@@ -386,6 +494,8 @@ pub struct QuicConnection {
     pub client_index: usize,
     pub drain_deadline: Option<Instant>,
     pub server_addr: SocketAddr,
+    topic: String,
+    pub messages_received: u64,
 }
 
 #[cfg(feature = "quic")]
@@ -407,7 +517,7 @@ impl QuicConnection {
             .reconnect(false)
             .auto_ack(true)
             .parser_buffer_size(config.parser_buf)
-            .max_outgoing_packet_count(config.messages.min(10_000) as usize)
+            .max_outgoing_packet_count(outgoing_packet_limit(config))
             .max_event_count(1000)
             .build();
 
@@ -431,6 +541,8 @@ impl QuicConnection {
             client_index,
             drain_deadline: None,
             server_addr,
+            topic: config.topic_for_client(client_index),
+            messages_received: 0,
         })
     }
 
@@ -488,10 +600,9 @@ impl QuicConnection {
             }
         }
 
-        let topic = format!("{}/{}", config.topic, self.client_index);
         let payload = vec![0x42u8; config.payload_size];
         let cmd = PublishCommand::builder()
-            .topic(&topic)
+            .topic(&self.topic)
             .payload(payload)
             .qos(config.qos)
             .build();
@@ -524,14 +635,20 @@ impl QuicConnection {
         }
     }
 
-    pub fn process_events(&mut self, events: Vec<MqttEvent>) -> EventOutcome {
+    pub fn process_events(&mut self, events: Vec<MqttEvent>, config: &BenchConfig) -> EventOutcome {
         let mut outcome = EventOutcome::default();
         for event in events {
             match event {
                 MqttEvent::Connected(result) => {
                     if result.is_success() {
-                        self.state = QuicConnState::Publishing;
                         outcome.connected = true;
+                        if config.action == BenchAction::Pub {
+                            self.state = QuicConnState::Publishing;
+                        } else if self.start_subscribe(config.qos).is_err() {
+                            self.state = QuicConnState::Failed;
+                            outcome.mqtt_subscribe_errors += 1;
+                            outcome.failed = true;
+                        }
                     } else {
                         self.state = QuicConnState::Failed;
                         outcome.mqtt_connect_errors += 1;
@@ -552,6 +669,21 @@ impl QuicConnection {
                         outcome.mqtt_publish_errors += 1;
                     }
                 }
+                MqttEvent::Subscribed(result) if config.action == BenchAction::Sub => {
+                    if result.is_success() {
+                        self.state = QuicConnState::Receiving;
+                        self.engine.set_parse_level(receive_parse_level(config.qos));
+                        outcome.subscribed = true;
+                    } else {
+                        self.state = QuicConnState::Failed;
+                        outcome.mqtt_subscribe_errors += 1;
+                        outcome.failed = true;
+                    }
+                }
+                MqttEvent::PublishReceived { .. } if config.action == BenchAction::Sub => {
+                    self.messages_received += 1;
+                    outcome.received += 1;
+                }
                 MqttEvent::Error(_) => {
                     outcome.mqtt_client_errors += 1;
                 }
@@ -568,6 +700,32 @@ impl QuicConnection {
             }
         }
         outcome
+    }
+
+    fn start_subscribe(&mut self, qos: u8) -> Result<(), ()> {
+        self.engine
+            .subscribe(SubscribeCommand::single(&self.topic, qos))
+            .map_err(|_| ())?;
+        let now = Instant::now();
+        let _ = self.engine.handle_tick(now);
+        self.drain_outgoing_datagrams();
+        self.state = QuicConnState::Subscribing;
+        Ok(())
+    }
+
+    pub fn check_receive_complete(&mut self, now: Instant) -> bool {
+        if self.state != QuicConnState::Receiving
+            || self.messages_target == 0
+            || self.messages_received < self.messages_target
+        {
+            return false;
+        }
+
+        self.engine.disconnect();
+        let _ = self.engine.handle_tick(now);
+        self.drain_outgoing_datagrams();
+        self.state = QuicConnState::Disconnecting;
+        true
     }
 
     pub fn check_publish_complete(&mut self) {
@@ -604,5 +762,21 @@ impl QuicConnection {
     /// Pop the front datagram after a successful send.
     pub fn pop_front_datagram(&mut self) {
         self.send_queue.pop_front();
+    }
+}
+
+fn receive_parse_level(qos: u8) -> ParseLevel {
+    if qos == 0 {
+        ParseLevel::TypeOnly
+    } else {
+        ParseLevel::HeadersParsed
+    }
+}
+
+fn outgoing_packet_limit(config: &BenchConfig) -> usize {
+    match config.action {
+        // A receive batch can generate up to max_event_count acknowledgements.
+        BenchAction::Sub => 1000,
+        BenchAction::Pub => config.messages.clamp(1, 10_000) as usize,
     }
 }

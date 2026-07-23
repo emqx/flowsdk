@@ -4,6 +4,22 @@ use clap::{ArgAction, Parser, ValueEnum};
 use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
+pub enum BenchAction {
+    #[default]
+    Pub,
+    Sub,
+}
+
+impl BenchAction {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Pub => "pub",
+            Self::Sub => "sub",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, ValueEnum)]
 pub enum ShutdownMode {
     /// Exit immediately and let the kernel tear down the io_uring instances.
     #[default]
@@ -22,6 +38,7 @@ impl ShutdownMode {
 }
 
 pub struct BenchConfig {
+    pub action: BenchAction,
     pub addr: SocketAddr,
     pub host: String,
     pub port: u16,
@@ -52,9 +69,13 @@ pub struct BenchConfig {
 #[derive(Debug, Parser)]
 #[command(
     name = "mqtt_ring_bench",
-    about = "High-connection-count MQTT publish benchmark (io_uring)"
+    about = "High-connection-count MQTT publish/subscribe benchmark (io_uring)"
 )]
 struct BenchArgs {
+    /// Benchmark action: publish messages or subscribe and count deliveries.
+    #[arg(long, value_enum, default_value = "pub")]
+    action: BenchAction,
+
     #[arg(long, default_value = "localhost")]
     host: String,
 
@@ -119,6 +140,7 @@ struct BenchArgs {
 impl Default for BenchConfig {
     fn default() -> Self {
         Self {
+            action: BenchAction::Pub,
             addr: SocketAddr::from(([127, 0, 0, 1], 1883)),
             host: "localhost".to_string(),
             port: 1883,
@@ -159,6 +181,7 @@ pub fn parse_args() -> BenchConfig {
     }
 
     let mut config = BenchConfig {
+        action: args.action,
         host: args.host,
         port: args.port,
         clients: args.clients,
@@ -221,6 +244,15 @@ pub fn parse_args() -> BenchConfig {
     config
 }
 
+impl BenchConfig {
+    pub fn topic_for_client(&self, client_index: usize) -> String {
+        match self.action {
+            BenchAction::Pub => format!("{}/{}", self.topic, client_index),
+            BenchAction::Sub => self.topic.replace("{client}", &client_index.to_string()),
+        }
+    }
+}
+
 /// Parse --ifaddr value. Supports:
 ///   Single:   192.168.1.100
 ///   List:     192.168.1.100,192.168.1.101,192.168.1.102
@@ -272,6 +304,42 @@ mod tests {
         let args = BenchArgs::try_parse_from(["mqtt_ring_bench"]).unwrap();
 
         assert_eq!(args.shutdown_mode, ShutdownMode::Immediate);
+    }
+
+    #[test]
+    fn action_defaults_to_publish() {
+        let args = BenchArgs::try_parse_from(["mqtt_ring_bench"]).unwrap();
+
+        assert_eq!(args.action, BenchAction::Pub);
+    }
+
+    #[test]
+    fn subscribe_action_can_be_selected() {
+        let args = BenchArgs::try_parse_from(["mqtt_ring_bench", "--action", "sub"]).unwrap();
+
+        assert_eq!(args.action, BenchAction::Sub);
+    }
+
+    #[test]
+    fn subscription_topic_expands_client_placeholder() {
+        let config = BenchConfig {
+            action: BenchAction::Sub,
+            topic: "bench/{client}/events".to_string(),
+            ..BenchConfig::default()
+        };
+
+        assert_eq!(config.topic_for_client(42), "bench/42/events");
+    }
+
+    #[test]
+    fn subscription_topic_without_placeholder_is_literal() {
+        let config = BenchConfig {
+            action: BenchAction::Sub,
+            topic: "bench/shared/#".to_string(),
+            ..BenchConfig::default()
+        };
+
+        assert_eq!(config.topic_for_client(42), "bench/shared/#");
     }
 
     #[test]

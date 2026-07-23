@@ -1,6 +1,6 @@
 # mqtt_ring_bench
 
-High-connection-count MQTT publish benchmark using `io_uring` and FlowSDK's sans-I/O client.
+High-connection-count MQTT publish/subscribe benchmark using `io_uring` and FlowSDK's sans-I/O client.
 
 Designed for **100K+ concurrent connections** with minimal memory footprint. Traditional MQTT bench tools allocate ~256KB of kernel socket buffers per connection (25GB+ at 100K). This tool cuts that to **~8KB per connection** by combining:
 
@@ -41,8 +41,9 @@ QUIC avoids TCP's mandatory send/recv buffers. The main cost is the quinn-proto 
 
 Requires Rust 1.70+. Linux-only (io_uring).
 
-The first Ctrl-C makes each worker cancel and drain its own outstanding socket operations before
-printing a partial summary and exiting with status 130. A second Ctrl-C forces immediate exit.
+The default Ctrl-C behavior exits immediately. Select `--shutdown-mode graceful`
+to make each worker cancel and drain its outstanding socket operations first; a
+second Ctrl-C then forces an immediate exit.
 
 ```bash
 # Native build on Linux (TCP only)
@@ -66,14 +67,15 @@ The output is a statically linked binary (~800KB without QUIC, ~2.3MB with QUIC)
 mqtt_ring_bench [OPTIONS]
 
 OPTIONS:
+    --action <pub|sub>        Publish or subscribe benchmark [default: pub]
     --host <HOST>             Broker hostname [default: localhost]
     --port <PORT>             Broker port [default: 1883]
     --clients <N>             Concurrent connections [default: 1000]
-    --messages <N>            Messages per client [default: 1000]
-    --qos <0|1|2>             QoS level [default: 0]
-    --topic <TOPIC>           Base topic [default: bench/test]
-    --payload-size <BYTES>    Payload size [default: 256]
-    --interval <MS>           Delay between publishes per client, 0 = max speed [default: 0]
+    --messages <N>            Publish or receive target per client [default: 1000]
+    --qos <0|1|2>             Publish or requested subscription QoS [default: 0]
+    --topic <TOPIC>           Base publish topic or subscription filter [default: bench/test]
+    --payload-size <BYTES>    Publish payload size [default: 256]
+    --interval <MS>           Delay between publishes, 0 = max speed [default: 0]
     --keep-alive <SECS>       MQTT keep-alive [default: 60]
     --mqtt-version <3|4|5>    Protocol version [default: 5]
     --workers <N>             Worker threads [default: num_cpus]
@@ -92,6 +94,12 @@ OPTIONS:
 down pending io_uring operations. Use `--shutdown-mode graceful` to explicitly
 cancel and reap pending operations before closing sockets and exiting.
 
+In `--action sub`, `--messages 0` keeps every subscriber active until shutdown.
+The subscription filter is literal by default; include `{client}` to replace it
+with each client's zero-based index. After SUBACK, QoS 0 deliveries use a
+type-only parser. QoS 1/2 parse only the headers needed to send acknowledgements.
+Payload bytes and SUBACK latency are not collected.
+
 ## Examples
 
 ```bash
@@ -100,6 +108,14 @@ mqtt_ring_bench --host broker.emqx.io --clients 100 --messages 100
 
 # QoS 1 with latency measurement
 mqtt_ring_bench --host 10.0.0.1 --clients 1000 --messages 500 --qos 1
+
+# 10K subscribers on one shared filter, receiving until Ctrl-C
+mqtt_ring_bench --action sub --host 10.0.0.1 --clients 10000 \
+    --topic 'bench/events/#' --messages 0 --qos 0
+
+# One filter per client; an external publisher must publish matching messages
+mqtt_ring_bench --action sub --host 10.0.0.1 --clients 1000 \
+    --topic 'bench/{client}/events' --messages 100 --qos 1
 
 # 100K connections with multiple source IPs
 mqtt_ring_bench --host 10.0.0.1 --clients 100000 --messages 10 \
@@ -211,11 +227,13 @@ No async runtime (no tokio). Each worker runs a synchronous `io_uring` event loo
 **TCP:**
 ```
 TcpConnecting -> MqttConnecting -> Publishing -> Draining -> Disconnecting -> Done
+                              \-> Subscribing -> Receiving -> Disconnecting -> Done
 ```
 
 **QUIC:**
 ```
 Handshaking -> Publishing -> Draining -> Disconnecting -> Done
+           \-> Subscribing -> Receiving -> Disconnecting -> Done
 ```
 No separate TCP connect phase — QUIC handshake happens via UDP datagrams. The engine internally handles QUIC handshake + MQTT CONNECT once the QUIC connection is established.
 

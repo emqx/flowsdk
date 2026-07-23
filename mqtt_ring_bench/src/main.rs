@@ -100,23 +100,46 @@ fn main() {
     // Stats reporter thread
     let stats_reporter = Arc::clone(&stats);
     let total_clients = config.clients as u64;
-    let total_messages = config.clients as u64 * config.messages;
+    let total_messages = (config.clients as u64).saturating_mul(config.messages);
+    let action = config.action;
     let reporter = thread::spawn(move || {
-        let mut prev_sent: u64 = 0;
+        let mut prev_messages: u64 = 0;
         loop {
             thread::sleep(Duration::from_secs(1));
             let snap = stats_reporter.snapshot();
-            let rate = snap.sent.saturating_sub(prev_sent);
-            prev_sent = snap.sent;
+            let messages = match action {
+                config::BenchAction::Pub => snap.sent,
+                config::BenchAction::Sub => snap.received,
+            };
+            let rate = messages.saturating_sub(prev_messages);
+            prev_messages = messages;
             let secs = snap.elapsed.as_secs();
-            eprint!(
-                "\r[{:>4}s] Connected: {}/{} | Sent: {}/{} | Acked: {} | PubAckNoMatch: {} | Errors: {} (socket:{} connect:{} send:{} recv:{} mqtt:{} [conn:{} pub:{} client:{} disc:{}]) | Rate: {} msg/s   ",
-                secs, snap.connected, total_clients, snap.sent, total_messages, snap.acked,
-                snap.puback_no_match, snap.errors,
-                snap.socket_errors, snap.connect_errors, snap.send_errors, snap.receive_errors,
-                snap.mqtt_errors, snap.mqtt_connect_errors, snap.mqtt_publish_errors,
-                snap.mqtt_client_errors, snap.mqtt_disconnect_errors, rate
-            );
+            match action {
+                config::BenchAction::Pub => eprint!(
+                    "\r[{:>4}s] Connected: {}/{} | Sent: {}/{} | Acked: {} | PubAckNoMatch: {} | Errors: {} (socket:{} connect:{} send:{} recv:{} mqtt:{} [conn:{} sub:{} pub:{} client:{} disc:{}]) | Rate: {} msg/s   ",
+                    secs, snap.connected, total_clients, snap.sent, total_messages, snap.acked,
+                    snap.puback_no_match, snap.errors,
+                    snap.socket_errors, snap.connect_errors, snap.send_errors, snap.receive_errors,
+                    snap.mqtt_errors, snap.mqtt_connect_errors, snap.mqtt_subscribe_errors,
+                    snap.mqtt_publish_errors, snap.mqtt_client_errors,
+                    snap.mqtt_disconnect_errors, rate
+                ),
+                config::BenchAction::Sub => {
+                    let target = if total_messages == 0 {
+                        "unbounded".to_string()
+                    } else {
+                        total_messages.to_string()
+                    };
+                    eprint!(
+                        "\r[{:>4}s] Connected: {}/{} | Subscribed: {}/{} | Received: {}/{} | Errors: {} (socket:{} connect:{} send:{} recv:{} mqtt:{} [conn:{} sub:{} client:{} disc:{}]) | Rate: {} msg/s   ",
+                        secs, snap.connected, total_clients, snap.subscribed, total_clients,
+                        snap.received, target, snap.errors, snap.socket_errors,
+                        snap.connect_errors, snap.send_errors, snap.receive_errors,
+                        snap.mqtt_errors, snap.mqtt_connect_errors, snap.mqtt_subscribe_errors,
+                        snap.mqtt_client_errors, snap.mqtt_disconnect_errors, rate
+                    );
+                }
+            }
             if snap.done >= total_clients || stats_reporter.stopped.load(Ordering::Relaxed) {
                 eprintln!();
                 break;
@@ -145,24 +168,32 @@ fn main() {
 #[cfg(target_os = "linux")]
 fn print_banner(config: &config::BenchConfig) {
     let transport = if config.quic { "QUIC" } else { "TCP" };
-    eprintln!("mqtt_ring_bench - io_uring MQTT publish benchmark");
+    eprintln!("mqtt_ring_bench - io_uring MQTT benchmark");
     eprintln!(
         "  Target:     {}:{} ({})",
         config.host, config.port, transport
     );
     eprintln!("  Clients:    {}", config.clients);
     eprintln!("  Workers:    {}", config.workers);
-    eprintln!("  Messages:   {} per client", config.messages);
+    eprintln!("  Action:     {}", config.action.as_str());
+    if config.action == config::BenchAction::Sub && config.messages == 0 {
+        eprintln!("  Messages:   unbounded");
+    } else {
+        eprintln!("  Messages:   {} per client", config.messages);
+    }
+    eprintln!("  Topic:      {}", config.topic);
     eprintln!("  QoS:        {}", config.qos);
-    eprintln!("  Payload:    {} bytes", config.payload_size);
-    eprintln!(
-        "  Interval:   {} ms",
-        if config.interval_ms == 0 {
-            "max speed".to_string()
-        } else {
-            config.interval_ms.to_string()
-        }
-    );
+    if config.action == config::BenchAction::Pub {
+        eprintln!("  Payload:    {} bytes", config.payload_size);
+        eprintln!(
+            "  Interval:   {} ms",
+            if config.interval_ms == 0 {
+                "max speed".to_string()
+            } else {
+                config.interval_ms.to_string()
+            }
+        );
+    }
     eprintln!("  MQTT:       v{}", config.mqtt_version);
     eprintln!("  Socket buf: {} bytes", config.socket_buf);
     eprintln!("  Parser buf: {} bytes", config.parser_buf);

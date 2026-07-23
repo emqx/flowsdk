@@ -221,7 +221,7 @@ pub fn run_quic_worker(
                 // Drive QUIC state machine
                 let events = conn.handle_tick(now);
                 if !events.is_empty() {
-                    let outcome = conn.process_events(events);
+                    let outcome = conn.process_events(events, &config);
                     if outcome.connected {
                         stats.clients_connected.fetch_add(1, Ordering::Relaxed);
                     }
@@ -243,6 +243,8 @@ pub fn run_quic_worker(
                     }
                     conn.check_publish_complete();
                 }
+
+                conn.check_receive_complete(now);
 
                 // Check drain
                 if conn.state == QuicConnState::Draining {
@@ -418,7 +420,7 @@ fn handle_recv_complete(
     let events = conn.handle_datagram(&data, now);
 
     if !events.is_empty() {
-        let outcome = conn.process_events(events);
+        let outcome = conn.process_events(events, config);
         if outcome.connected {
             stats.clients_connected.fetch_add(1, Ordering::Relaxed);
         }
@@ -440,6 +442,8 @@ fn handle_recv_complete(
         }
         conn.check_publish_complete();
     }
+
+    conn.check_receive_complete(now);
 
     if conn.state == QuicConnState::Draining {
         conn.check_drain_complete(now);
@@ -471,8 +475,17 @@ fn mark_failed(
 }
 
 fn record_mqtt_outcome(stats: &BenchStats, outcome: &EventOutcome) {
+    if outcome.subscribed {
+        stats.clients_subscribed.fetch_add(1, Ordering::Relaxed);
+    }
+    if outcome.received > 0 {
+        stats
+            .messages_received
+            .fetch_add(outcome.received, Ordering::Relaxed);
+    }
     stats.record_puback_no_match(outcome.puback_no_match);
     stats.record_errors(ErrorKind::MqttConnect, outcome.mqtt_connect_errors);
+    stats.record_errors(ErrorKind::MqttSubscribe, outcome.mqtt_subscribe_errors);
     stats.record_errors(ErrorKind::MqttPublish, outcome.mqtt_publish_errors);
     stats.record_errors(ErrorKind::MqttClient, outcome.mqtt_client_errors);
     stats.record_errors(ErrorKind::MqttDisconnect, outcome.mqtt_disconnect_errors);
