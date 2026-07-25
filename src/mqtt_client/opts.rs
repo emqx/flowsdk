@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use crate::mqtt_serde::mqttv5::common::properties::Property;
 use crate::mqtt_serde::mqttv5::subscribev5;
 use crate::mqtt_serde::mqttv5::willv5::Will;
 
@@ -120,6 +121,17 @@ pub struct MqttClientOptions {
     /// - Default: 65535
     pub receive_maximum: u16,
 
+    /// Additional MQTT v5 properties to include in the initial CONNECT packet.
+    ///
+    /// Use this for properties not covered by dedicated fields (e.g.
+    /// `AuthenticationMethod`, `AuthenticationData`, `MessageExpiryInterval`,
+    /// `CorrelationData`, `SubscriptionIdentifier`, `TopicAlias`).
+    ///
+    /// Properties set via dedicated fields on this struct (e.g.
+    /// `session_expiry_interval`, `maximum_packet_size`) are **not**
+    /// automatically merged here — callers must add them manually if desired.
+    pub connect_properties: Vec<Property>,
+
     /// Internal parser buffer size in bytes.
     /// Controls the initial capacity of the MQTT packet parser's BytesMut buffer.
     /// - Default: 16384 (16KB)
@@ -169,6 +181,7 @@ impl Default for MqttClientOptions {
             max_outgoing_packet_count: 1000,
             max_event_count: 1000,
             receive_maximum: 65535,
+            connect_properties: Vec::new(),
             parser_buffer_size: 16384,
             auto_keepalive: true,
         }
@@ -370,6 +383,33 @@ impl MqttClientOptions {
     /// ```
     pub fn request_problem_information(mut self, request: bool) -> Self {
         self.request_problem_information = Some(request);
+        self
+    }
+
+    /// Set additional MQTT v5 properties for the initial CONNECT packet.
+    ///
+    /// These properties are included in the CONNECT variable header /
+    /// property section when the client connects. Use this for properties
+    /// not covered by dedicated fields (e.g. `AuthenticationMethod`,
+    /// `CorrelationData`, `SubscriptionIdentifier`, `TopicAlias`).
+    ///
+    /// Properties set via dedicated fields on this struct (e.g.
+    /// `session_expiry_interval`, `maximum_packet_size`) are **not**
+    /// automatically merged here — callers must add them manually if desired.
+    ///
+    /// # Example
+    /// ```
+    /// # use flowsdk::mqtt_client::MqttClientOptions;
+    /// # use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
+    /// let options = MqttClientOptions::builder()
+    ///     .connect_properties(vec![
+    ///         Property::SubscriptionIdentifier(1),
+    ///         Property::TopicAlias(10),
+    ///     ])
+    ///     .build();
+    /// ```
+    pub fn connect_properties(mut self, properties: Vec<Property>) -> Self {
+        self.connect_properties = properties;
         self
     }
 

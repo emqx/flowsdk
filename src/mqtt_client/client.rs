@@ -406,7 +406,7 @@ impl MqttClient {
                     self.options.will.clone(),
                     self.options.keep_alive,
                     self.options.clean_start,
-                    vec![], // Add properties as needed
+                    self.options.connect_properties.clone(),
                 );
 
                 // stream used, now save it
@@ -818,7 +818,7 @@ impl MqttClient {
                 self.options.will.clone(),
                 self.options.keep_alive,
                 self.options.clean_start,
-                vec![], // Add properties as needed
+                self.options.connect_properties.clone(),
             );
 
             // Stream used, now save it

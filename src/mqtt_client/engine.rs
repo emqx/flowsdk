@@ -724,7 +724,7 @@ impl MqttEngine {
                 None, // Will
                 self.options.keep_alive,
                 self.options.clean_start,
-                Vec::new(), // Properties
+                self.options.connect_properties.clone(),
             );
             MqttPacket::Connect5(connect)
         } else {
