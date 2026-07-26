@@ -406,8 +406,8 @@
 <a href=#406 id=406 data-nosnippet>406</a>                    <span class="self">self</span>.options.will.clone(),
 <a href=#407 id=407 data-nosnippet>407</a>                    <span class="self">self</span>.options.keep_alive,
 <a href=#408 id=408 data-nosnippet>408</a>                    <span class="self">self</span>.options.clean_start,
-<a href=#409 id=409 data-nosnippet>409</a>                    <span class="macro">vec!</span>[], <span class="comment">// Add properties as needed
-<a href=#410 id=410 data-nosnippet>410</a>                </span>);
+<a href=#409 id=409 data-nosnippet>409</a>                    <span class="self">self</span>.options.connect_properties.clone(),
+<a href=#410 id=410 data-nosnippet>410</a>                );
 <a href=#411 id=411 data-nosnippet>411</a>
 <a href=#412 id=412 data-nosnippet>412</a>                <span class="comment">// stream used, now save it
 <a href=#413 id=413 data-nosnippet>413</a>                </span><span class="kw">let </span>mqtt_stream = MqttStream::new(stream, <span class="number">16384</span>, <span class="number">5</span>);
@@ -818,8 +818,8 @@
 <a href=#818 id=818 data-nosnippet>818</a>                <span class="self">self</span>.options.will.clone(),
 <a href=#819 id=819 data-nosnippet>819</a>                <span class="self">self</span>.options.keep_alive,
 <a href=#820 id=820 data-nosnippet>820</a>                <span class="self">self</span>.options.clean_start,
-<a href=#821 id=821 data-nosnippet>821</a>                <span class="macro">vec!</span>[], <span class="comment">// Add properties as needed
-<a href=#822 id=822 data-nosnippet>822</a>            </span>);
+<a href=#821 id=821 data-nosnippet>821</a>                <span class="self">self</span>.options.connect_properties.clone(),
+<a href=#822 id=822 data-nosnippet>822</a>            );
 <a href=#823 id=823 data-nosnippet>823</a>
 <a href=#824 id=824 data-nosnippet>824</a>            <span class="comment">// Stream used, now save it
 <a href=#825 id=825 data-nosnippet>825</a>            </span><span class="kw">let </span>mqtt_stream = MqttStream::new(stream, <span class="number">16384</span>, <span class="number">5</span>);
