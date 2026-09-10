@@ -71,6 +71,7 @@ OPTIONS:
     --host <HOST>             Broker hostname [default: localhost]
     --port <PORT>             Broker port [default: 1883]
     --clients <N>             Concurrent connections [default: 1000]
+    --client-prefix <PREFIX>  MQTT client ID prefix [default: mqtt_ring_bench_]
     --messages <N>            Publish or receive target per client [default: 1000]
     --qos <0|1|2>             Publish or requested subscription QoS [default: 0]
     --topic <TOPIC>           Base publish topic or subscription filter [default: bench/test]
@@ -105,6 +106,9 @@ Payload bytes and SUBACK latency are not collected.
 ```bash
 # Quick test: 100 clients, 100 messages each, QoS 0
 mqtt_ring_bench --host broker.emqx.io --clients 100 --messages 100
+
+# Generate client IDs such as load_test_0, load_test_1, ...
+mqtt_ring_bench --host broker.emqx.io --clients 100 --client-prefix load_test_
 
 # QoS 1 with latency measurement
 mqtt_ring_bench --host 10.0.0.1 --clients 1000 --messages 500 --qos 1

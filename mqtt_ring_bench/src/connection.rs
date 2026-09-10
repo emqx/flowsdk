@@ -95,7 +95,7 @@ pub struct Connection {
 impl Connection {
     pub fn new(fd: RawFd, client_index: usize, config: &BenchConfig) -> Self {
         let peer = format!("{}:{}", config.host, config.port);
-        let client_id = format!("mqtt_ring_bench_{}", client_index);
+        let client_id = config.client_id_for(client_index);
         let options = MqttClientOptions::builder()
             .peer(&peer)
             .client_id(&client_id)
@@ -507,7 +507,7 @@ impl QuicConnection {
         server_addr: SocketAddr,
     ) -> Result<Self, String> {
         let peer = format!("{}:{}", config.host, config.port);
-        let client_id = format!("mqtt_ring_bench_{}", client_index);
+        let client_id = config.client_id_for(client_index);
         let options = MqttClientOptions::builder()
             .peer(&peer)
             .client_id(&client_id)

@@ -43,6 +43,7 @@ pub struct BenchConfig {
     pub host: String,
     pub port: u16,
     pub clients: usize,
+    pub client_prefix: String,
     pub messages: u64,
     pub qos: u8,
     pub topic: String,
@@ -84,6 +85,10 @@ struct BenchArgs {
 
     #[arg(long, default_value_t = 1000)]
     clients: usize,
+
+    /// Prefix used to generate each MQTT client ID.
+    #[arg(long = "client-prefix", default_value = "mqtt_ring_bench_")]
+    client_prefix: String,
 
     #[arg(long, default_value_t = 1000)]
     messages: u64,
@@ -145,6 +150,7 @@ impl Default for BenchConfig {
             host: "localhost".to_string(),
             port: 1883,
             clients: 1000,
+            client_prefix: "mqtt_ring_bench_".to_string(),
             messages: 1000,
             qos: 0,
             topic: "bench/test".to_string(),
@@ -185,6 +191,7 @@ pub fn parse_args() -> BenchConfig {
         host: args.host,
         port: args.port,
         clients: args.clients,
+        client_prefix: args.client_prefix,
         messages: args.messages,
         qos: args.qos,
         topic: args.topic,
@@ -245,6 +252,10 @@ pub fn parse_args() -> BenchConfig {
 }
 
 impl BenchConfig {
+    pub fn client_id_for(&self, client_index: usize) -> String {
+        format!("{}{}", self.client_prefix, client_index)
+    }
+
     pub fn topic_for_client(&self, client_index: usize) -> String {
         match self.action {
             BenchAction::Pub => format!("{}/{}", self.topic, client_index),
@@ -318,6 +329,25 @@ mod tests {
         let args = BenchArgs::try_parse_from(["mqtt_ring_bench", "--action", "sub"]).unwrap();
 
         assert_eq!(args.action, BenchAction::Sub);
+    }
+
+    #[test]
+    fn client_prefix_defaults_to_existing_value() {
+        let args = BenchArgs::try_parse_from(["mqtt_ring_bench"]).unwrap();
+
+        assert_eq!(args.client_prefix, "mqtt_ring_bench_");
+    }
+
+    #[test]
+    fn custom_client_prefix_generates_client_ids() {
+        let args = BenchArgs::try_parse_from(["mqtt_ring_bench", "--client-prefix", "load_test_"])
+            .unwrap();
+        let config = BenchConfig {
+            client_prefix: args.client_prefix,
+            ..BenchConfig::default()
+        };
+
+        assert_eq!(config.client_id_for(42), "load_test_42");
     }
 
     #[test]

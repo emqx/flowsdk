@@ -174,6 +174,7 @@ fn print_banner(config: &config::BenchConfig) {
         config.host, config.port, transport
     );
     eprintln!("  Clients:    {}", config.clients);
+    eprintln!("  Client IDs: {}<index>", config.client_prefix);
     eprintln!("  Workers:    {}", config.workers);
     eprintln!("  Action:     {}", config.action.as_str());
     if config.action == config::BenchAction::Sub && config.messages == 0 {
