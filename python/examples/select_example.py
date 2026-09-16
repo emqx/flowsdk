@@ -80,7 +80,7 @@ def main():
 
     try:
         while time.monotonic() < end_time:
-            now_ms = int((time.monotonic() - start_time) * 1000)
+            now_ms = engine.elapsed_ms()
             
             # 1. Handle engine ticks
             engine.handle_tick(now_ms)

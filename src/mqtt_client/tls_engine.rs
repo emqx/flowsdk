@@ -19,9 +19,12 @@ use super::opts::MqttClientOptions;
 pub struct TlsMqttEngine {
     mqtt_engine: MqttEngine,
     tls_connection: ClientConnection,
+    tls_config: Arc<ClientConfig>,
+    server_name: ServerName<'static>,
 
     // Buffer for plaintext data from TLS engine to be fed into MQTT engine
     incoming_plaintext: Vec<u8>,
+    outgoing_plaintext: Vec<u8>,
 }
 
 impl TlsMqttEngine {
@@ -38,17 +41,39 @@ impl TlsMqttEngine {
             })?
             .to_owned();
 
-        let tls_connection = ClientConnection::new(config, server_name).map_err(|e| {
-            MqttClientError::InternalError {
-                message: format!("Failed to create TLS connection: {}", e),
-            }
-        })?;
+        let tls_connection =
+            ClientConnection::new(config.clone(), server_name.clone()).map_err(|e| {
+                MqttClientError::InternalError {
+                    message: format!("Failed to create TLS connection: {}", e),
+                }
+            })?;
 
         Ok(Self {
             mqtt_engine,
             tls_connection,
+            tls_config: config,
+            server_name,
             incoming_plaintext: Vec::new(),
+            outgoing_plaintext: Vec::new(),
         })
+    }
+
+    /// Start a fresh TLS handshake while retaining the MQTT session/inflight state.
+    pub fn reset_for_new_transport(&mut self) -> Result<(), MqttClientError> {
+        self.tls_connection =
+            ClientConnection::new(self.tls_config.clone(), self.server_name.clone()).map_err(
+                |e| MqttClientError::InternalError {
+                    message: e.to_string(),
+                },
+            )?;
+        self.incoming_plaintext.clear();
+        self.outgoing_plaintext.clear();
+        self.mqtt_engine.reset_for_new_transport();
+        Ok(())
+    }
+
+    pub fn handle_connection_lost(&mut self) {
+        self.mqtt_engine.handle_connection_lost();
     }
 
     /// Feed encrypted data received from the socket into the TLS engine.
@@ -68,9 +93,12 @@ impl TlsMqttEngine {
                     message: format!("TLS process error: {}", e),
                 }
             })?;
+            self.drain_plaintext()?;
         }
+        Ok(())
+    }
 
-        // After processing packets, check if there is any plaintext available
+    fn drain_plaintext(&mut self) -> Result<(), MqttClientError> {
         let mut buf = vec![0u8; 4096];
         loop {
             match self.tls_connection.reader().read(&mut buf) {
@@ -102,16 +130,23 @@ impl TlsMqttEngine {
         let mut mqtt_events = Vec::new();
 
         // 1. Process internal plaintext from TLS -> MQTT
-        if !self.incoming_plaintext.is_empty() {
-            let events = self.mqtt_engine.handle_incoming(&self.incoming_plaintext);
-            mqtt_events.extend(events);
-            self.incoming_plaintext.clear();
-        }
+        mqtt_events.extend(self.mqtt_engine.handle_incoming(&self.incoming_plaintext));
+        self.incoming_plaintext.clear();
 
         // 2. Process outgoing plaintext from MQTT -> TLS
-        let outgoing = self.mqtt_engine.take_outgoing();
-        if !outgoing.is_empty() {
-            let _ = self.tls_connection.writer().write_all(&outgoing);
+        if self.outgoing_plaintext.is_empty() {
+            self.outgoing_plaintext = self.mqtt_engine.take_outgoing();
+        }
+        if !self.outgoing_plaintext.is_empty() {
+            match self.tls_connection.writer().write(&self.outgoing_plaintext) {
+                Ok(written) => {
+                    self.outgoing_plaintext.drain(..written);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {}
+                Err(error) => mqtt_events.push(MqttEvent::Error(MqttClientError::InternalError {
+                    message: format!("TLS plaintext write failed: {error}"),
+                })),
+            }
         }
 
         // 3. Drive MQTT engine tick
@@ -125,6 +160,14 @@ impl TlsMqttEngine {
     /// or just to kick off the MQTT level.
     pub fn connect(&mut self) {
         self.mqtt_engine.connect();
+    }
+
+    pub fn engine(&self) -> &MqttEngine {
+        &self.mqtt_engine
+    }
+
+    pub fn engine_mut(&mut self) -> &mut MqttEngine {
+        &mut self.mqtt_engine
     }
 
     // Delegation methods
@@ -144,8 +187,45 @@ impl TlsMqttEngine {
         self.mqtt_engine.disconnect();
     }
 
+    pub fn try_disconnect(&mut self) -> Result<(), MqttClientError> {
+        self.mqtt_engine.try_disconnect()
+    }
+
+    pub fn try_disconnect_with(
+        &mut self,
+        reason_code: u8,
+        properties: Vec<crate::mqtt_serde::mqttv5::common::properties::Property>,
+    ) -> Result<(), MqttClientError> {
+        self.mqtt_engine
+            .try_disconnect_with(reason_code, properties)
+    }
+
+    /// All queued MQTT plaintext and encrypted TLS records have been drained.
+    pub fn disconnect_complete(&self) -> bool {
+        !self.is_connected()
+            && self.outgoing_plaintext.is_empty()
+            && !self.mqtt_engine.has_pending_output()
+            && !self.tls_connection.wants_write()
+    }
+
     pub fn is_connected(&self) -> bool {
         self.mqtt_engine.is_connected()
+    }
+
+    pub fn mqtt_version(&self) -> u8 {
+        self.mqtt_engine.mqtt_version()
+    }
+
+    pub fn try_send_ping(&mut self) -> Result<(), MqttClientError> {
+        self.mqtt_engine.try_send_ping()
+    }
+
+    pub fn try_auth(
+        &mut self,
+        reason_code: u8,
+        properties: Vec<crate::mqtt_serde::mqttv5::common::properties::Property>,
+    ) -> Result<(), MqttClientError> {
+        self.mqtt_engine.try_auth(reason_code, properties)
     }
 
     pub fn take_events(&mut self) -> Vec<MqttEvent> {

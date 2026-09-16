@@ -130,6 +130,21 @@ impl InflightQueue {
         Ok(())
     }
 
+    pub fn contains(&self, packet_id: u16) -> bool {
+        self.entries.contains_key(&packet_id)
+    }
+
+    /// Update transport identity and restart the retransmission deadline after recovery.
+    pub fn resume_on_stream(&mut self, packet_id: u16, stream: u64) {
+        if let Some(entry) = self.entries.get_mut(&packet_id) {
+            entry.stream = Some(stream);
+            entry.sent_at = Instant::now();
+            if self.mqtt_version != 5 {
+                self.deadline_queue.push_back((packet_id, entry.sent_at));
+            }
+        }
+    }
+
     /// Acknowledge a message (PUBACK, PUBREL, etc.)
     pub fn acknowledge(&mut self, packet_id: u16) -> Option<InflightEntry> {
         if let Some(entry) = self.entries.remove(&packet_id) {
@@ -193,6 +208,16 @@ impl InflightQueue {
         // Sort by retry_count or original sent time if needed, but here we just send
         all.sort_by_key(|e| e.sent_at);
         all.into_iter().map(|e| e.packet.clone()).collect()
+    }
+
+    /// Snapshot outstanding operations before starting a replacement connection.
+    pub fn snapshot_for_reconnect(&self) -> Vec<(u16, MqttPacket)> {
+        let mut entries: Vec<_> = self.entries.values().collect();
+        entries.sort_by_key(|entry| entry.sent_at);
+        entries
+            .into_iter()
+            .map(|entry| (entry.packet_id, entry.packet.clone()))
+            .collect()
     }
 
     /// Get the earliest expiration time for any inflight message

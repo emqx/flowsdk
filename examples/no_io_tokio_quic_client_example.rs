@@ -66,6 +66,7 @@ async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
                         println!("Published: ID={:?}", res.packet_id);
                         return Ok(());
                     }
+                    MqttEvent::DisconnectReceived { .. } => return Ok(()),
                     MqttEvent::Disconnected(_) => return Ok(()),
                     _ => {}
                 }

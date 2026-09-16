@@ -1752,6 +1752,7 @@ impl TokioClientWorker {
     async fn dispatch_events(&mut self, events: Vec<MqttEvent>) {
         for event in events {
             match event {
+                MqttEvent::AuthReceived(res) => self.event_handler.on_auth_received(&res).await,
                 MqttEvent::Connected(res) => {
                     if let Some(tx) = self.pending_connect.take() {
                         let _ = tx.send(Ok(res.clone()));
@@ -1762,6 +1763,11 @@ impl TokioClientWorker {
                 MqttEvent::Disconnected(reason) => {
                     self.engine_last_connected = false;
                     self.event_handler.on_disconnected(reason).await;
+                    self.handle_connection_lost().await;
+                }
+                MqttEvent::DisconnectReceived { reason_code, .. } => {
+                    self.engine_last_connected = false;
+                    self.event_handler.on_disconnected(Some(reason_code)).await;
                     self.handle_connection_lost().await;
                 }
                 MqttEvent::Published(res) => {

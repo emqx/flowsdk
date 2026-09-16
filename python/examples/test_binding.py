@@ -65,7 +65,8 @@ def test_tls_engine():
         client_cert_file=None,
         client_key_file=None,
         insecure_skip_verify=True,
-        alpn_protocols=["mqtt"]
+        alpn_protocols=["mqtt"],
+        enable_key_log=False
     )
     
     engine = flowsdk_ffi.TlsMqttEngineFfi(opts, tls_opts, "localhost")
@@ -99,7 +100,8 @@ def test_quic_engine():
         client_cert_file=None,
         client_key_file=None,
         insecure_skip_verify=True,
-        alpn_protocols=["mqtt"]
+        alpn_protocols=["mqtt"],
+        enable_key_log=False
     )
     
     engine.connect("127.0.0.1:1883", "localhost", tls_opts, 0)
@@ -109,7 +111,7 @@ def test_quic_engine():
     print(f"Outgoing QUIC datagrams: {len(datagrams)}")
     
     # Simulate a tick
-    events = engine.handle_tick(100)
+    events = engine.handle_tick(engine.elapsed_ms())
     print(f"Tick events: {len(events)}")
     
     engine.disconnect()

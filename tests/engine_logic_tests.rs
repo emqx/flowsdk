@@ -33,6 +33,37 @@ fn setup_engine_v3() -> MqttEngine {
 }
 
 #[test]
+fn connect_preserves_optional_credentials() {
+    for version in [3, 4, 5] {
+        for (username, password) in [
+            (None, None),
+            (Some("test-user"), None),
+            (Some("test-user"), Some(b"test-password\x00\xff".as_slice())),
+        ] {
+            let mut options = MqttClientOptions::builder().mqtt_version(version).build();
+            options.username = username.map(str::to_string);
+            options.password = password.map(<[u8]>::to_vec);
+            let mut engine = MqttEngine::new(options);
+            engine.connect();
+
+            let bytes = engine.take_outgoing();
+            let (actual_username, actual_password) =
+                match MqttPacket::from_bytes_with_version(&bytes, version).unwrap() {
+                    ParseOk::Packet(MqttPacket::Connect3(packet), _) => {
+                        (packet.username, packet.password)
+                    }
+                    ParseOk::Packet(MqttPacket::Connect5(packet), _) => {
+                        (packet.username, packet.password)
+                    }
+                    packet => panic!("Expected CONNECT, got {packet:?}"),
+                };
+            assert_eq!(actual_username.as_deref(), username);
+            assert_eq!(actual_password.as_deref(), password);
+        }
+    }
+}
+
+#[test]
 fn test_v5_handshake_success() {
     let mut engine = setup_engine_v5();
 
@@ -664,6 +695,54 @@ fn test_v5_receive_maximum_enforcement() {
 }
 
 #[test]
+fn rejected_pubrec_finishes_publish_without_pubrel() {
+    use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
+    use flowsdk::mqtt_serde::mqttv5::pubrecv5::MqttPubRec;
+
+    for reason_code in [0x80, 0x87] {
+        let mut engine = setup_engine_v5();
+        engine.connect();
+        engine.take_outgoing();
+        engine.handle_incoming(
+            &MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
+                .to_bytes()
+                .unwrap(),
+        );
+        let pid = engine
+            .publish(PublishCommand::simple(
+                "test/topic",
+                b"payload".to_vec(),
+                2,
+                false,
+            ))
+            .unwrap()
+            .unwrap();
+        assert!(!engine.take_outgoing().is_empty());
+
+        let properties = vec![Property::ReasonString("Publish rejected".to_string())];
+        let pubrec = MqttPacket::PubRec5(MqttPubRec::new(pid, reason_code, properties.clone()))
+            .to_bytes()
+            .unwrap();
+        let events = engine.handle_incoming(&pubrec);
+        assert_eq!(events.len(), 1);
+        match &events[0] {
+            MqttEvent::Published(result) => {
+                assert_eq!(result.packet_id, Some(pid));
+                assert_eq!(result.reason_code, Some(reason_code));
+                assert_eq!(result.qos, 2);
+                assert_eq!(result.properties.as_ref(), Some(&properties));
+                assert!(!result.is_success());
+            }
+            event => panic!("Expected publish result, got {event:?}"),
+        }
+        assert!(engine.take_outgoing().is_empty());
+        assert!(engine.handle_incoming(&pubrec).is_empty());
+        engine.handle_tick(Instant::now() + Duration::from_secs(6));
+        assert!(engine.take_outgoing().is_empty());
+    }
+}
+
+#[test]
 fn test_incoming_publish_qos2() {
     let mut engine = setup_engine_v5();
     engine.connect();
@@ -773,7 +852,7 @@ fn test_disconnect_flows() {
     assert!(!engine2.is_connected());
     assert_eq!(events.len(), 1);
     match &events[0] {
-        MqttEvent::Disconnected(reason) => assert_eq!(*reason, Some(0x81)),
+        MqttEvent::DisconnectReceived { reason_code, .. } => assert_eq!(*reason_code, 0x81),
         _ => panic!("Expected Disconnected event"),
     }
 }

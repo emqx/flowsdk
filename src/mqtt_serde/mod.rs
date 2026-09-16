@@ -71,7 +71,7 @@ fn validate_mqtt_utf8_string(s: &str) -> Result<(), ParseError> {
 
 /// Validates MQTT topic filter syntax according to MQTT 5.0 specification
 #[cfg(feature = "strict-protocol-compliance")]
-pub(crate) fn validate_topic_filter(topic_filter: &str) -> Result<(), ParseError> {
+pub fn validate_topic_filter(topic_filter: &str) -> Result<(), ParseError> {
     if topic_filter.is_empty() {
         return Err(ParseError::ParseError(
             "Topic filter cannot be empty".to_string(),
@@ -128,7 +128,7 @@ pub(crate) fn validate_topic_filter(topic_filter: &str) -> Result<(), ParseError
 
 /// Validates shared subscription syntax according to MQTT 5.0 specification
 #[cfg(feature = "strict-protocol-compliance")]
-pub(crate) fn validate_shared_subscription(topic_filter: &str) -> Result<(), ParseError> {
+pub fn validate_shared_subscription(topic_filter: &str) -> Result<(), ParseError> {
     if topic_filter.starts_with("$share/") {
         // Extract share name and topic filter
         let mut parts = topic_filter.splitn(3, '/');

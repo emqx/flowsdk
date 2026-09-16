@@ -112,7 +112,7 @@ func handleEvent(_ event: MqttEventFfi, engine: MqttEngineFfi, fd: Int32,
         print("✅ Message on '\(m.topic)': \(msg)")
     case .published(let r):
         print("✅ Publish ack PID \(r.packetId.map(String.init) ?? "none")")
-    case .disconnected(let reasonCode):
+    case .disconnected(let reasonCode, _):
         print("⚠️ Disconnected. reasonCode=\(String(describing: reasonCode))")
     case .error(let message):
         print("❌ Error: \(message)")
@@ -128,7 +128,8 @@ func handleEvent(_ event: MqttEventFfi, engine: MqttEngineFfi, fd: Int32,
         break
     case .streamStopped(_, _):
         break
-    case .unsubscribed(_):
+    case .authReceived(_), .publishReceived(_, _), .pubRelReceived(_, _),
+         .transportClosed(_, _, _), .zeroRttStatusChanged(_), .unsubscribed(_):
         break
     }
 }
@@ -147,7 +148,7 @@ let opts = MqttOptionsFfi(
     maxReconnectAttempts: 3
 )
 
-let engine = MqttEngineFfi.newWithOpts(opts: opts)
+let engine = try MqttEngineFfi.newWithOpts(opts: opts)
 print("Engine created.")
 
 // Track relative time from engine creation (required by tick API)
@@ -184,12 +185,7 @@ while nowMs(since: engineStartMs) < runDurationMs {
         let n = recv(fd, &recvBuf, recvBufSize, 0)
         if n > 0 {
             let inData = Data(recvBuf[0..<n])
-            let events = engine.handleIncoming(data: inData)
-            for e in events {
-                handleEvent(e, engine: engine, fd: fd,
-                            subscribed: &subscribed, published: &published,
-                            startMs: engineStartMs)
-            }
+            _ = engine.handleIncoming(data: inData)
         } else if n == 0 {
             print("TCP connection closed by broker")
             break
@@ -197,8 +193,8 @@ while nowMs(since: engineStartMs) < runDurationMs {
     }
 
     // Tick the engine (drives MQTT keepalive and timeouts)
-    let events = engine.handleTick(nowMs: nowMs(since: engineStartMs))
-    for e in events {
+    _ = engine.handleTick(nowMs: engine.elapsedMs())
+    for e in engine.takeEvents() {
         handleEvent(e, engine: engine, fd: fd,
                     subscribed: &subscribed, published: &published,
                     startMs: engineStartMs)
@@ -210,7 +206,7 @@ while nowMs(since: engineStartMs) < runDurationMs {
 
 // Graceful disconnect
 print("Run time elapsed, disconnecting...")
-engine.disconnect()
+try engine.disconnect()
 sendAll(fd, data: engine.takeOutgoing())
 close(fd)
 print("Done.")

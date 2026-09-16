@@ -37,7 +37,8 @@ async def main():
         
         # Subscribe and wait for ack
         print("Subscribing to test/python/proper...")
-        await client.subscribe("test/python/proper", 1)
+        subscription = await client.subscribe("test/python/proper", 1)
+        subscription.raise_for_status()
         print("✅ Subscribe completed!")
         
         # Publish and wait for ack

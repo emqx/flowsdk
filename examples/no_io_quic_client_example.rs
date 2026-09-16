@@ -71,6 +71,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     MqttEvent::Published(res) => {
                         println!("Message Published: ID={:?}", res.packet_id)
                     }
+                    MqttEvent::DisconnectReceived { .. } => return Ok(()),
                     MqttEvent::Disconnected(reason) => {
                         println!("MQTT Disconnected: {:?}", reason);
                         return Ok(());

@@ -90,7 +90,13 @@ pub enum QuicZeroRttStatus {
 #[derive(Debug, serde::Serialize)]
 pub enum MqttEvent {
     Connected(ConnectionResult),
+    AuthReceived(super::client::AuthResult),
     Disconnected(Option<u8>),
+    /// A broker MQTT 5 DISCONNECT, including its properties.
+    DisconnectReceived {
+        reason_code: u8,
+        properties: Vec<Property>,
+    },
     Published(PublishResult),
     Subscribed(SubscribeResult),
     Unsubscribed(UnsubscribeResult),
@@ -213,6 +219,10 @@ pub struct MqttEngine {
 
     // Pending operations tracking (state only)
     inflight_queue: InflightQueue,
+    previous_inflight: Vec<(u16, MqttPacket)>,
+    transport_manages_session: bool,
+    session_replay: VecDeque<(u16, MqttPacket)>,
+    configured_subscriptions_pending: bool,
 
     events: Vec<MqttEvent>,
 
@@ -249,7 +259,11 @@ impl MqttEngine {
                 retransmission_timeout,
             ),
             session: None,
-            priority_queue: PriorityQueue::new(1000),
+            previous_inflight: Vec::new(),
+            transport_manages_session: false,
+            session_replay: VecDeque::new(),
+            configured_subscriptions_pending: false,
+            priority_queue: PriorityQueue::new(options.max_outgoing_packet_count),
             is_connected: false,
             last_packet_sent: Instant::now(),
             last_packet_received: Instant::now(),
@@ -283,6 +297,32 @@ impl MqttEngine {
         self.parser.set_parse_level(level);
     }
 
+    /// Change parser depth only when connection and outstanding operations permit it.
+    pub fn try_set_parse_level(&mut self, level: ParseLevel) -> Result<(), MqttClientError> {
+        if level != ParseLevel::Full
+            && (!self.is_connected
+                || !self.inflight_queue.is_empty()
+                || !self.priority_queue.is_empty())
+        {
+            return Err(MqttClientError::InvalidState {
+                expected: "connected with no outstanding operations".into(),
+                actual: "connecting or waiting for acknowledgements".into(),
+            });
+        }
+        self.set_parse_level(level);
+        Ok(())
+    }
+
+    fn require_full_parser(&self) -> Result<(), MqttClientError> {
+        if self.parse_level() != ParseLevel::Full {
+            return Err(MqttClientError::InvalidState {
+                expected: "Full parser for acknowledgement-bearing operations".into(),
+                actual: format!("{:?}", self.parse_level()),
+            });
+        }
+        Ok(())
+    }
+
     /// Return the parser depth used for subsequent incoming packets.
     pub fn parse_level(&self) -> ParseLevel {
         self.parser.parse_level()
@@ -312,7 +352,16 @@ impl MqttEngine {
     pub fn reset_for_new_transport(&mut self) {
         self.is_connected = false;
         self.outgoing_buffer.clear();
+        self.priority_queue.clear();
+        self.session_replay.clear();
+        self.configured_subscriptions_pending = false;
         self.stream_retransmissions.clear();
+        self.inflight_queue
+            .update_receive_maximum(self.options.receive_maximum);
+        if self.options.sessionless {
+            self.inflight_queue.clear();
+            self.session = None;
+        }
         self.parser = MqttParser::new(self.options.parser_buffer_size, self.options.mqtt_version);
         // Cancel any pending reconnect deadline so it cannot fire another
         // ReconnectNeeded while a new transport handshake is in progress. The
@@ -533,9 +582,21 @@ impl MqttEngine {
                     self.ping_sent_at = None;
                     event = Some(MqttEvent::PingResponse(PingResult { success: true }));
                 }
-                VariableHeader::DisconnectV5 { reason_code, .. } => {
+                VariableHeader::AuthV5 {
+                    reason_code,
+                    properties,
+                } => {
+                    event = Some(self.auth_received(reason_code, properties));
+                }
+                VariableHeader::DisconnectV5 {
+                    reason_code,
+                    properties,
+                } => {
                     self.is_connected = false;
-                    event = Some(MqttEvent::Disconnected(Some(reason_code)));
+                    event = Some(MqttEvent::DisconnectReceived {
+                        reason_code,
+                        properties,
+                    });
                 }
                 VariableHeader::Empty
                     if packet.packet_type
@@ -611,6 +672,8 @@ impl MqttEngine {
         {
             let _ = self.send_ping_at(now);
         }
+
+        self.process_queue();
 
         // 3. Retransmissions
         let retrans_events = self.handle_retransmissions(now);
@@ -689,6 +752,10 @@ impl MqttEngine {
         next
     }
 
+    pub fn has_pending_output(&self) -> bool {
+        !self.outgoing_buffer.is_empty()
+    }
+
     /// Take bytes ready to be sent to the network.
     ///
     /// This should be written to the underlying transport immediately.
@@ -716,23 +783,32 @@ impl MqttEngine {
             self.session = Some(ClientSession::new());
         }
 
+        self.previous_inflight = self.inflight_queue.snapshot_for_reconnect();
         let packet = if self.options.mqtt_version == 5 {
             let connect = connectv5::MqttConnect::new(
                 self.options.client_id.clone(),
                 self.options.username.clone(),
                 self.options.password.clone(),
-                None, // Will
+                self.options.will.clone(),
                 self.options.keep_alive,
                 self.options.clean_start,
                 self.options.connect_properties.clone(),
             );
             MqttPacket::Connect5(connect)
         } else {
-            let connect = connectv3::MqttConnect::new(
+            let mut connect = connectv3::MqttConnect::new(
                 self.options.client_id.clone(),
                 self.options.keep_alive,
                 self.options.clean_start,
             );
+            connect.username = self.options.username.clone();
+            connect.password = self.options.password.clone();
+            connect.will = self.options.will.as_ref().map(|will| connectv3::Will {
+                retain: will.will_retain,
+                qos: will.will_qos,
+                topic: will.will_topic.clone(),
+                message: will.will_message.clone(),
+            });
             MqttPacket::Connect3(connect)
         };
 
@@ -747,6 +823,15 @@ impl MqttEngine {
     /// The command is pushed to the `PriorityQueue` and only moved to the `outgoing_buffer`
     /// via `process_queue()` if the buffer limits allow.
     pub fn publish(&mut self, mut command: PublishCommand) -> Result<Option<u16>, MqttClientError> {
+        if command.qos > 0 {
+            self.require_full_parser()?;
+        }
+        if self.priority_queue.len() >= self.options.max_outgoing_packet_count {
+            return Err(MqttClientError::BufferFull {
+                buffer_type: "publish queue".into(),
+                capacity: self.options.max_outgoing_packet_count,
+            });
+        }
         let pid = if command.qos > 0 {
             if let Some(pid) = command.packet_id {
                 Some(pid)
@@ -797,6 +882,9 @@ impl MqttEngine {
         mut command: PublishCommand,
         stream: Option<u64>,
     ) -> Result<(Option<u16>, Vec<u8>), MqttClientError> {
+        if command.qos > 0 {
+            self.require_full_parser()?;
+        }
         let pid = if command.qos > 0 {
             if let Some(pid) = command.packet_id {
                 Some(pid)
@@ -910,6 +998,7 @@ impl MqttEngine {
     /// Be aware that this might fail immediately with `MqttClientError::BufferFull`
     /// if the outgoing buffer is at capacity.
     pub fn subscribe(&mut self, mut command: SubscribeCommand) -> Result<u16, MqttClientError> {
+        self.require_full_parser()?;
         let pid = if let Some(pid) = command.packet_id {
             pid
         } else {
@@ -942,6 +1031,7 @@ impl MqttEngine {
     }
 
     pub fn unsubscribe(&mut self, mut command: UnsubscribeCommand) -> Result<u16, MqttClientError> {
+        self.require_full_parser()?;
         let pid = if let Some(pid) = command.packet_id {
             pid
         } else {
@@ -977,6 +1067,7 @@ impl MqttEngine {
         mut command: SubscribeCommand,
         stream: Option<u64>,
     ) -> Result<(u16, Vec<u8>), MqttClientError> {
+        self.require_full_parser()?;
         let pid = if let Some(pid) = command.packet_id {
             pid
         } else {
@@ -1017,6 +1108,7 @@ impl MqttEngine {
         mut command: UnsubscribeCommand,
         stream: Option<u64>,
     ) -> Result<(u16, Vec<u8>), MqttClientError> {
+        self.require_full_parser()?;
         let pid = if let Some(pid) = command.packet_id {
             pid
         } else {
@@ -1067,10 +1159,44 @@ impl MqttEngine {
     /// the packet has actually been queued. A no-op (returns `Ok`) if already
     /// disconnected.
     pub fn try_disconnect(&mut self) -> Result<(), MqttClientError> {
+        self.try_disconnect_with(0, Vec::new())
+    }
+
+    pub fn try_disconnect_with(
+        &mut self,
+        reason_code: u8,
+        properties: Vec<Property>,
+    ) -> Result<(), MqttClientError> {
+        // MQTT 5 section 3.14.2.1, client-sent reason codes.
+        if !matches!(reason_code, 0 | 4 | 0x80..=0x83 | 0x90 | 0x93..=0x99) {
+            return Err(MqttClientError::InvalidConfiguration {
+                field: "DISCONNECT reason code".into(),
+                reason: "Not a client DISCONNECT reason code".into(),
+            });
+        }
+        if self.options.mqtt_version != 5 && (reason_code != 0 || !properties.is_empty()) {
+            return Err(MqttClientError::InvalidConfiguration {
+                field: "DISCONNECT".into(),
+                reason: "Reason codes and properties require MQTT 5".into(),
+            });
+        }
+        if self.options.session_expiry_interval.unwrap_or(0) == 0
+            && properties
+                .iter()
+                .any(|p| matches!(p, Property::SessionExpiryInterval(value) if *value != 0))
+        {
+            return Err(MqttClientError::ProtocolViolation {
+                message: "DISCONNECT cannot extend a zero session expiry interval".into(),
+            });
+        }
         if !self.is_connected {
             return Ok(());
         }
-        let packet = self.disconnect_packet();
+        let packet = if self.options.mqtt_version == 5 {
+            MqttPacket::Disconnect5(disconnectv5::MqttDisconnect::new(reason_code, properties))
+        } else {
+            self.disconnect_packet()
+        };
         self.enqueue_packet(packet)?;
         self.is_connected = false;
         Ok(())
@@ -1081,6 +1207,88 @@ impl MqttEngine {
             let auth = authv5::MqttAuth::new(reason_code, properties);
             let _ = self.enqueue_packet(MqttPacket::Auth(auth));
         }
+    }
+
+    pub fn try_auth(
+        &mut self,
+        reason_code: u8,
+        mut properties: Vec<Property>,
+    ) -> Result<(), MqttClientError> {
+        if self.options.mqtt_version != 5 || !matches!(reason_code, 0x18 | 0x19) {
+            return Err(MqttClientError::InvalidConfiguration {
+                field: "AUTH".into(),
+                reason: "Client AUTH requires MQTT 5 and reason code 0x18 or 0x19".into(),
+            });
+        }
+        let method = self
+            .options
+            .connect_properties
+            .iter()
+            .find_map(|p| {
+                if let Property::AuthenticationMethod(method) = p {
+                    Some(method)
+                } else {
+                    None
+                }
+            })
+            .ok_or_else(|| MqttClientError::InvalidConfiguration {
+                field: "AUTH".into(),
+                reason: "CONNECT must specify an authentication method".into(),
+            })?;
+        if properties
+            .iter()
+            .any(|p| matches!(p, Property::AuthenticationMethod(value) if value != method))
+        {
+            return Err(MqttClientError::ProtocolViolation {
+                message: "Authentication method cannot change during a connection".into(),
+            });
+        }
+        if reason_code == 0x19 && !self.is_connected {
+            return Err(MqttClientError::ProtocolViolation {
+                message: "Reauthentication requires an established MQTT connection".into(),
+            });
+        }
+        if !properties
+            .iter()
+            .any(|p| matches!(p, Property::AuthenticationMethod(_)))
+        {
+            properties.insert(0, Property::AuthenticationMethod(method.clone()));
+        }
+        self.enqueue_packet(MqttPacket::Auth(authv5::MqttAuth::new(
+            reason_code,
+            properties,
+        )))
+    }
+
+    fn auth_received(&self, reason_code: u8, properties: Vec<Property>) -> MqttEvent {
+        let expected = self
+            .options
+            .connect_properties
+            .iter()
+            .find_map(|p| match p {
+                Property::AuthenticationMethod(value) => Some(value),
+                _ => None,
+            });
+        let methods: Vec<_> = properties
+            .iter()
+            .filter_map(|p| match p {
+                Property::AuthenticationMethod(value) => Some(value),
+                _ => None,
+            })
+            .collect();
+        let minimal_success = reason_code == 0 && properties.is_empty();
+        if expected.is_none()
+            || !matches!(reason_code, 0 | 0x18)
+            || (!minimal_success && (methods.len() != 1 || Some(methods[0]) != expected))
+        {
+            return MqttEvent::Error(MqttClientError::ProtocolViolation {
+                message: "Server AUTH must use the CONNECT authentication method and reason code 0 or 0x18".into(),
+            });
+        }
+        MqttEvent::AuthReceived(super::client::AuthResult {
+            reason_code,
+            properties,
+        })
     }
 
     // --- Internal Helpers ---
@@ -1124,22 +1332,15 @@ impl MqttEngine {
                 if let Some(props) = &ack.properties {
                     for prop in props {
                         if let Property::ReceiveMaximum(max) = prop {
-                            self.inflight_queue.update_receive_maximum(*max);
+                            self.inflight_queue
+                                .update_receive_maximum((*max).min(self.options.receive_maximum));
                             break;
                         }
                     }
                 }
 
-                // Handle session resumption: resend pending messages
-                // Only when server confirms session resumption (session_present=true)
-                if ack.session_present {
-                    let pending = self.inflight_queue.get_all_for_reconnect();
-                    for mut packet in pending {
-                        packet.set_dup(true);
-                        if let Ok(bytes) = packet.to_bytes() {
-                            self.outgoing_buffer.push_back(bytes);
-                        }
-                    }
+                if self.is_connected {
+                    self.restore_session(ack.session_present, &mut events);
                 }
             }
             MqttPacket::ConnAck3(ack) => {
@@ -1153,16 +1354,8 @@ impl MqttEngine {
                     properties: None,
                 }));
 
-                // Handle session resumption: resend pending messages
-                // Only when server confirms session resumption (session_present=true)
-                if ack.session_present {
-                    let pending = self.inflight_queue.get_all_for_reconnect();
-                    for mut packet in pending {
-                        packet.set_dup(true);
-                        if let Ok(bytes) = packet.to_bytes() {
-                            self.outgoing_buffer.push_back(bytes);
-                        }
-                    }
+                if self.is_connected {
+                    self.restore_session(ack.session_present, &mut events);
                 }
             }
             MqttPacket::PubAck5(ack) => {
@@ -1275,17 +1468,27 @@ impl MqttEngine {
             }
             MqttPacket::PubRec5(rec) => {
                 if let Some(mut entry) = self.inflight_queue.acknowledge(rec.packet_id) {
-                    let rel = MqttPacket::PubRel5(MqttPubRel::new(rec.packet_id, 0, Vec::new()));
-                    // Update entry to store PUBREL for retransmission
-                    entry.packet = rel.clone();
-                    entry.sent_at = Instant::now();
-                    let _ = self.inflight_queue.push_with_stream(
-                        entry.packet_id,
-                        entry.packet,
-                        2,
-                        stream,
-                    );
-                    responses.push(rel);
+                    if rec.reason_code >= 0x80 {
+                        events.push(MqttEvent::Published(PublishResult {
+                            packet_id: Some(rec.packet_id),
+                            reason_code: Some(rec.reason_code),
+                            properties: Some(rec.properties),
+                            qos: entry.qos,
+                        }));
+                    } else {
+                        let rel =
+                            MqttPacket::PubRel5(MqttPubRel::new(rec.packet_id, 0, Vec::new()));
+                        // Update entry to store PUBREL for retransmission
+                        entry.packet = rel.clone();
+                        entry.sent_at = Instant::now();
+                        let _ = self.inflight_queue.push_with_stream(
+                            entry.packet_id,
+                            entry.packet,
+                            2,
+                            stream,
+                        );
+                        responses.push(rel);
+                    }
                 }
             }
             MqttPacket::PubRec3(rec) => {
@@ -1347,13 +1550,50 @@ impl MqttEngine {
                     }));
                 }
             }
+            MqttPacket::Auth(auth) => {
+                events.push(self.auth_received(auth.reason_code, auth.properties));
+            }
             MqttPacket::Disconnect5(d) => {
                 self.is_connected = false;
-                events.push(MqttEvent::Disconnected(Some(d.reason_code)));
+                events.push(MqttEvent::DisconnectReceived {
+                    reason_code: d.reason_code,
+                    properties: d.properties,
+                });
             }
             _ => {}
         }
         (events, responses)
+    }
+
+    fn restore_session(&mut self, session_present: bool, events: &mut Vec<MqttEvent>) {
+        let previous = std::mem::take(&mut self.previous_inflight);
+        if session_present && !self.options.sessionless {
+            for (packet_id, mut packet) in previous {
+                packet.set_dup(true);
+                if self.transport_manages_session {
+                    self.session_replay.push_back((packet_id, packet));
+                } else if let Ok(bytes) = packet.to_bytes() {
+                    self.outgoing_buffer.push_back(bytes);
+                }
+            }
+        } else {
+            for (packet_id, _) in previous {
+                self.inflight_queue.acknowledge(packet_id);
+            }
+            if self.inflight_queue.is_empty() && self.priority_queue.is_empty() {
+                self.session = Some(ClientSession::new());
+            }
+            if self.transport_manages_session {
+                self.configured_subscriptions_pending =
+                    !self.options.subscription_topics.is_empty();
+            } else if !self.options.subscription_topics.is_empty() {
+                let command =
+                    SubscribeCommand::new(None, self.options.subscription_topics.clone(), vec![]);
+                if let Err(error) = self.subscribe(command) {
+                    events.push(MqttEvent::Error(error));
+                }
+            }
+        }
     }
 
     fn pingreq_packet(&self) -> MqttPacket {
@@ -1409,9 +1649,12 @@ impl MqttEngine {
 
         while self.outgoing_buffer.len() < self.options.max_outgoing_packet_count {
             if let Some((_priority, packet)) = self.priority_queue.peek() {
-                let is_publish =
-                    matches!(packet, MqttPacket::Publish5(_) | MqttPacket::Publish3(_));
-                if is_publish && !self.inflight_queue.can_push_publish() {
+                let needs_ack = match packet {
+                    MqttPacket::Publish5(packet) => packet.qos > 0,
+                    MqttPacket::Publish3(packet) => packet.qos > 0,
+                    _ => false,
+                };
+                if needs_ack && !self.inflight_queue.can_push_publish() {
                     break;
                 }
 
@@ -1467,6 +1710,8 @@ impl MqttEngine {
 /// inbound bytes and a buffer for outbound bytes awaiting transmission.
 #[cfg(feature = "quic-proto")]
 struct QuicStream {
+    priority: u8,
+    publish_priority: Option<u8>,
     parser: MqttParser,
     outgoing: Vec<u8>,
     /// Number of logical packets currently buffered in `outgoing` (reset to 0 once
@@ -1487,6 +1732,8 @@ struct QuicStream {
 impl QuicStream {
     fn new(parser_buffer_size: usize, mqtt_version: u8, max_packets: usize) -> Self {
         Self {
+            priority: 128,
+            publish_priority: None,
             parser: MqttParser::new(parser_buffer_size, mqtt_version),
             outgoing: Vec::new(),
             pending_packets: 0,
@@ -1505,6 +1752,8 @@ impl QuicStream {
         pending_packets: usize,
     ) -> Self {
         Self {
+            priority: 128,
+            publish_priority: None,
             parser: MqttParser::new(parser_buffer_size, mqtt_version),
             outgoing,
             pending_packets,
@@ -1521,6 +1770,7 @@ impl QuicStream {
 enum EarlyStreamRole {
     Control,
     DefaultPub,
+    PriorityPub(u8),
     DefaultSub,
     ExplicitData,
 }
@@ -1528,6 +1778,7 @@ enum EarlyStreamRole {
 #[cfg(feature = "quic-proto")]
 #[derive(Debug, Clone)]
 struct EarlyStreamJournal {
+    priority: u8,
     original_stream_id: StreamId,
     role: EarlyStreamRole,
     bytes: Vec<u8>,
@@ -1726,8 +1977,9 @@ pub struct QuicMqttEngine {
 #[cfg(feature = "quic-proto")]
 impl QuicMqttEngine {
     pub fn new(options: MqttClientOptions) -> Result<Self, MqttClientError> {
-        // Initialize MqttEngine
-        let mqtt_engine = MqttEngine::new(options);
+        // Session operations must be routed onto QUIC data streams.
+        let mut mqtt_engine = MqttEngine::new(options);
+        mqtt_engine.transport_manages_session = true;
 
         // Initialize QUIC Endpoint (Client)
         let endpoint_config = EndpointConfig::default();
@@ -1925,6 +2177,11 @@ impl QuicMqttEngine {
         role: EarlyStreamRole,
     ) {
         early_stream_journal.push(EarlyStreamJournal {
+            priority: if let EarlyStreamRole::PriorityPub(priority) = role {
+                priority
+            } else {
+                128
+            },
             original_stream_id: stream_id,
             role,
             bytes: Vec::new(),
@@ -2065,6 +2322,7 @@ impl QuicMqttEngine {
                     control_outgoing.extend_from_slice(&journal.bytes);
                 }
                 EarlyStreamRole::DefaultPub
+                | EarlyStreamRole::PriorityPub(_)
                 | EarlyStreamRole::DefaultSub
                 | EarlyStreamRole::ExplicitData => {
                     let mut stream = QuicStream::with_outgoing(
@@ -2075,11 +2333,17 @@ impl QuicMqttEngine {
                         journal.packet_count,
                     );
                     stream.parser.set_parse_level(parse_level);
+                    stream.priority = journal.priority;
+                    if let EarlyStreamRole::PriorityPub(priority) = journal.role {
+                        stream.publish_priority = Some(priority);
+                    }
                     data_streams.insert(stream_id, stream);
                     match journal.role {
                         EarlyStreamRole::DefaultPub => *default_pub_stream = Some(stream_id),
                         EarlyStreamRole::DefaultSub => *default_sub_stream = Some(stream_id),
-                        EarlyStreamRole::ExplicitData | EarlyStreamRole::Control => {}
+                        EarlyStreamRole::PriorityPub(_)
+                        | EarlyStreamRole::ExplicitData
+                        | EarlyStreamRole::Control => {}
                     }
                 }
             }
@@ -2792,6 +3056,7 @@ impl QuicMqttEngine {
                 );
             }
             if let Some(stream_id) = self.control_stream {
+                let _ = conn.send_stream(stream_id).set_priority(i32::MAX);
                 // Flush buffered bytes (partial-write retention) until the send side
                 // is finished; once finished we no longer write.
                 if !self.control_finished && !self.control_outgoing.is_empty() {
@@ -2814,9 +3079,13 @@ impl QuicMqttEngine {
 
             // 4b. Flush each data stream's outgoing buffer, retaining any bytes
             //     that could not be written yet (stream-level back-pressure).
-            for (stream_id, ds) in self.data_streams.iter_mut() {
+            for stream_id in Self::stream_send_order(&self.data_streams) {
+                let ds = self.data_streams.get_mut(&stream_id).unwrap();
+                let _ = conn
+                    .send_stream(stream_id)
+                    .set_priority(i32::from(ds.priority));
                 if !ds.outgoing.is_empty() {
-                    let mut stream = conn.send_stream(*stream_id);
+                    let mut stream = conn.send_stream(stream_id);
                     if let Ok(written) = stream.write(&ds.outgoing) {
                         ds.outgoing.drain(..written);
                     }
@@ -2829,7 +3098,7 @@ impl QuicMqttEngine {
                 // Deferred FIN: finish the send side only once all buffered bytes
                 // have actually been written, so queued publishes are not lost.
                 if ds.finishing && !ds.finished && ds.outgoing.is_empty() {
-                    let _ = conn.send_stream(*stream_id).finish();
+                    let _ = conn.send_stream(stream_id).finish();
                     ds.finishing = false;
                     ds.finished = true;
                 }
@@ -2859,6 +3128,14 @@ impl QuicMqttEngine {
                             .push_back((transmit.destination, close_buf.clone()));
                         close_buf.clear();
                     }
+                }
+            }
+        }
+
+        if self.is_connected() {
+            if let Err(error) = self.route_session_work() {
+                if !matches!(error, MqttClientError::BufferFull { .. }) {
+                    mqtt_events.push(MqttEvent::Error(error));
                 }
             }
         }
@@ -2941,6 +3218,10 @@ impl QuicMqttEngine {
 
         let mut stream = QuicStream::new(parser_buffer_size, mqtt_version, max_packets);
         stream.parser.set_parse_level(parse_level);
+        if let EarlyStreamRole::PriorityPub(priority) = role {
+            stream.priority = priority;
+            stream.publish_priority = Some(priority);
+        }
         self.data_streams.insert(stream_id, stream);
         if self.zero_rtt_status == QuicZeroRttStatus::Attempted {
             Self::journal_stream_open(&mut self.early_stream_journal, stream_id, role);
@@ -3062,6 +3343,100 @@ impl QuicMqttEngine {
         }
     }
 
+    /// Set the scheduling priority of a data stream. Higher values are sent first.
+    pub fn set_stream_priority(
+        &mut self,
+        stream: u64,
+        priority: u8,
+    ) -> Result<(), MqttClientError> {
+        let stream_id = self.resolve_stream(stream)?;
+        let ds = self.data_streams.get_mut(&stream_id).unwrap();
+        if ds.finishing || ds.finished {
+            return Err(stream_finished_error());
+        }
+        ds.priority = priority;
+        if ds.publish_priority.is_some() {
+            ds.publish_priority = Some(priority);
+        }
+        if let Some(journal) = self
+            .early_stream_journal
+            .iter_mut()
+            .find(|entry| entry.original_stream_id == stream_id)
+        {
+            journal.priority = priority;
+            if matches!(journal.role, EarlyStreamRole::PriorityPub(_)) {
+                journal.role = EarlyStreamRole::PriorityPub(priority);
+            }
+        }
+        Ok(())
+    }
+
+    fn ensure_priority_pub_stream(&mut self, priority: u8) -> Result<StreamId, MqttClientError> {
+        if priority == 128 {
+            return self.ensure_default_pub_stream();
+        }
+        if let Some((&id, _)) = self
+            .data_streams
+            .iter()
+            .find(|(_, ds)| ds.publish_priority == Some(priority) && !ds.finishing && !ds.finished)
+        {
+            return Ok(id);
+        }
+        self.open_bidi_stream_with_role(EarlyStreamRole::PriorityPub(priority))
+    }
+
+    fn stream_send_order(streams: &HashMap<StreamId, QuicStream>) -> Vec<StreamId> {
+        let mut order: Vec<_> = streams.keys().copied().collect();
+        order.sort_by_key(|id| (std::cmp::Reverse(streams[id].priority), u64::from(*id)));
+        order
+    }
+
+    fn route_session_work(&mut self) -> Result<(), MqttClientError> {
+        if self.mqtt_engine.configured_subscriptions_pending {
+            let command = SubscribeCommand::new(
+                None,
+                self.mqtt_engine.options().subscription_topics.clone(),
+                vec![],
+            );
+            self.subscribe(command)?;
+            self.mqtt_engine.configured_subscriptions_pending = false;
+        }
+        while let Some((packet_id, packet)) = self.mqtt_engine.session_replay.front() {
+            let packet_id = *packet_id;
+            if !self.mqtt_engine.inflight_queue.contains(packet_id) {
+                self.mqtt_engine.session_replay.pop_front();
+                continue;
+            }
+            let is_subscription = matches!(
+                packet,
+                MqttPacket::Subscribe3(_)
+                    | MqttPacket::Subscribe5(_)
+                    | MqttPacket::Unsubscribe3(_)
+                    | MqttPacket::Unsubscribe5(_)
+            );
+            let stream = if is_subscription {
+                self.ensure_default_sub_stream()?
+            } else {
+                self.ensure_default_pub_stream()?
+            };
+            self.ensure_stream_capacity(stream)?;
+            let bytes = self
+                .mqtt_engine
+                .session_replay
+                .front()
+                .unwrap()
+                .1
+                .to_bytes()
+                .map_err(MqttClientError::from)?;
+            self.enqueue_on_stream(stream, &bytes)?;
+            self.mqtt_engine
+                .inflight_queue
+                .resume_on_stream(packet_id, stream.into());
+            self.mqtt_engine.session_replay.pop_front();
+        }
+        Ok(())
+    }
+
     /// Lazily open (once) the default data stream used by [`publish`](Self::publish).
     fn ensure_default_pub_stream(&mut self) -> Result<StreamId, MqttClientError> {
         if let Some(id) = self.default_pub_stream {
@@ -3089,7 +3464,7 @@ impl QuicMqttEngine {
     /// acknowledgement handshake completes on this same stream.
     pub fn publish(&mut self, command: PublishCommand) -> Result<Option<u16>, MqttClientError> {
         self.ensure_command_allowed_before_mqtt_connected()?;
-        let stream_id = self.ensure_default_pub_stream()?;
+        let stream_id = self.ensure_priority_pub_stream(command.priority)?;
         self.ensure_stream_capacity(stream_id)?;
         let (pid, bytes) = self
             .mqtt_engine
@@ -3215,15 +3590,31 @@ impl QuicMqttEngine {
         error_code: u64,
         reason: &[u8],
     ) -> Result<(), MqttClientError> {
+        self.disconnect_and_close_with(0, Vec::new(), error_code, reason)
+    }
+
+    pub fn disconnect_and_close_with(
+        &mut self,
+        reason_code: u8,
+        properties: Vec<Property>,
+        error_code: u64,
+        reason: &[u8],
+    ) -> Result<(), MqttClientError> {
         let code = quic_error_code(error_code)?;
         // Validate a connection exists before queuing anything.
         let _ = self.require_connection()?;
         // Queue the DISCONNECT first; if the outgoing buffer is full, surface the
         // error and do NOT arm the close, so we never close the QUIC connection
         // having silently dropped the MQTT DISCONNECT. (No-op if not connected.)
-        self.mqtt_engine.try_disconnect()?;
+        self.mqtt_engine
+            .try_disconnect_with(reason_code, properties)?;
         self.pending_close = Some((code, bytes::Bytes::copy_from_slice(reason)));
         Ok(())
+    }
+
+    /// Whether the deferred DISCONNECT and QUIC close have been driven.
+    pub fn disconnect_complete(&self) -> bool {
+        self.pending_close.is_none() && self.connection.as_ref().is_none_or(|conn| conn.is_closed())
     }
 
     /// Silently/abruptly drop the QUIC connection without sending CONNECTION_CLOSE.
@@ -3425,6 +3816,37 @@ impl QuicMqttEngine {
         self.send_raw_on(stream, &bytes)
     }
 
+    /// Queue a manual receive acknowledgement with normal stream backpressure.
+    pub fn acknowledge_on(
+        &mut self,
+        stream: u64,
+        packet: MqttPacket,
+    ) -> Result<(), MqttClientError> {
+        if !matches!(
+            packet,
+            MqttPacket::PubAck3(_)
+                | MqttPacket::PubAck5(_)
+                | MqttPacket::PubRec3(_)
+                | MqttPacket::PubRec5(_)
+                | MqttPacket::PubComp3(_)
+                | MqttPacket::PubComp5(_)
+        ) {
+            return Err(MqttClientError::ProtocolViolation {
+                message: "Expected a receive acknowledgement".into(),
+            });
+        }
+        if Some(stream) == self.control_stream.map(u64::from) {
+            if self.control_finishing || self.control_finished {
+                return Err(stream_finished_error());
+            }
+            return self.mqtt_engine.enqueue_packet(packet);
+        }
+        let stream_id = self.resolve_stream(stream)?;
+        self.ensure_stream_capacity(stream_id)?;
+        let bytes = packet.to_bytes().map_err(MqttClientError::from)?;
+        self.enqueue_on_stream(stream_id, &bytes)
+    }
+
     /// Send a success PUBACK on a specific QUIC stream.
     ///
     /// This is a typed convenience wrapper around [`send_packet_on`](Self::send_packet_on)
@@ -3530,6 +3952,113 @@ mod tests {
     use super::*;
     use crate::mqtt_client::opts::MqttClientOptions;
     use crate::mqtt_serde::mqttv5::pingreqv5;
+
+    #[test]
+    fn connect_encodes_configured_will_for_each_version() {
+        use crate::mqtt_serde::mqttv5::willv5::Will;
+        use crate::mqtt_serde::parser::ParseOk;
+        for version in [3, 4, 5] {
+            let mut will = Will::new("client/status".into(), vec![0, 255], 2, true);
+            will.properties.will_delay_interval = Some(30);
+            let options = MqttClientOptions::builder()
+                .mqtt_version(version)
+                .will(will.clone())
+                .build();
+            let mut engine = MqttEngine::new(options);
+            engine.connect();
+            let bytes = engine.take_outgoing();
+            match MqttPacket::from_bytes_with_version(&bytes, version).unwrap() {
+                ParseOk::Packet(MqttPacket::Connect5(packet), _) => {
+                    assert_eq!(packet.will, Some(will))
+                }
+                ParseOk::Packet(MqttPacket::Connect3(packet), _) => {
+                    let actual = packet.will.unwrap();
+                    assert_eq!(actual.topic, will.will_topic);
+                    assert_eq!(actual.message, will.will_message);
+                    assert_eq!(actual.qos, will.will_qos);
+                    assert_eq!(actual.retain, will.will_retain);
+                }
+                packet => panic!("Expected CONNECT, got {packet:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn connack_preserves_new_early_operations_without_replaying_them() {
+        for resumed in [false, true] {
+            let mut engine = MqttEngine::new(MqttClientOptions::builder().build());
+            engine.connect();
+            engine.take_outgoing();
+            let command = PublishCommand::simple("early", vec![1], 1, false);
+            let (packet_id, _) = engine.publish_encoded(command, Some(4)).unwrap();
+            engine.handle_incoming(&[0x20, 3, u8::from(resumed), 0, 0]);
+            assert!(engine.take_outgoing().is_empty());
+            let pid = packet_id.unwrap();
+            let events = engine.handle_incoming(&[0x40, 2, (pid >> 8) as u8, pid as u8]);
+            assert!(
+                matches!(&events[..], [MqttEvent::Published(result)] if result.packet_id == packet_id)
+            );
+        }
+    }
+
+    #[test]
+    fn new_or_sessionless_connections_discard_old_inflight_state() {
+        for sessionless in [false, true] {
+            let mut engine = MqttEngine::new(
+                MqttClientOptions::builder()
+                    .sessionless(sessionless)
+                    .build(),
+            );
+            engine.connect();
+            engine.take_outgoing();
+            engine.handle_incoming(&[0x20, 3, 0, 0, 0]);
+            let command = PublishCommand::builder()
+                .topic("test")
+                .payload(vec![1])
+                .qos(1)
+                .build()
+                .unwrap();
+            let pid = engine.publish(command).unwrap().unwrap();
+            engine.take_outgoing();
+            engine.reset_for_new_transport();
+            if sessionless {
+                assert!(engine.inflight_queue.acknowledge(pid).is_none());
+            }
+            engine.connect();
+            engine.take_outgoing();
+            engine.handle_incoming(&[0x20, 3, 0, 0, 0]);
+            assert!(engine.inflight_queue.acknowledge(pid).is_none());
+            assert!(engine.take_outgoing().is_empty());
+        }
+    }
+
+    #[test]
+    fn full_publish_queue_rejects_without_evicting_accepted_messages() {
+        let mut engine = MqttEngine::new(
+            MqttClientOptions::builder()
+                .max_outgoing_packet_count(1)
+                .build(),
+        );
+        engine.connect();
+        engine.handle_incoming(&[0x20, 3, 0, 0, 0]);
+        let command = |payload: u8| {
+            PublishCommand::builder()
+                .topic("test")
+                .payload(vec![payload])
+                .build()
+                .unwrap()
+        };
+        engine.publish(command(1)).unwrap(); // CONNECT occupies the outgoing slot.
+        assert!(matches!(
+            engine.publish(command(2)),
+            Err(MqttClientError::BufferFull { .. })
+        ));
+        engine.take_outgoing();
+        engine.handle_tick(Instant::now());
+        let packet = engine.take_outgoing();
+        assert_eq!(packet.last(), Some(&1));
+        assert!(engine.publish(command(3)).is_ok());
+    }
 
     #[test]
     fn test_outgoing_buffer_limit() {
@@ -3967,6 +4496,148 @@ mod tests {
 
         engine.data_streams.get_mut(&data).unwrap().finished = true;
         assert!(engine.pubrec_on(u64::from(data), 2).is_err());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn quic_configured_subscriptions_use_a_data_stream() {
+        use quinn_proto::{Dir, Side, StreamId};
+        let mut options = MqttClientOptions::builder().build();
+        options.subscription_topics = SubscribeCommand::single("configured", 1).subscriptions;
+        let mut engine = QuicMqttEngine::new(options).unwrap();
+        let stream = StreamId::new(Side::Client, Dir::Bi, 1);
+        engine
+            .data_streams
+            .insert(stream, QuicStream::new(1024, 5, 10));
+        engine.default_sub_stream = Some(stream);
+        engine.mqtt_engine.connect();
+        engine.mqtt_engine.take_outgoing();
+        engine.mqtt_engine.handle_incoming(&[0x20, 3, 0, 0, 0]);
+        assert!(engine.mqtt_engine.take_outgoing().is_empty());
+        engine.route_session_work().unwrap();
+        let packets = parse_packets(&engine.data_streams[&stream].outgoing, 5);
+        assert!(
+            matches!(&packets[..], [MqttPacket::Subscribe5(packet)] if packet.subscriptions[0].topic_filter == "configured")
+        );
+        assert!(engine.control_outgoing.is_empty());
+        assert!(!engine.mqtt_engine.configured_subscriptions_pending);
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn quic_session_replay_uses_replacement_data_stream_with_backpressure() {
+        use quinn_proto::{Dir, Side, StreamId};
+        let mut engine = mqtt_connected_quic_engine();
+        let old = StreamId::new(Side::Client, Dir::Bi, 1);
+        engine.data_streams.insert(old, QuicStream::new(1024, 5, 1));
+        let pid = engine
+            .publish_on(
+                old.into(),
+                PublishCommand::simple("resume", vec![1], 1, false),
+            )
+            .unwrap()
+            .unwrap();
+        engine.reset_connection_state();
+        engine.mqtt_engine.connect();
+        engine.mqtt_engine.take_outgoing();
+        engine.mqtt_engine.handle_incoming(&[0x20, 3, 1, 0, 0]);
+        assert!(engine.mqtt_engine.take_outgoing().is_empty());
+        let replacement = StreamId::new(Side::Client, Dir::Bi, 2);
+        let mut stream = QuicStream::new(1024, 5, 1);
+        stream.pending_packets = 1;
+        engine.data_streams.insert(replacement, stream);
+        engine.default_pub_stream = Some(replacement);
+        assert!(matches!(
+            engine.route_session_work(),
+            Err(MqttClientError::BufferFull { .. })
+        ));
+        assert_eq!(engine.mqtt_engine.session_replay.len(), 1);
+        engine
+            .data_streams
+            .get_mut(&replacement)
+            .unwrap()
+            .pending_packets = 0;
+        engine.route_session_work().unwrap();
+        let packets = parse_packets(&engine.data_streams[&replacement].outgoing, 5);
+        assert!(
+            matches!(&packets[..], [MqttPacket::Publish5(packet)] if packet.packet_id == Some(pid) && packet.dup)
+        );
+        let entry = engine.mqtt_engine.inflight_queue.acknowledge(pid).unwrap();
+        assert_eq!(entry.stream, Some(replacement.into()));
+        assert!(engine.control_outgoing.is_empty());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn quic_publish_priorities_route_to_separate_ordered_streams() {
+        use quinn_proto::{Dir, Side, StreamId};
+        let mut engine = mqtt_connected_quic_engine();
+        let low = StreamId::new(Side::Client, Dir::Bi, 1);
+        let high = StreamId::new(Side::Client, Dir::Bi, 2);
+        for (id, priority) in [(low, 8), (high, 240)] {
+            let mut stream = QuicStream::new(1024, 5, 4);
+            stream.priority = priority;
+            stream.publish_priority = Some(priority);
+            engine.data_streams.insert(id, stream);
+        }
+        for priority in [8, 240, 8] {
+            let mut command = PublishCommand::simple("priority", vec![priority], 0, false);
+            command.priority = priority;
+            engine.publish(command).unwrap();
+        }
+        assert_eq!(
+            QuicMqttEngine::stream_send_order(&engine.data_streams),
+            vec![high, low]
+        );
+        assert_eq!(
+            parse_packets(&engine.data_streams[&low].outgoing, 5).len(),
+            2
+        );
+        assert_eq!(
+            parse_packets(&engine.data_streams[&high].outgoing, 5).len(),
+            1
+        );
+        QuicMqttEngine::journal_stream_open(
+            &mut engine.early_stream_journal,
+            low,
+            EarlyStreamRole::PriorityPub(8),
+        );
+        engine.set_stream_priority(low.into(), 255).unwrap();
+        assert_eq!(
+            QuicMqttEngine::stream_send_order(&engine.data_streams),
+            vec![low, high]
+        );
+        assert_eq!(engine.early_stream_journal[0].priority, 255);
+        assert_eq!(
+            engine.early_stream_journal[0].role,
+            EarlyStreamRole::PriorityPub(255)
+        );
+        assert!(engine.set_stream_priority(9999, 0).is_err());
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn manual_acknowledgements_preserve_stream_and_backpressure() {
+        use quinn_proto::{Dir, Side, StreamId};
+        let mut engine =
+            QuicMqttEngine::new(MqttClientOptions::builder().auto_ack(false).build()).unwrap();
+        let data = StreamId::new(Side::Client, Dir::Bi, 1);
+        engine
+            .data_streams
+            .insert(data, QuicStream::new(1024, 5, 1));
+        let packet = MqttPacket::PubRec5(MqttPubRec::new(7, 0, vec![]));
+        engine.acknowledge_on(data.into(), packet.clone()).unwrap();
+        assert!(matches!(
+            engine.acknowledge_on(data.into(), packet),
+            Err(MqttClientError::BufferFull { .. })
+        ));
+        let stream = engine.data_streams.get(&data).unwrap();
+        assert_eq!(stream.pending_packets, 1);
+        assert!(
+            matches!(&parse_packets(&stream.outgoing, 5)[0], MqttPacket::PubRec5(p) if p.packet_id == 7)
+        );
+        assert!(engine.control_outgoing.is_empty());
+        assert!(engine.mqtt_engine.take_outgoing().is_empty());
     }
 
     #[cfg(feature = "quic-proto")]

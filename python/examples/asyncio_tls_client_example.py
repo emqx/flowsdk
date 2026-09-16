@@ -48,7 +48,8 @@ async def test_tls():
         await client.connect(host, port)
         print("✅ TLS Connected!")
         
-        await client.subscribe("test/python/tls", 1)
+        subscription = await client.subscribe("test/python/tls", 1)
+        subscription.raise_for_status()
         print("✅ Subscribed!")
         
         await client.publish("test/python/tls", b"Hello TLS!", 1)
