@@ -89,6 +89,7 @@ pub struct Connection {
     pub client_index: usize,
     pub drain_deadline: Option<Instant>,
     topic: String,
+    qos: u8,
     pub messages_received: u64,
 }
 
@@ -126,6 +127,7 @@ impl Connection {
             client_index,
             drain_deadline: None,
             topic: config.topic_for_client(client_index),
+            qos: config.qos,
             messages_received: 0,
         }
     }
@@ -294,7 +296,8 @@ impl Connection {
         if self.state != ConnState::Draining {
             return false;
         }
-        let drained = self.messages_acked >= self.messages_sent
+        let drained = self.qos == 0
+            || self.messages_acked >= self.messages_sent
             || self.drain_deadline.is_some_and(|d| Instant::now() >= d);
         if drained {
             self.mqtt.disconnect();
