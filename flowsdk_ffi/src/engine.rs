@@ -5,6 +5,10 @@ use std::os::raw::{c_char, c_int};
 use std::time::{Duration, Instant};
 
 mod advanced;
+#[cfg(test)]
+mod api_tests;
+#[cfg(test)]
+mod c_tests;
 pub mod ffi_types;
 pub mod properties;
 #[cfg(feature = "quic")]

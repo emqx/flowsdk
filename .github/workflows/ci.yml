@@ -348,13 +348,19 @@ jobs:
     - name: Install cargo-llvm-cov
       run: cargo install cargo-llvm-cov
 
-    - name: Install OpenSSL (required for quic-openssl feature)
-      run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev
+    - name: Install local broker and OpenSSL
+      run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev mosquitto
 
-    - name: Generate coverage report
-      run: |
-        ./scripts/generate_coverage.sh
-        ./scripts/generate_coverage_integration.sh
+    - name: Set up Python
+      uses: actions/setup-python@v5
+      with:
+        python-version: '3.13'
+
+    - name: Install Python coverage
+      run: python -m pip install 'coverage>=7,<8'
+
+    - name: Enforce 80 percent Rust and Python coverage
+      run: bash scripts/check_coverage.sh
 
     - name: Upload coverage artifacts
       uses: actions/upload-artifact@v4
@@ -362,19 +368,15 @@ jobs:
       with:
         name: coverage-data
         path: |
-          lcov.info
-          lcov2.info
-          lcov3.info
-          target/llvm-cov-target/cargo-llvm-cov.profdata
-          target/llvm-cov-target/cargo-llvm-cov2.profdata
-          target/integration-llvm-cov2.profdata
-          target/llvm-cov-target/*.profraw
+          target/coverage/rust.lcov
+          target/coverage/python.xml
+          target/coverage/*-summary.txt
         retention-days: 7
 
     - name: Upload coverage to Codecov
       uses: codecov/codecov-action@v4
       with:
-        files: lcov.info,lcov2.info,lcov3.info
+        files: target/coverage/rust.lcov,target/coverage/python.xml
         fail_ci_if_error: false
         token: ${{ secrets.CODECOV_TOKEN }}
         verbose: true

@@ -20,9 +20,9 @@ fn broker(version: u8) -> (String, thread::JoinHandle<Vec<MqttPacket>>) {
             .set_write_timeout(Some(Duration::from_secs(5)))
             .unwrap();
         let mut writer = socket.try_clone().unwrap();
-        let mut stream = MqttStream::new(socket, 4096, version);
+        let stream = MqttStream::new(socket, 4096, version);
         let mut received = Vec::new();
-        while let Some(packet) = stream.next() {
+        for packet in stream {
             let packet = packet.unwrap();
             let response = match &packet {
                 MqttPacket::Connect3(_) => vec![0x20, 2, 0, 0],

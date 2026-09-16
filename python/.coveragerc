@@ -1,0 +1,13 @@
+[run]
+branch = True
+source = python/package/flowsdk
+omit = */flowsdk_ffi.py
+data_file = target/coverage/python.coverage
+
+[report]
+fail_under = 80
+precision = 2
+show_missing = True
+
+[xml]
+output = target/coverage/python.xml
