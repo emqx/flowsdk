@@ -149,12 +149,11 @@ impl MqttControlPacket for MqttAuth {
             }
         }
 
-        // MQTT 5.0: 3.15.2 AUTH Variable Header
-        // The variable header MUST contain a reason code
-        #[cfg(feature = "strict-protocol-compliance")]
+        // MQTT 5.0 section 3.15.2.1 permits omitting Success and empty properties.
         if size == 0 {
-            return Err(ParseError::ParseError(
-                "AUTH packet must contain a reason code".to_string(),
+            return Ok(ParseOk::Packet(
+                MqttPacket::Auth(MqttAuth::new_success()),
+                total_len,
             ));
         }
 
@@ -402,14 +401,15 @@ mod tests {
     }
 
     #[test]
-    fn test_auth_missing_reason_code() {
-        let bytes = vec![0xF0, 0x00]; // AUTH with remaining length 0 (no reason code)
-
-        match MqttAuth::from_bytes(&bytes) {
-            Err(ParseError::ParseError(msg)) if msg.contains("must contain a reason code") => {
-                // Expected error
+    fn compact_success_auth_does_not_consume_the_following_packet() {
+        for bytes in [vec![0xf0, 0], vec![0xf0, 0, 0xd0, 0]] {
+            match MqttAuth::from_bytes(&bytes).unwrap() {
+                ParseOk::Packet(MqttPacket::Auth(auth), consumed) => {
+                    assert_eq!(auth, MqttAuth::new_success());
+                    assert_eq!(consumed, 2);
+                }
+                other => panic!("Expected successful AUTH, got {other:?}"),
             }
-            _ => panic!("Expected ParseError with reason code message"),
         }
     }
 
