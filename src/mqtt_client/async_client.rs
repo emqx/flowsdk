@@ -299,6 +299,7 @@ struct ClientWorker {
     config: AsyncClientConfig,
     /// Current connection state
     is_connected: bool,
+    is_connecting: bool,
     /// Reconnection state
     reconnect_attempts: u32,
     /// Message buffer for when disconnected
@@ -323,6 +324,7 @@ impl ClientWorker {
             command_rx,
             config,
             is_connected: false,
+            is_connecting: false,
             reconnect_attempts: 0,
             message_buffer: Vec::new(),
             pending_subscribes: HashMap::new(),
@@ -350,8 +352,8 @@ impl ClientWorker {
                 }
             }
 
-            // Read incoming messages if connected
-            if self.is_connected {
+            // CONNACK must be read before the MQTT session becomes connected.
+            if self.is_connected || self.is_connecting {
                 self.handle_incoming_messages();
             }
         }
@@ -396,11 +398,15 @@ impl ClientWorker {
 
     /// Handle connect command
     fn handle_connect(&mut self) {
-        match self.client.connect_send() {
+        match self.client.connect_send().and_then(|()| {
+            self.client
+                .set_read_timeout(Some(Duration::from_millis(100)))
+        }) {
             Ok(_) => {
-                // Connect packet sent, will wait for CONNACK in handle_incoming_messages
+                self.is_connecting = true;
             }
             Err(e) => {
+                self.is_connecting = false;
                 self.event_handler.on_error(&e);
                 if self.config.auto_reconnect {
                     self.schedule_reconnect();
@@ -484,6 +490,7 @@ impl ClientWorker {
 
     /// Handle disconnect command
     fn handle_disconnect(&mut self) {
+        self.is_connecting = false;
         match self.client.disconnect_send() {
             Ok(_) => {
                 self.is_connected = false;
@@ -509,6 +516,7 @@ impl ClientWorker {
             Ok(Some(packet)) => match packet {
                 MqttPacket::ConnAck5(connack) => {
                     // Handle CONNACK response
+                    self.is_connecting = false;
                     self.is_connected = connack.reason_code == 0;
                     self.reconnect_attempts = 0;
 
@@ -628,8 +636,9 @@ impl ClientWorker {
 
     /// Handle connection lost
     fn handle_connection_lost(&mut self) {
-        if self.is_connected {
+        if self.is_connected || self.is_connecting {
             self.is_connected = false;
+            self.is_connecting = false;
             self.event_handler.on_connection_lost();
 
             if self.config.auto_reconnect {

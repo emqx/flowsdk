@@ -801,34 +801,48 @@ impl MqttClient {
     /// Send CONNECT packet without waiting for CONNACK
     pub fn connect_send(&mut self) -> io::Result<()> {
         // Establish connection to the MQTT broker
-        if let Ok(stream) = TcpStream::connect(self.context.peer.clone()) {
-            // Initialize ClientSession
-            if self.options.sessionless {
-                self.context.session = None;
-                self.options.clean_start = true;
-            } else if self.context.session.is_none() {
-                self.context.session = Some(ClientSession::new());
-            }
-
-            // Send CONNECT packet
-            let connect_packet = connectv5::MqttConnect::new(
-                self.options.client_id.clone(),
-                self.options.username.clone(),
-                self.options.password.clone(),
-                self.options.will.clone(),
-                self.options.keep_alive,
-                self.options.clean_start,
-                self.options.connect_properties.clone(),
-            );
-
-            // Stream used, now save it
-            let mqtt_stream = MqttStream::new(stream, 16384, 5);
-            self.context.mqtt_stream = Some(mqtt_stream);
-
-            // Send CONNECT packet without waiting for CONNACK
-            self.send_packet(connect_packet)?;
+        let stream = TcpStream::connect(&self.context.peer)?;
+        // Initialize ClientSession
+        if self.options.sessionless {
+            self.context.session = None;
+            self.options.clean_start = true;
+        } else if self.context.session.is_none() {
+            self.context.session = Some(ClientSession::new());
         }
+
+        // Send CONNECT packet
+        let connect_packet = connectv5::MqttConnect::new(
+            self.options.client_id.clone(),
+            self.options.username.clone(),
+            self.options.password.clone(),
+            self.options.will.clone(),
+            self.options.keep_alive,
+            self.options.clean_start,
+            self.options.connect_properties.clone(),
+        );
+
+        // Stream used, now save it
+        let mqtt_stream = MqttStream::new(stream, 16384, 5);
+        self.context.mqtt_stream = Some(mqtt_stream);
+
+        // Send CONNECT packet without waiting for CONNACK
+        self.send_packet(connect_packet)?;
         Ok(())
+    }
+
+    /// Bound a blocking receive, allowing event loops to process queued commands.
+    pub fn set_read_timeout(&mut self, timeout: Option<std::time::Duration>) -> io::Result<()> {
+        self.context
+            .mqtt_stream
+            .as_mut()
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "No active MQTT stream connection",
+                )
+            })?
+            .mut_stream()
+            .set_read_timeout(timeout)
     }
 
     /// Send SUBSCRIBE packet without waiting for SUBACK
@@ -1030,6 +1044,7 @@ impl MqttClient {
         // MqttStream version is set at creation time, so next() will parse with correct version
         match stream.next() {
             Some(Ok(packet)) => Ok(Some(packet)),
+            Some(Err(crate::mqtt_serde::parser::ParseError::IoError(error))) => Err(error),
             Some(Err(parse_error)) => Err(io::Error::new(
                 io::ErrorKind::InvalidData,
                 format!("Failed to parse MQTT packet: {:?}", parse_error),
