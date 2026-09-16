@@ -6,7 +6,12 @@ cd "$(dirname "${BASH_SOURCE[0]}")/.."
 PYTHON="${PYTHON:-python3}"
 command -v mosquitto >/dev/null
 "$PYTHON" -m coverage --version
-cargo llvm-cov --version
+COVERAGE_TOOL_VERSION="$(cargo llvm-cov --version)"
+echo "$COVERAGE_TOOL_VERSION"
+if [[ "$COVERAGE_TOOL_VERSION" != 'cargo-llvm-cov 0.9.1' ]]; then
+    echo 'Coverage reporting requires cargo-llvm-cov 0.9.1; install it with: cargo install cargo-llvm-cov --version 0.9.1 --locked' >&2
+    exit 1
+fi
 
 mkdir -p target/coverage
 cargo llvm-cov clean --workspace
@@ -50,7 +55,8 @@ PY
 "$PYTHON" -m coverage report --rcfile=python/.coveragerc | tee target/coverage/python-summary.txt
 
 # Exclude test source only. Every production workspace crate stays in the gate.
-cargo llvm-cov report --ignore-filename-regex '(/tests/|_tests\.rs$)' \
+cargo llvm-cov report --workspace --ignore-filename-regex '(/tests/|_tests\.rs$)' \
     --lcov --output-path target/coverage/rust.lcov --fail-under-lines 80
-cargo llvm-cov report --ignore-filename-regex '(/tests/|_tests\.rs$)' \
+"$PYTHON" scripts/check_coverage_report.py target/coverage/rust.lcov
+cargo llvm-cov report --workspace --ignore-filename-regex '(/tests/|_tests\.rs$)' \
     | tee target/coverage/rust-summary.txt

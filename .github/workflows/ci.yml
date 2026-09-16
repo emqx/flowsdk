@@ -346,7 +346,7 @@ jobs:
         repo-token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Install cargo-llvm-cov
-      run: cargo install cargo-llvm-cov
+      run: cargo install cargo-llvm-cov --version 0.9.1 --locked
 
     - name: Install local broker and OpenSSL
       run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev mosquitto
