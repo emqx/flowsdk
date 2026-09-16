@@ -16,7 +16,8 @@ async def main():
     )
     
     await client.connect("broker.emqx.io", 1883)
-    await client.subscribe("test/#", 1)
+    subscription = await client.subscribe("test/#", 1)
+    subscription.raise_for_status()
     await client.publish("test/hello", b"Hello World!", 1)
     
     # Keep running to receive messages

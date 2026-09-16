@@ -49,6 +49,7 @@ impl Future for ProtocolDriver {
                     MqttEvent::Subscribed(res) => {
                         println!("Async Driver: Subscribed: ID={:?}", res.packet_id)
                     }
+                    MqttEvent::DisconnectReceived { .. } => return Poll::Ready(Ok(())),
                     MqttEvent::Disconnected(reason) => {
                         println!("Async Driver: MQTT Disconnected: {:?}", reason);
                         return Poll::Ready(Ok(()));

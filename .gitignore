@@ -34,6 +34,9 @@ python/examples/*.dll
 
 python/**/*.pyc
 python/package/flowsdk.egg-info/
+python/package/*.egg-info/
+python/package/build/
+python/package/dist/
 
 # Kotlin Examples (generated files)
 kotlin/package/src/main/resources/libflowsdk_ffi.dylib

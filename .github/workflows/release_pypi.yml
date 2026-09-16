@@ -20,19 +20,20 @@ jobs:
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Build and Prepare Bindings
-        shell: bash
-        run: |
-          ./scripts/build_python_bindings.sh --release
-
       - name: Build wheels
         uses: pypa/cibuildwheel@v2
         with:
           package-dir: python/package
         env:
-          CIBW_BEFORE_BUILD: "pip install setuptools wheel"
-          # Linux specific: ensure library is copied correctly if needed
-          # But our script handles the dylib placement.
+          # The ctypes library is independent of the CPython ABI: build once per platform.
+          CIBW_BUILD: "cp310-*"
+          CIBW_ARCHS: native
+          CIBW_SKIP: "*-musllinux_*"
+          CIBW_BEFORE_ALL_LINUX: "curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal"
+          CIBW_ENVIRONMENT_LINUX: 'PATH="$HOME/.cargo/bin:$PATH"'
+          # Build inside the manylinux container so native symbols match its ABI.
+          CIBW_BEFORE_BUILD: 'bash "{project}/scripts/build_python_bindings.sh" --release'
+          CIBW_TEST_COMMAND: 'python -W error -m unittest discover -s "{project}/python/tests" -v'
 
       - uses: actions/upload-artifact@v4
         with:

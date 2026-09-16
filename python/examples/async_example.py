@@ -21,6 +21,7 @@ async def main():
         password=None,
         reconnect_base_delay_ms=1000,
         reconnect_max_delay_ms=30000,
+        max_reconnect_attempts=0,
     )
     engine = MqttEngineFfi.new_with_opts(opts)
     print(f"✅ Created MqttEngineFfi (Client ID: {client_id})")
@@ -51,9 +52,7 @@ async def main():
         published = False
 
         while time.monotonic() < end_time:
-            # now_ms should be the time elapsed since the engine was created.
-            # Since we create the engine just before this, monotonic() - start_time is a good proxy.
-            now_ms = int((time.monotonic() - start_time) * 1000)
+            now_ms = engine.elapsed_ms()
             
             # 1. Handle protocol timers
             engine.handle_tick(now_ms)

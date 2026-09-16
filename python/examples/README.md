@@ -24,11 +24,11 @@ Demonstrates the high-level `FlowMqttClient` API using standard TCP transport wi
 
 ## Secure Transport Examples
 
-### 3. TLS Transport (`async_tls_client_example.py`)
+### 3. TLS Transport (`asyncio_tls_client_example.py`)
 **MQTT over TLS for secure communication**
 
 ```bash
-PYTHONPATH=../package python3 async_tls_client_example.py
+PYTHONPATH=../package python3 asyncio_tls_client_example.py
 ```
 
 Shows how to use MQTT over TLS (port 8883) with the unified `FlowMqttClient`. Includes:
@@ -88,7 +88,7 @@ FlowMqttClient → FlowMqttProtocol → MqttEngineFfi → Rust FFI
 ```
 - Simple async/await API
 - Automatic network handling
-- Built-in reconnection support
+- Opt-in automatic reconnection with bounded backoff
 
 ### Low-Level API (Advanced)
 ```
@@ -129,9 +129,45 @@ await client.connect("broker.emqx.io", 14567, server_name="broker.emqx.io")
 
 1. **Start here**: `simple_async_usage.py` - Learn the basics
 2. **Next**: `asyncio_tcp_client_example.py` - See full features
-3. **Secure**: `async_tls_client_example.py` - Try TLS transport
+3. **Secure**: `asyncio_tls_client_example.py` - Try TLS transport
 4. **Modern**: `asyncio_quic_client_example.py` - Try QUIC transport
 
 ## License
 
 Mozilla Public License 2.0
+
+## MQTT 5 options
+
+`mqtt5_options.py` demonstrates property-bearing retained publishes, repeated user
+properties, Will messages, and persistent-session options:
+
+```bash
+PYTHONPATH=python/package python3 python/examples/mqtt5_options.py --host localhost --port 1883
+```
+
+Select TLS or QUIC with `--transport tls --port 8883` or
+`--transport quic --port 14567`; use `--ca` for a private CA. Authentication can be
+provided through `FLOWSDK_BROKER_USERNAME` and `FLOWSDK_BROKER_PASSWORD`.
+
+## Live-broker regression tests
+
+Start an MQTT 5 broker with permissions to publish and subscribe beneath
+`flowsdk-python-test/`. Tests use unique client IDs/topics and remove retained
+test messages. TCP is the default; TLS and QUIC need their respective listeners.
+Run from the repository root after generating bindings:
+
+```bash
+FLOWSDK_BROKER_HOST=localhost \
+FLOWSDK_BROKER_TRANSPORTS=tcp,tls,quic \
+PYTHONPATH=python/package python3 -W error -m unittest discover -s python/tests -p test_broker.py -v
+```
+
+Ports default to 1883/8883/14567; override with `FLOWSDK_BROKER_TCP_PORT`,
+`FLOWSDK_BROKER_TLS_PORT`, and `FLOWSDK_BROKER_QUIC_PORT`. Optional authentication
+variables are `FLOWSDK_BROKER_USERNAME`, `FLOWSDK_BROKER_PASSWORD`,
+`FLOWSDK_BROKER_CA`, `FLOWSDK_BROKER_CERT`, and `FLOWSDK_BROKER_KEY`. TLS certificate
+verification remains enabled.
+
+These tests cover QoS 0/1/2 property round trips, retained messages, batch
+subscriptions, session resumption, and Will delivery after transport loss. They
+are skipped unless `FLOWSDK_BROKER_HOST` is set.

@@ -64,6 +64,7 @@ impl Future for ProtocolDriver {
                     MqttEvent::Published(res) => {
                         println!("Multi-stream: Message Published: ID={:?}", res.packet_id)
                     }
+                    MqttEvent::DisconnectReceived { .. } => return Poll::Ready(Ok(())),
                     MqttEvent::Disconnected(reason) => {
                         println!("Multi-stream: MQTT Disconnected: {:?}", reason);
                         return Poll::Ready(Ok(()));

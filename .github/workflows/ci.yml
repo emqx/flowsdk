@@ -154,6 +154,13 @@ jobs:
     - name: Build (default, no QUIC)
       run: cargo build
 
+    - name: Check FFI transport feature combinations
+      run: |
+        cargo check -p flowsdk_ffi --no-default-features
+        cargo check -p flowsdk_ffi --no-default-features --features uniffi-bindings
+        cargo check -p flowsdk_ffi --no-default-features --features tls,uniffi-bindings
+        cargo check -p flowsdk_ffi --no-default-features --features quic,uniffi-bindings
+
     # Mode 2: mainstream quinn 0.11 (crates.io) + ring crypto
     - name: Build flowsdk_ffi --features quic (mainstream quinn)
       run: cargo build -p flowsdk_ffi --features quic --no-default-features
@@ -179,8 +186,11 @@ jobs:
       run: cargo audit
 
   python-bindings:
-    name: Python Bindings
+    name: Python Bindings (${{ matrix.python }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python: ['3.8', '3.13']
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -191,10 +201,17 @@ jobs:
     - name: Set up Python
       uses: actions/setup-python@v5
       with:
-        python-version: '3.10'
+        python-version: ${{ matrix.python }}
 
     - name: Build and Test Bindings
       run: ./scripts/build_python_bindings.sh --test
+
+    - name: Test installed Python wheel
+      run: |
+        python -m pip install 'setuptools>=61' wheel
+        python -m pip wheel --no-deps --no-build-isolation python/package --wheel-dir /tmp/flowsdk-wheels
+        python -m pip install --no-deps --target /tmp/flowsdk-installed /tmp/flowsdk-wheels/*.whl
+        PYTHONPATH=/tmp/flowsdk-installed python -W error -m unittest discover -s python/tests -v
 
   kotlin-bindings:
     name: Kotlin Bindings

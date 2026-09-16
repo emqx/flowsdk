@@ -53,7 +53,8 @@ async def main():
         # Subscribe to a test topic
         topic = "flowsdk/quic/test"
         print(f"📡 Subscribing to {topic}...")
-        await client.subscribe(topic, qos=1)
+        subscription = await client.subscribe(topic, qos=1)
+        subscription.raise_for_status()
         print("✅ Subscribed!")
         
         # Publish some test messages

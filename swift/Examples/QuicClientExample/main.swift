@@ -117,7 +117,7 @@ let opts = MqttOptionsFfi(
     maxReconnectAttempts: 3
 )
 
-let engine = QuicMqttEngineFfi(opts: opts)
+let engine = try QuicMqttEngineFfi(opts: opts)
 print("QUIC Engine created.")
 
 // Enable TLS key logging when SSLKEYLOGFILE is set (for Wireshark)
@@ -140,10 +140,10 @@ let serverAddrStr = addrString(addr: brokerAddr, port: brokerPort)
 let engineStartMs = UInt64(Date().timeIntervalSince1970 * 1000)
 
 print("Connecting to QUIC broker at \(serverAddrStr) (host: \(brokerHost))...")
-engine.connect(serverAddr: serverAddrStr, serverName: brokerHost,
-               tlsOpts: tlsOpts, nowMs: nowMs(since: engineStartMs))
+try engine.connect(serverAddr: serverAddrStr, serverName: brokerHost,
+               tlsOpts: tlsOpts, nowMs: engine.elapsedMs())
 // Tick immediately to generate initial QUIC handshake packets
-_ = engine.handleTick(nowMs: nowMs(since: engineStartMs))
+_ = engine.handleTick(nowMs: engine.elapsedMs())
 sendOutgoing(engine, fd: fd, to: &brokerAddr)
 
 // Main event loop
@@ -155,15 +155,15 @@ while nowMs(since: engineStartMs) < runDurationMs {
     // Drain all received datagrams
     if waitReadable(fd, timeoutMs: Int(tickIntervalMs)) {
         while let data = recvDatagram(fd, buf: &recvBuf) {
-            engine.handleDatagram(data: data, remoteAddr: serverAddrStr,
-                                  nowMs: nowMs(since: engineStartMs))
+            try engine.handleDatagram(data: data, remoteAddr: serverAddrStr,
+                                  nowMs: engine.elapsedMs())
         }
     }
 
     // Tick the engine (drives QUIC timers + MQTT keepalive)
-    let events = engine.handleTick(nowMs: nowMs(since: engineStartMs))
+    _ = engine.handleTick(nowMs: engine.elapsedMs())
 
-    for event in events {
+    for event in engine.takeEvents() {
         switch event {
         case .connected(let r):
             print("Connected! sessionPresent=\(r.sessionPresent)")
@@ -181,7 +181,7 @@ while nowMs(since: engineStartMs) < runDurationMs {
                 print("Published to 'test/swift/quic' (PID \(pid))")
                 published = true
                 // Tick immediately so QUIC frames are generated before the next sendOutgoing
-                _ = engine.handleTick(nowMs: nowMs(since: engineStartMs))
+                _ = engine.handleTick(nowMs: engine.elapsedMs())
                 sendOutgoing(engine, fd: fd, to: &brokerAddr)
             }
         case .messageReceived(let m):
@@ -189,7 +189,7 @@ while nowMs(since: engineStartMs) < runDurationMs {
             print("✅ Message on '\(m.topic)': \(msg)")
         case .published(let r):
             print("✅ Publish ack PID \(r.packetId.map(String.init) ?? "none")")
-        case .disconnected(let reasonCode):
+        case .disconnected(let reasonCode, _):
             print("⚠️ Disconnected. reasonCode=\(String(describing: reasonCode))")
         case .error(let message):
             print("❌ Error: \(message)")
@@ -205,7 +205,8 @@ while nowMs(since: engineStartMs) < runDurationMs {
             print("ℹ Stream \(streamId) reset: errorCode=\(errorCode)")
         case .streamStopped(let streamId, let errorCode):
             print("ℹ Stream \(streamId) stopped: errorCode=\(errorCode)")
-        case .unsubscribed(_):
+        case .authReceived(_), .publishReceived(_, _), .pubRelReceived(_, _),
+             .transportClosed(_, _, _), .zeroRttStatusChanged(_), .unsubscribed(_):
             break
         }
     }
@@ -216,7 +217,17 @@ while nowMs(since: engineStartMs) < runDurationMs {
 
 // Graceful disconnect
 print("Run time elapsed, disconnecting...")
-engine.disconnect()
-sendOutgoing(engine, fd: fd, to: &brokerAddr)
+try engine.disconnect()
+let disconnectDeadline = engine.elapsedMs() + 5_000
+repeat {
+    _ = engine.handleTick(nowMs: engine.elapsedMs())
+    sendOutgoing(engine, fd: fd, to: &brokerAddr)
+    if waitReadable(fd, timeoutMs: 10) {
+        while let data = recvDatagram(fd, buf: &recvBuf) {
+            try engine.handleDatagram(data: data, remoteAddr: serverAddrStr,
+                                      nowMs: engine.elapsedMs())
+        }
+    }
+} while !engine.disconnectComplete() && engine.elapsedMs() < disconnectDeadline
 close(fd)
 print("Done.")
