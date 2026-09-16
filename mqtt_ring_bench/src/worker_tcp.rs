@@ -244,6 +244,11 @@ pub fn run_worker(
                 }
             }
             conn.check_receive_complete();
+            // QoS 0 has no incoming acknowledgement to drive the receive-side
+            // drain check. Also check the drain deadline when no packets arrive.
+            if !conn.send_pending {
+                conn.check_drain_complete();
+            }
             // PINGREQ / retransmits produce outgoing bytes without any event.
             if conn.has_pending_send() && !conn.send_pending {
                 submit_send(&mut ring, key, conn);
