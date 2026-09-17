@@ -60,6 +60,21 @@ impl MqttSubAck {
 }
 
 impl MqttControlPacket for MqttSubAck {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        packet_id(self.packet_id)?;
+        require(
+            !self.reason_codes.is_empty(),
+            "SUBACK must contain a reason code",
+        )?;
+        properties(&self.properties, PropertyContext::Ack)?;
+        for code in &self.reason_codes {
+            reason(ControlPacketType::SUBACK, *code)?;
+        }
+        Ok(())
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::SUBACK as u8
     }
@@ -102,6 +117,8 @@ impl MqttControlPacket for MqttSubAck {
         if packet_type != ControlPacketType::SUBACK as u8 {
             return Err(ParseError::InvalidPacketType);
         }
+        #[cfg(feature = "strict-protocol-compliance")]
+        crate::mqtt_serde::validation::fixed_header(buffer[0])?;
 
         let (size, vbi_len) = parse_remaining_length(&buffer[1..])?;
         let mut offset: usize = 1 + vbi_len;
@@ -152,7 +169,7 @@ impl MqttControlPacket for MqttSubAck {
             properties,
         };
 
-        Ok(ParseOk::Packet(MqttPacket::SubAck5(suback), total_len))
+        crate::mqtt_serde::parser::validated_packet(MqttPacket::SubAck5(suback), total_len)
     }
 }
 

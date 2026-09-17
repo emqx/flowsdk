@@ -12,16 +12,13 @@
 /// - `$flags`:          the fixed-header flags nibble (`0x00` for all except PUBREL which uses `0x02`)
 /// - `$packet_name`:    a string literal for error messages (e.g. `"PUBACK"`)
 /// - `$packet_variant`: the `MqttPacket` enum variant (e.g. `PubAck5`)
-/// - `$strict_flags`:   whether to validate the flags nibble under `strict-protocol-compliance`
-///   (only needed for PUBREL; pass `true` or `false`)
 macro_rules! v5_packet_id_ack {
     (
         $struct_name:ident,
         $packet_type:ident,
         $flags:expr,
         $packet_name:literal,
-        $packet_variant:ident,
-        $strict_flags:expr $(,)?
+        $packet_variant:ident $(,)?
     ) => {
         #[derive(Debug, PartialEq, Clone, ::serde::Serialize, ::serde::Deserialize)]
         #[cfg_attr(feature = "arbitrary", derive(::arbitrary::Arbitrary))]
@@ -58,6 +55,17 @@ macro_rules! v5_packet_id_ack {
         }
 
         impl $crate::mqtt_serde::control_packet::MqttControlPacket for $struct_name {
+            #[cfg(feature = "strict-protocol-compliance")]
+            fn validate(&self) -> Result<(), $crate::mqtt_serde::parser::ParseError> {
+                use $crate::mqtt_serde::validation::*;
+                packet_id(self.packet_id)?;
+                reason(
+                    $crate::mqtt_serde::control_packet::ControlPacketType::$packet_type,
+                    self.reason_code,
+                )?;
+                properties(&self.properties, PropertyContext::Ack)
+            }
+
             fn control_packet_type(&self) -> u8 {
                 $crate::mqtt_serde::control_packet::ControlPacketType::$packet_type as u8
             }
@@ -98,7 +106,7 @@ macro_rules! v5_packet_id_ack {
                 }
 
                 #[cfg(feature = "strict-protocol-compliance")]
-                if $strict_flags {
+                {
                     let flags = buffer[0] & 0x0F;
                     if flags != $flags {
                         return Err($crate::mqtt_serde::parser::ParseError::ParseError(format!(
@@ -153,14 +161,14 @@ macro_rules! v5_packet_id_ack {
                     ));
                 }
 
-                Ok($crate::mqtt_serde::parser::ParseOk::Packet(
+                $crate::mqtt_serde::parser::validated_packet(
                     $crate::mqtt_serde::control_packet::MqttPacket::$packet_variant($struct_name {
                         packet_id,
                         reason_code,
                         properties,
                     }),
                     offset,
-                ))
+                )
             }
         }
     };

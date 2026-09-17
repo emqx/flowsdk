@@ -53,6 +53,22 @@ impl MqttUnsubscribe {
 }
 
 impl MqttControlPacket for MqttUnsubscribe {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        packet_id(self.packet_id)?;
+        require(
+            !self.topic_filters.is_empty(),
+            "UNSUBSCRIBE must contain a topic filter",
+        )?;
+        properties(&self.properties, PropertyContext::Unsubscribe)?;
+        for filter in &self.topic_filters {
+            crate::mqtt_serde::validate_topic_filter(filter)?;
+            crate::mqtt_serde::validate_shared_subscription(filter)?;
+        }
+        Ok(())
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::UNSUBSCRIBE as u8
     }
@@ -177,10 +193,7 @@ impl MqttControlPacket for MqttUnsubscribe {
             properties,
         };
 
-        Ok(ParseOk::Packet(
-            MqttPacket::Unsubscribe5(unsubscribe),
-            offset,
-        ))
+        crate::mqtt_serde::parser::validated_packet(MqttPacket::Unsubscribe5(unsubscribe), offset)
     }
 }
 
@@ -241,7 +254,10 @@ mod tests {
         let topic_filters = vec!["sensor/data".to_string()];
         let properties = vec![
             Property::UserProperty("client".to_string(), "sensor_client_1".to_string()),
-            Property::ReasonString("Unsubscribing from sensors".to_string()),
+            Property::UserProperty(
+                "reason".to_string(),
+                "Unsubscribing from sensors".to_string(),
+            ),
         ];
         let unsubscribe = MqttUnsubscribe::new(9999, topic_filters.clone(), properties);
 
@@ -361,7 +377,10 @@ mod tests {
         ];
         let properties = vec![
             Property::UserProperty("client_type".to_string(), "test_client".to_string()),
-            Property::ReasonString("Comprehensive unsubscribe test".to_string()),
+            Property::UserProperty(
+                "reason".to_string(),
+                "Comprehensive unsubscribe test".to_string(),
+            ),
         ];
         let original_unsubscribe = MqttUnsubscribe::new(0x7FFF, topic_filters.clone(), properties);
 
@@ -384,20 +403,12 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_unsubscribe_empty_topic_filter() {
-        // Test UNSUBSCRIBE with empty topic filter (should work - server will handle validation)
-        let topic_filters = vec!["".to_string()];
-        let unsubscribe = MqttUnsubscribe::new_simple(4444, topic_filters.clone());
-
-        let bytes = unsubscribe.to_bytes().unwrap();
-
-        match MqttUnsubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Unsubscribe5(parsed_unsubscribe), _) => {
-                assert_eq!(parsed_unsubscribe.topic_filters, topic_filters);
-            }
-            _ => panic!("Expected UNSUBSCRIBE packet"),
-        }
+        let unsubscribe = MqttUnsubscribe::new_simple(4444, vec![String::new()]);
+        assert!(unsubscribe.to_bytes().is_err());
+        assert!(MqttUnsubscribe::from_bytes(&[0xa2, 5, 0x11, 0x5c, 0, 0, 0]).is_err());
     }
 
     #[test]

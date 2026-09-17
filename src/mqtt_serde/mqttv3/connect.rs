@@ -48,6 +48,21 @@ impl MqttConnect {
 }
 
 impl MqttControlPacket for MqttConnect {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        string(&self.protocol_name)?;
+        string(&self.client_id)?;
+        if let Some(username) = &self.username {
+            string(username)?;
+        }
+        if let Some(will) = &self.will {
+            require(will.qos <= 2, "Will QoS cannot exceed 2")?;
+            topic(&will.topic)?;
+        }
+        Ok(())
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::CONNECT as u8
     }
@@ -113,6 +128,8 @@ impl MqttControlPacket for MqttConnect {
         if packet_type != ControlPacketType::CONNECT as u8 {
             return Err(ParseError::InvalidPacketType);
         }
+        #[cfg(feature = "strict-protocol-compliance")]
+        crate::mqtt_serde::validation::fixed_header(buffer[0])?;
 
         let (size, vbi_len) = parse_remaining_length(&buffer[1..])?;
         let mut offset = 1 + vbi_len;
@@ -145,6 +162,8 @@ impl MqttControlPacket for MqttConnect {
             return Err(ParseError::BufferTooShort);
         }
         let flags = buffer[offset];
+        #[cfg(feature = "strict-protocol-compliance")]
+        crate::mqtt_serde::validation::connect_flags(flags)?;
         offset += 1;
         let clean_session = (flags & 0x02) > 0;
         let will_flag = (flags & 0x04) > 0;
@@ -220,7 +239,7 @@ impl MqttControlPacket for MqttConnect {
             ));
         }
 
-        Ok(ParseOk::Packet(
+        crate::mqtt_serde::parser::validated_packet(
             MqttPacket::Connect3(MqttConnect {
                 protocol_name: proto_name,
                 protocol_version: version,
@@ -232,7 +251,7 @@ impl MqttControlPacket for MqttConnect {
                 password,
             }),
             total_len,
-        ))
+        )
     }
 }
 

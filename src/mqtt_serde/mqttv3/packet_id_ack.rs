@@ -32,6 +32,12 @@ macro_rules! v3_packet_id_ack {
         }
 
         impl $crate::mqtt_serde::control_packet::MqttControlPacket for $struct_name {
+            #[cfg(feature = "strict-protocol-compliance")]
+            fn validate(&self) -> Result<(), $crate::mqtt_serde::parser::ParseError> {
+                use $crate::mqtt_serde::validation::*;
+                packet_id(self.message_id)
+            }
+
             fn control_packet_type(&self) -> u8 {
                 $crate::mqtt_serde::control_packet::ControlPacketType::$packet_type as u8
             }
@@ -86,12 +92,12 @@ macro_rules! v3_packet_id_ack {
 
                 let message_id = u16::from_be_bytes([buffer[1 + vbi_len], buffer[1 + vbi_len + 1]]);
 
-                Ok($crate::mqtt_serde::parser::ParseOk::Packet(
+                $crate::mqtt_serde::parser::validated_packet(
                     $crate::mqtt_serde::control_packet::MqttPacket::$packet_variant(
                         $struct_name::new(message_id),
                     ),
                     total_len,
-                ))
+                )
             }
         }
     };

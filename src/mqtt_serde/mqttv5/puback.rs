@@ -2,7 +2,7 @@
 
 use crate::mqtt_serde::mqttv5::packet_id_ack::v5_packet_id_ack;
 
-v5_packet_id_ack!(MqttPubAck, PUBACK, 0x00, "PUBACK", PubAck5, false);
+v5_packet_id_ack!(MqttPubAck, PUBACK, 0x00, "PUBACK", PubAck5);
 
 #[cfg(test)]
 mod tests {

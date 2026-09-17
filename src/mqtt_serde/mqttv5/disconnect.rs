@@ -146,6 +146,13 @@ impl Default for MqttDisconnect {
 }
 
 impl MqttControlPacket for MqttDisconnect {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        reason(ControlPacketType::DISCONNECT, self.reason_code)?;
+        properties(&self.properties, PropertyContext::Disconnect)
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::DISCONNECT as u8
     }
@@ -232,10 +239,7 @@ impl MqttControlPacket for MqttDisconnect {
         }
 
         let disconnect = MqttDisconnect::new(reason_code, properties);
-        Ok(ParseOk::Packet(
-            MqttPacket::Disconnect5(disconnect),
-            total_len,
-        ))
+        crate::mqtt_serde::parser::validated_packet(MqttPacket::Disconnect5(disconnect), total_len)
     }
 }
 
