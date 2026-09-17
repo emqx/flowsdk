@@ -36,7 +36,7 @@
 //! let mut client = NoIoMqttClient::new(options);
 //!
 //! // Initiate connection
-//! client.connect();
+//! client.connect().unwrap();
 //!
 //! // Get bytes to send to network
 //! let outgoing = client.take_outgoing();
@@ -120,8 +120,7 @@ use std::time::Instant;
 ///
 /// # Thread Safety
 ///
-/// This client is `!Send` and `!Sync` by design. If you need to use it across threads,
-/// wrap it in appropriate synchronization primitives for your use case.
+/// This client is `Send` and `Sync`; protocol operations require exclusive access.
 ///
 /// # Example
 ///
@@ -134,7 +133,7 @@ use std::time::Instant;
 ///     .build();
 ///
 /// let mut client = NoIoMqttClient::new(options);
-/// client.connect();
+/// client.connect().unwrap();
 ///
 /// // Get CONNECT packet bytes
 /// let bytes = client.take_outgoing();
@@ -225,7 +224,7 @@ impl NoIoMqttClient {
     /// ```no_run
     /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
     /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// client.connect();
+    /// client.connect().unwrap();
     ///
     /// let outgoing = client.take_outgoing();
     /// if !outgoing.is_empty() {
@@ -244,7 +243,7 @@ impl NoIoMqttClient {
     ///
     /// - Keep-alive PING packets
     /// - Connection timeout detection
-    /// - QoS message retransmissions
+    /// - Opt-in operation deadlines and MQTT 3.1.1 retransmissions
     ///
     /// # Arguments
     ///
@@ -252,7 +251,7 @@ impl NoIoMqttClient {
     ///
     /// # Returns
     ///
-    /// A vector of [`MqttEvent`]s generated (e.g., `ReconnectNeeded` on timeout).
+    /// A vector of [`MqttEvent`]s generated (e.g., `ReconnectNeeded` when backoff expires).
     ///
     /// # Example
     ///
@@ -276,7 +275,7 @@ impl NoIoMqttClient {
     /// Get the next time when [`handle_tick()`](Self::handle_tick) should be called.
     ///
     /// Use this to optimize your event loop by only waking up when necessary.
-    /// Returns `None` if not connected or no timer is needed.
+    /// Returns `None` if no timer is needed, including during disconnection.
     ///
     /// # Returns
     ///
@@ -302,8 +301,8 @@ impl NoIoMqttClient {
 
     /// Take all pending events from the client.
     ///
-    /// This is an alternative to processing events returned by `handle_incoming()`
-    /// and `handle_tick()`. Useful if you want to poll for events separately.
+    /// Events returned by `handle_incoming()` and `handle_tick()` are already drained.
+    /// This retrieves additional events from commands and output-drain processing.
     ///
     /// # Returns
     ///
@@ -335,12 +334,12 @@ impl NoIoMqttClient {
     /// ```no_run
     /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
     /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// client.connect();
+    /// client.connect().unwrap();
     /// let bytes = client.take_outgoing();
     /// // Send `bytes` to broker...
     /// ```
-    pub fn connect(&mut self) {
-        self.engine.connect();
+    pub fn connect(&mut self) -> Result<(), MqttClientError> {
+        self.engine.connect()
     }
 
     /// Publish a message to a topic.
@@ -454,12 +453,12 @@ impl NoIoMqttClient {
     /// ```no_run
     /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
     /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// client.ping();
+    /// client.ping().unwrap();
     /// let bytes = client.take_outgoing();
     /// // Send `bytes` to broker...
     /// ```
-    pub fn ping(&mut self) {
-        self.engine.send_ping();
+    pub fn ping(&mut self) -> Result<(), MqttClientError> {
+        self.engine.send_ping()
     }
 
     /// Send a DISCONNECT packet to the broker.
@@ -472,12 +471,12 @@ impl NoIoMqttClient {
     /// ```no_run
     /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
     /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// client.disconnect();
+    /// client.disconnect().unwrap();
     /// let bytes = client.take_outgoing();
     /// // Send `bytes` to broker, then close socket
     /// ```
-    pub fn disconnect(&mut self) {
-        self.engine.disconnect();
+    pub fn disconnect(&mut self) -> Result<(), MqttClientError> {
+        self.engine.disconnect()
     }
 
     /// Send an AUTH packet for enhanced authentication (MQTT v5 only).
@@ -495,12 +494,74 @@ impl NoIoMqttClient {
     /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
     /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
     /// // Send authentication response
-    /// client.auth(0x18, vec![/* auth properties */]);
+    /// client.auth(0x18, vec![/* auth properties */]).unwrap();
     /// let bytes = client.take_outgoing();
     /// // Send `bytes` to broker...
     /// ```
-    pub fn auth(&mut self, reason_code: u8, properties: Vec<Property>) {
-        self.engine.auth(reason_code, properties);
+    pub fn auth(
+        &mut self,
+        reason_code: u8,
+        properties: Vec<Property>,
+    ) -> Result<(), MqttClientError> {
+        self.engine.auth(reason_code, properties)
+    }
+
+    /// Discard old transport bytes and aliases while retaining eligible session state.
+    /// Call before CONNECT on a fresh transport.
+    pub fn reset_for_new_transport(&mut self) {
+        self.engine.reset_for_new_transport();
+    }
+
+    /// Schedule a backoff deadline unless one is already pending.
+    pub fn schedule_reconnect(&mut self, now: Instant) {
+        self.engine.schedule_reconnect(now);
+    }
+
+    /// Whether wire bytes or protocol responses are waiting to be drained.
+    pub fn has_pending_output(&self) -> bool {
+        self.engine.has_pending_output()
+    }
+
+    /// Queue DISCONNECT with MQTT 5 reason/properties; errors leave state unchanged.
+    pub fn disconnect_with(
+        &mut self,
+        reason_code: u8,
+        properties: Vec<Property>,
+    ) -> Result<(), MqttClientError> {
+        self.engine.try_disconnect_with(reason_code, properties)
+    }
+
+    /// Acknowledge a received QoS 1 message when automatic acknowledgments are disabled.
+    /// On failure, receive state remains available for retry.
+    pub fn puback(
+        &mut self,
+        packet_id: u16,
+        reason_code: u8,
+        properties: Vec<Property>,
+    ) -> Result<(), MqttClientError> {
+        self.engine.puback(packet_id, reason_code, properties)
+    }
+
+    /// Accept a received QoS 2 message. Use reason zero and no properties for MQTT 3.
+    /// On failure, receive state remains available for retry.
+    pub fn pubrec(
+        &mut self,
+        packet_id: u16,
+        reason_code: u8,
+        properties: Vec<Property>,
+    ) -> Result<(), MqttClientError> {
+        self.engine.pubrec(packet_id, reason_code, properties)
+    }
+
+    /// Complete a QoS 2 exchange after receiving `PubRelReceived`.
+    /// On failure, receive state remains available for retry.
+    pub fn pubcomp(
+        &mut self,
+        packet_id: u16,
+        reason_code: u8,
+        properties: Vec<Property>,
+    ) -> Result<(), MqttClientError> {
+        self.engine.pubcomp(packet_id, reason_code, properties)
     }
 
     // ========================================================================
@@ -530,7 +591,7 @@ impl NoIoMqttClient {
     ///
     /// - `5` for MQTT v5.0
     /// - `4` for MQTT v3.1.1
-    /// - `3` for MQTT v3.1
+    /// - `3` is also MQTT v3.1.1
     ///
     /// # Example
     ///
@@ -540,7 +601,7 @@ impl NoIoMqttClient {
     /// match client.mqtt_version() {
     ///     5 => println!("Using MQTT v5.0"),
     ///     4 => println!("Using MQTT v3.1.1"),
-    ///     3 => println!("Using MQTT v3.1"),
+    ///     3 => println!("Using MQTT v3.1.1"),
     ///     _ => println!("Unknown version"),
     /// }
     /// ```
@@ -570,7 +631,8 @@ impl NoIoMqttClient {
     /// Handle connection lost state.
     ///
     /// Call this when your socket disconnects or encounters an error.
-    /// This resets the protocol state and clears pending operations.
+    /// Discards transport bytes and retains eligible MQTT session state. When
+    /// reconnection is enabled, schedules one retry using exponential backoff.
     ///
     /// # Example
     ///
@@ -582,7 +644,7 @@ impl NoIoMqttClient {
     ///
     /// // Later, reconnect
     /// // ... create new socket ...
-    /// client.connect();
+    /// client.connect().unwrap();
     /// ```
     pub fn handle_connection_lost(&mut self) {
         self.engine.handle_connection_lost();
@@ -617,7 +679,7 @@ mod tests {
             .build();
 
         let mut client = NoIoMqttClient::new(options);
-        client.connect();
+        client.connect().unwrap();
 
         let outgoing = client.take_outgoing();
         assert!(!outgoing.is_empty());
@@ -633,7 +695,7 @@ mod tests {
             .build();
 
         let mut client = NoIoMqttClient::new(options);
-        client.connect();
+        client.connect().unwrap();
         let _ = client.take_outgoing();
 
         // Simulate CONNACK for MQTT v5: 0x20 (type), 0x03 (length), 0x00 (flags), 0x00 (reason code), 0x00 (properties length)
@@ -659,7 +721,7 @@ mod tests {
         let mut client = NoIoMqttClient::new(options);
 
         // Connect first
-        client.connect();
+        client.connect().unwrap();
         let _ = client.take_outgoing();
 
         // Simulate CONNACK
@@ -698,7 +760,7 @@ mod tests {
             .build();
 
         let mut client = NoIoMqttClient::new(options);
-        client.connect();
+        client.connect().unwrap();
         let _ = client.take_outgoing();
 
         // Simulate CONNACK

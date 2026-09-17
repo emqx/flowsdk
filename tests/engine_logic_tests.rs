@@ -3,6 +3,7 @@
 use flowsdk::mqtt_client::commands::PublishCommand;
 use flowsdk::mqtt_client::engine::{MqttEngine, MqttEvent};
 use flowsdk::mqtt_client::opts::MqttClientOptions;
+use flowsdk::mqtt_client::MqttClientError;
 use flowsdk::mqtt_serde::control_packet::MqttPacket;
 use flowsdk::mqtt_serde::mqttv3::connack::MqttConnAck as MqttConnAck3;
 use flowsdk::mqtt_serde::mqttv3::pubrec::MqttPubRec as MqttPubRec3;
@@ -44,7 +45,7 @@ fn connect_preserves_optional_credentials() {
             options.username = username.map(str::to_string);
             options.password = password.map(<[u8]>::to_vec);
             let mut engine = MqttEngine::new(options);
-            engine.connect();
+            engine.connect().unwrap();
 
             let bytes = engine.take_outgoing();
             let (actual_username, actual_password) =
@@ -71,7 +72,7 @@ fn test_v5_handshake_success() {
     assert!(!engine.is_connected());
 
     // 2. Connect
-    engine.connect();
+    engine.connect().unwrap();
     let outgoing = engine.take_outgoing();
     match MqttPacket::from_bytes_with_version(&outgoing, 5).unwrap() {
         ParseOk::Packet(MqttPacket::Connect5(p), _) => {
@@ -99,7 +100,7 @@ fn test_v5_handshake_success() {
 fn test_v3_handshake_success() {
     let mut engine = setup_engine_v3();
 
-    engine.connect();
+    engine.connect().unwrap();
     let outgoing = engine.take_outgoing();
     match MqttPacket::from_bytes_with_version(&outgoing, 4).unwrap() {
         ParseOk::Packet(MqttPacket::Connect3(p), _) => {
@@ -128,7 +129,7 @@ fn test_keep_alive_ping() {
     let now = Instant::now();
 
     // Connect first
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     let connack = MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
         .to_bytes()
@@ -153,7 +154,7 @@ fn test_keep_alive_timeout() {
     let now = Instant::now();
 
     // Connect
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     let connack = MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
         .to_bytes()
@@ -173,7 +174,7 @@ fn test_keep_alive_timeout() {
     assert!(!engine.is_connected());
     assert!(events
         .iter()
-        .any(|e| matches!(e, MqttEvent::ReconnectNeeded)));
+        .any(|e| matches!(e, MqttEvent::Disconnected(_))));
 }
 
 #[test]
@@ -181,7 +182,7 @@ fn test_v3_qos1_retransmission_after_reconnect() {
     let mut engine = setup_engine_v3();
 
     // 1. Connect and send QoS 1 publish
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     engine.handle_incoming(
         &MqttPacket::ConnAck3(MqttConnAck3::new(false, 0))
@@ -198,7 +199,7 @@ fn test_v3_qos1_retransmission_after_reconnect() {
     assert!(!engine.is_connected());
 
     // 3. Reconnect with session_present = true
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing(); // New CONNECT
 
     let _events = engine.handle_incoming(
@@ -226,7 +227,7 @@ fn test_v3_pubrel_retransmission_after_reconnect() {
     let mut engine = setup_engine_v3();
 
     // 1. Connect and start QoS 2 flow
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     engine.handle_incoming(
         &MqttPacket::ConnAck3(MqttConnAck3::new(false, 0))
@@ -253,7 +254,7 @@ fn test_v3_pubrel_retransmission_after_reconnect() {
     engine.handle_connection_lost();
 
     // 3. Reconnect with session_present = true
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     engine.handle_incoming(
         &MqttPacket::ConnAck3(MqttConnAck3::new(true, 0))
@@ -276,7 +277,7 @@ fn test_v5_qos1_retransmission_after_reconnect() {
     let mut engine = setup_engine_v5();
 
     // 1. Connect and send QoS 1 publish
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     engine.handle_incoming(
         &MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
@@ -292,7 +293,7 @@ fn test_v5_qos1_retransmission_after_reconnect() {
     engine.handle_connection_lost();
 
     // 3. Reconnect with session_present = true
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     engine.handle_incoming(
         &MqttPacket::ConnAck5(MqttConnAck5::new(true, 0, None))
@@ -324,7 +325,7 @@ fn test_outgoing_buffer_full() {
     let mut engine = MqttEngine::new(options);
 
     // Initial CONNECT
-    engine.connect();
+    engine.connect().unwrap();
 
     // Second packet should fail
     let res = engine.enqueue_packet(MqttPacket::PingReq5(
@@ -365,7 +366,7 @@ fn test_back_pressure_event_buffer() {
 #[test]
 fn test_qos2_full_handshake() {
     let mut engine = setup_engine_v5();
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     engine.handle_incoming(
         &MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
@@ -431,8 +432,10 @@ fn test_malformed_packet_error() {
     let mut engine = setup_engine_v5();
     // Feed invalid fixed header (packet type 0 is reserved)
     let events = engine.handle_incoming(&[0x00, 0x00]);
-    assert_eq!(events.len(), 1);
-    assert!(matches!(events[0], MqttEvent::Error(_)));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, MqttEvent::Error(_))));
+    assert!(!engine.is_connected());
 }
 
 #[test]
@@ -449,7 +452,7 @@ fn test_next_tick_at_priority() {
     assert!(reconnect_at > now);
 
     // 3. Connected (keep-alive 60s)
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     engine.handle_incoming(
         &MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
@@ -466,7 +469,7 @@ fn test_next_tick_at_priority() {
 #[test]
 fn test_packet_id_rollover() {
     let mut engine = setup_engine_v5();
-    engine.connect();
+    engine.connect().unwrap();
     // Establish session
     let connack = MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
         .to_bytes()
@@ -488,7 +491,7 @@ fn test_packet_id_rollover() {
 #[test]
 fn test_v5_subscribe_unsub_flow() {
     let mut engine = setup_engine_v5();
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     engine.handle_incoming(
         &MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
@@ -555,7 +558,7 @@ fn test_v5_subscribe_unsub_flow() {
 #[test]
 fn test_incoming_publish_qos1() {
     let mut engine = setup_engine_v5();
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     engine.handle_incoming(
         &MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
@@ -619,6 +622,8 @@ fn test_reconnect_backoff_multi() {
         assert_eq!(delay, Duration::from_millis(100));
     }
 
+    engine.handle_tick(now + Duration::from_millis(100));
+
     // 2. Second attempt: 200ms
     engine.schedule_reconnect(now);
     if let MqttEvent::ReconnectScheduled { attempt, delay } = engine.take_events().remove(0) {
@@ -626,12 +631,16 @@ fn test_reconnect_backoff_multi() {
         assert_eq!(delay, Duration::from_millis(200));
     }
 
+    engine.handle_tick(now + Duration::from_millis(200));
+
     // 3. Third attempt: 400ms
     engine.schedule_reconnect(now);
     if let MqttEvent::ReconnectScheduled { attempt, delay } = engine.take_events().remove(0) {
         assert_eq!(attempt, 3);
         assert_eq!(delay, Duration::from_millis(400));
     }
+
+    engine.handle_tick(now + Duration::from_millis(400));
 
     // 4. Fourth attempt: should give up (max=3)
     engine.schedule_reconnect(now);
@@ -642,7 +651,7 @@ fn test_reconnect_backoff_multi() {
 #[test]
 fn test_v5_receive_maximum_enforcement() {
     let mut engine = setup_engine_v5();
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
 
     // Connect with Receive Maximum = 1
@@ -701,7 +710,7 @@ fn rejected_pubrec_finishes_publish_without_pubrel() {
 
     for reason_code in [0x80, 0x87] {
         let mut engine = setup_engine_v5();
-        engine.connect();
+        engine.connect().unwrap();
         engine.take_outgoing();
         engine.handle_incoming(
             &MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
@@ -736,7 +745,10 @@ fn rejected_pubrec_finishes_publish_without_pubrel() {
             event => panic!("Expected publish result, got {event:?}"),
         }
         assert!(engine.take_outgoing().is_empty());
-        assert!(engine.handle_incoming(&pubrec).is_empty());
+        assert!(engine.handle_incoming(&pubrec).iter().any(|event| matches!(
+            event,
+            MqttEvent::Error(MqttClientError::InvalidPacketId { .. })
+        )));
         engine.handle_tick(Instant::now() + Duration::from_secs(6));
         assert!(engine.take_outgoing().is_empty());
     }
@@ -745,7 +757,7 @@ fn rejected_pubrec_finishes_publish_without_pubrel() {
 #[test]
 fn test_incoming_publish_qos2() {
     let mut engine = setup_engine_v5();
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     engine.handle_incoming(
         &MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
@@ -803,23 +815,26 @@ fn test_incoming_publish_qos2() {
 
 #[test]
 fn test_v5_auth() {
-    let mut engine = setup_engine_v5();
-    // AUTH can be sent at any time in v5 if negotiated?
-    // Usually it's during handshake or for re-auth.
-    engine.auth(0x00, Vec::new());
+    use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
+    let mut engine = MqttEngine::new(
+        MqttClientOptions::builder()
+            .connect_properties(vec![Property::AuthenticationMethod("test".into())])
+            .build(),
+    );
+    engine.connect().unwrap();
+    engine.take_outgoing();
+    assert!(engine.auth(0, vec![]).is_err());
+    engine.auth(0x18, Vec::new()).unwrap();
     let outgoing = engine.take_outgoing();
-    match MqttPacket::from_bytes_with_version(&outgoing, 5).unwrap() {
-        ParseOk::Packet(MqttPacket::Auth(a), _) => {
-            assert_eq!(a.reason_code, 0x00);
-        }
-        _ => panic!("Expected Auth packet"),
-    }
+    assert!(
+        matches!(MqttPacket::from_bytes_with_version(&outgoing, 5).unwrap(), ParseOk::Packet(MqttPacket::Auth(a), _) if a.reason_code == 0x18)
+    );
 }
 
 #[test]
 fn test_disconnect_flows() {
     let mut engine = setup_engine_v5();
-    engine.connect();
+    engine.connect().unwrap();
     let _ = engine.take_outgoing();
     engine.handle_incoming(
         &MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
@@ -829,7 +844,7 @@ fn test_disconnect_flows() {
     assert!(engine.is_connected());
 
     // 1. Client initiates disconnect
-    engine.disconnect();
+    engine.disconnect().unwrap();
     assert!(!engine.is_connected());
     let outgoing = engine.take_outgoing();
     match MqttPacket::from_bytes_with_version(&outgoing, 5).unwrap() {
@@ -839,7 +854,7 @@ fn test_disconnect_flows() {
 
     // 2. Server initiates disconnect
     let mut engine2 = setup_engine_v5();
-    engine2.connect();
+    engine2.connect().unwrap();
     let _ = engine2.take_outgoing();
     engine2.handle_incoming(
         &MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
@@ -894,7 +909,7 @@ fn test_publish_priority() {
     assert!(engine.take_outgoing().is_empty());
 
     // 2. Connect
-    engine.connect();
+    engine.connect().unwrap();
     let conn_bytes = engine.take_outgoing();
     assert!(!conn_bytes.is_empty()); // This is the CONNECT packet
 

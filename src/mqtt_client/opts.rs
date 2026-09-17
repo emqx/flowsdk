@@ -16,7 +16,37 @@ pub enum TlsBackend {
     Rustls,
 }
 
+/// Optional protocol-operation deadlines. All deadlines are disabled by default.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct OperationTimeouts {
+    pub connect: Option<std::time::Duration>,
+    pub publish: Option<std::time::Duration>,
+    pub subscribe: Option<std::time::Duration>,
+    pub unsubscribe: Option<std::time::Duration>,
+}
+
+impl OperationTimeouts {
+    /// Finite deadlines suitable as a starting point for cloud connections.
+    pub fn cloud() -> Self {
+        use std::time::Duration;
+        Self {
+            connect: Some(Duration::from_secs(30)),
+            publish: Some(Duration::from_secs(10)),
+            subscribe: Some(Duration::from_secs(10)),
+            unsubscribe: Some(Duration::from_secs(10)),
+        }
+    }
+}
+
 pub struct MqttClientOptions {
+    pub operation_timeouts: OperationTimeouts,
+    /// MQTT 5 Receive Maximum advertised to the server, distinct from the outgoing limit.
+    pub incoming_receive_maximum: Option<u16>,
+    /// Hard receive packet/buffer limits. None leaves the local limit disabled.
+    pub max_incoming_packet_size: Option<usize>,
+    pub max_incoming_buffer_bytes: Option<usize>,
+    /// Bounds queued application packets plus serialized protocol output.
+    pub max_outgoing_buffer_bytes: Option<usize>,
     pub peer: String,
     pub client_id: String,
     pub clean_start: bool,
@@ -124,12 +154,11 @@ pub struct MqttClientOptions {
     /// Additional MQTT v5 properties to include in the initial CONNECT packet.
     ///
     /// Use this for properties not covered by dedicated fields (e.g.
-    /// `AuthenticationMethod`, `AuthenticationData`, `MessageExpiryInterval`,
-    /// `CorrelationData`, `SubscriptionIdentifier`, `TopicAlias`).
+    /// `AuthenticationMethod`, `AuthenticationData`, `TopicAliasMaximum`).
     ///
     /// Properties set via dedicated fields on this struct (e.g.
-    /// `session_expiry_interval`, `maximum_packet_size`) are **not**
-    /// automatically merged here — callers must add them manually if desired.
+    /// `session_expiry_interval`, `maximum_packet_size`) are merged
+    /// when CONNECT is built. Conflicting singleton values return an error.
     pub connect_properties: Vec<Property>,
 
     /// Internal parser buffer size in bytes.
@@ -151,6 +180,11 @@ pub struct MqttClientOptions {
 impl Default for MqttClientOptions {
     fn default() -> Self {
         Self {
+            operation_timeouts: OperationTimeouts::default(),
+            incoming_receive_maximum: None,
+            max_incoming_packet_size: None,
+            max_incoming_buffer_bytes: None,
+            max_outgoing_buffer_bytes: None,
             peer: "localhost:1883".to_string(),
             client_id: "mqtt_client".to_string(),
             clean_start: true,
@@ -191,6 +225,31 @@ impl Default for MqttClientOptions {
 pub type MqttClientOptionsBuilder = MqttClientOptions;
 
 impl MqttClientOptions {
+    pub fn operation_timeouts(mut self, timeouts: OperationTimeouts) -> Self {
+        self.operation_timeouts = timeouts;
+        self
+    }
+
+    pub fn incoming_receive_maximum(mut self, maximum: u16) -> Self {
+        self.incoming_receive_maximum = Some(maximum);
+        self
+    }
+
+    pub fn max_incoming_packet_size(mut self, bytes: usize) -> Self {
+        self.max_incoming_packet_size = Some(bytes);
+        self
+    }
+
+    pub fn max_incoming_buffer_bytes(mut self, bytes: usize) -> Self {
+        self.max_incoming_buffer_bytes = Some(bytes);
+        self
+    }
+
+    pub fn max_outgoing_buffer_bytes(mut self, bytes: usize) -> Self {
+        self.max_outgoing_buffer_bytes = Some(bytes);
+        self
+    }
+
     /// Create a new builder with default values
     pub fn builder() -> Self {
         Self::default()
@@ -391,11 +450,11 @@ impl MqttClientOptions {
     /// These properties are included in the CONNECT variable header /
     /// property section when the client connects. Use this for properties
     /// not covered by dedicated fields (e.g. `AuthenticationMethod`,
-    /// `CorrelationData`, `SubscriptionIdentifier`, `TopicAlias`).
+    /// `AuthenticationData`, `TopicAliasMaximum`).
     ///
     /// Properties set via dedicated fields on this struct (e.g.
-    /// `session_expiry_interval`, `maximum_packet_size`) are **not**
-    /// automatically merged here — callers must add them manually if desired.
+    /// `session_expiry_interval`, `maximum_packet_size`) are merged
+    /// when CONNECT is built. Conflicting singleton values return an error.
     ///
     /// # Example
     /// ```
@@ -403,8 +462,8 @@ impl MqttClientOptions {
     /// # use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
     /// let options = MqttClientOptions::builder()
     ///     .connect_properties(vec![
-    ///         Property::SubscriptionIdentifier(1),
-    ///         Property::TopicAlias(10),
+    ///         Property::AuthenticationMethod("example".into()),
+    ///         Property::TopicAliasMaximum(10),
     ///     ])
     ///     .build();
     /// ```

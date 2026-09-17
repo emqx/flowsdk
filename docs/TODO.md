@@ -4,7 +4,7 @@
 - [x] Builder pattern
 - [x] MQTT v5 flow control (Receive Maximum, Topic Alias Maximum)
 - [x] Raw Packet API for protocol testing
-- [x] Comprehensive documentation
+- [x] Sans-I/O integration and migration guide (`NO_IO_CLIENT.md`)
 - [x] Protocol testing infrastructure (84% coverage achievable)
 - [x] TLS/SSL support
 - [x] QUIC support (single stream)
@@ -20,9 +20,9 @@
 - [ ] Enhanced event handler properties (subscription IDs, MQTT v5 properties)
 
 # Planned 📋
-- [ ] Client support MQTT v3
+- [x] Sans-I/O client support MQTT v3.1.1
 - [ ] UnixDomain socket
-- [ ] QUIC support (multi stream)
+- [x] QUIC support (multi stream)
 - [ ] FFI/language wrappers for QUIC source bind/rebind and local-address-change notification
 - [ ] Service discovery for distributed deployments
 - [ ] WebSocket transport support
@@ -96,4 +96,7 @@ Messages can be communicated within processes, between processes, over LAN, and 
 - Property context validation requires cross-referencing with packet flags during validation
 
 ## Session Management
-- [ ] Implement MQTT topic matching with wildcards (+ and #) for message routing in the server session.
+- [x] Implement MQTT topic matching with wildcards (+ and #), including the `$` topic rule, for non-shared subscriptions in the server session.
+- [x] Track incoming QoS 2 duplicates and outgoing acknowledgment/quota state separately.
+- [x] Apply subscription QoS and Retain As Published, with in-memory retained replay and Retain Handling options.
+- [ ] Provide broker-wide retained storage, message expiry and shared-subscription routing beyond the local `ServerSession` helper.

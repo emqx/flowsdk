@@ -104,7 +104,8 @@ impl TlsMqttEngine {
             match self.tls_connection.reader().read(&mut buf) {
                 Ok(0) => break,
                 Ok(n) => {
-                    self.incoming_plaintext.extend_from_slice(&buf[..n]);
+                    let events = self.mqtt_engine.handle_incoming(&buf[..n]);
+                    self.mqtt_engine.defer_events(events);
                 }
                 Err(ref e) if e.kind() == std::io::ErrorKind::WouldBlock => break,
                 Err(e) => {
@@ -133,6 +134,8 @@ impl TlsMqttEngine {
         mqtt_events.extend(self.mqtt_engine.handle_incoming(&self.incoming_plaintext));
         self.incoming_plaintext.clear();
 
+        mqtt_events.extend(self.mqtt_engine.handle_tick(now));
+
         // 2. Process outgoing plaintext from MQTT -> TLS
         if self.outgoing_plaintext.is_empty() {
             self.outgoing_plaintext = self.mqtt_engine.take_outgoing();
@@ -149,8 +152,7 @@ impl TlsMqttEngine {
             }
         }
 
-        // 3. Drive MQTT engine tick
-        mqtt_events.extend(self.mqtt_engine.handle_tick(now));
+        mqtt_events.extend(self.mqtt_engine.take_events());
 
         mqtt_events
     }
@@ -158,8 +160,8 @@ impl TlsMqttEngine {
     /// Initiate the MQTT connection (sends CONNECT packet).
     /// This should be called after the TLS handshake is potentially complete,
     /// or just to kick off the MQTT level.
-    pub fn connect(&mut self) {
-        self.mqtt_engine.connect();
+    pub fn connect(&mut self) -> Result<(), MqttClientError> {
+        self.mqtt_engine.connect()
     }
 
     pub fn engine(&self) -> &MqttEngine {
@@ -183,8 +185,8 @@ impl TlsMqttEngine {
         self.mqtt_engine.unsubscribe(command)
     }
 
-    pub fn disconnect(&mut self) {
-        self.mqtt_engine.disconnect();
+    pub fn disconnect(&mut self) -> Result<(), MqttClientError> {
+        self.mqtt_engine.disconnect()
     }
 
     pub fn try_disconnect(&mut self) -> Result<(), MqttClientError> {

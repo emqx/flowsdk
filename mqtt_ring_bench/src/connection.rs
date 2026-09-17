@@ -133,7 +133,10 @@ impl Connection {
     }
 
     pub fn initiate_mqtt_connect(&mut self) {
-        self.mqtt.connect();
+        if self.mqtt.connect().is_err() {
+            self.state = ConnState::Failed;
+            return;
+        }
         self.take_outgoing();
         self.state = ConnState::MqttConnecting;
     }
@@ -279,7 +282,9 @@ impl Connection {
             return false;
         }
 
-        self.mqtt.disconnect();
+        if self.mqtt.disconnect().is_err() {
+            return false;
+        }
         self.take_outgoing();
         self.state = ConnState::Disconnecting;
         true
@@ -300,7 +305,9 @@ impl Connection {
             || self.messages_acked >= self.messages_sent
             || self.drain_deadline.is_some_and(|d| Instant::now() >= d);
         if drained {
-            self.mqtt.disconnect();
+            if self.mqtt.disconnect().is_err() {
+                return false;
+            }
             self.take_outgoing();
             self.state = ConnState::Disconnecting;
         }
@@ -724,7 +731,9 @@ impl QuicConnection {
             return false;
         }
 
-        self.engine.disconnect();
+        if self.engine.disconnect().is_err() {
+            return false;
+        }
         let _ = self.engine.handle_tick(now);
         self.drain_outgoing_datagrams();
         self.state = QuicConnState::Disconnecting;
@@ -745,7 +754,9 @@ impl QuicConnection {
         let drained = self.messages_acked >= self.messages_sent
             || self.drain_deadline.is_some_and(|d| now >= d);
         if drained {
-            self.engine.disconnect();
+            if self.engine.disconnect().is_err() {
+                return false;
+            }
             let _ = self.engine.handle_tick(now);
             self.drain_outgoing_datagrams();
             self.state = QuicConnState::Disconnecting;

@@ -17,7 +17,7 @@ fn options(version: u8) -> MqttConnectOptionsFFI {
 }
 
 fn connected(engine: &mut MqttEngine, version: u8) {
-    engine.connect();
+    engine.connect().unwrap();
     engine.take_outgoing();
     engine.handle_incoming(if version == 5 {
         &[0x20, 3, 0, 0, 0]
