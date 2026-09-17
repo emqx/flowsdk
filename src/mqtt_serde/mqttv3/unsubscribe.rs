@@ -31,6 +31,20 @@ impl MqttUnsubscribe {
 }
 
 impl MqttControlPacket for MqttUnsubscribe {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        packet_id(self.message_id)?;
+        require(
+            !self.topic_filters.is_empty(),
+            "UNSUBSCRIBE must contain a topic filter",
+        )?;
+        for filter in &self.topic_filters {
+            crate::mqtt_serde::validate_topic_filter(filter)?;
+        }
+        Ok(())
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::UNSUBSCRIBE as u8
     }
@@ -98,10 +112,10 @@ impl MqttControlPacket for MqttUnsubscribe {
             ));
         }
 
-        Ok(ParseOk::Packet(
+        crate::mqtt_serde::parser::validated_packet(
             MqttPacket::Unsubscribe3(MqttUnsubscribe::new(message_id, topic_filters)),
             total_len,
-        ))
+        )
     }
 }
 
@@ -185,15 +199,11 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_unsubscribe_no_payload() {
-        let bytes = vec![0xA2, 0x02, 0x00, 0x01]; // No payload
-        match MqttUnsubscribe::from_bytes(&bytes).unwrap() {
-            ParseOk::Packet(MqttPacket::Unsubscribe3(unsubscribe), _) => {
-                assert_eq!(unsubscribe.message_id, 1);
-                assert!(unsubscribe.topic_filters.is_empty());
-            }
-            _ => panic!("Expected UNSUBSCRIBE packet"),
-        }
+        let bytes = vec![0xA2, 0x02, 0x00, 0x01];
+        assert!(MqttUnsubscribe::from_bytes(&bytes).is_err());
+        assert!(MqttUnsubscribe::new(1, vec![]).to_bytes().is_err());
     }
 }

@@ -533,13 +533,9 @@ impl MalformedPacketGenerator {
     /// # }
     /// ```
     pub fn topic_with_wildcards() -> io::Result<Vec<u8>> {
-        let mut publish = MqttPublish::new(0, "test".to_string(), None, vec![], false, false);
-        publish.topic_name = "test/+/topic/#".to_string(); // Invalid wildcards
-        publish.qos = 0;
-        publish.payload = vec![];
-
-        let builder = RawPacketBuilder::from_packet(MqttPacket::Publish5(publish))?;
-        Ok(builder.build())
+        // Build raw bytes because the normal encoder rejects wildcard topic names.
+        // Remaining Length = 2 topic-length bytes + 14 topic bytes + 1 property-length byte.
+        Ok(b"\x30\x11\x00\x0etest/+/topic/#\x00".to_vec())
     }
 
     /// Create packet with reserved packet type
@@ -725,6 +721,9 @@ mod tests {
         // Packet should contain '+' or '#'
         let has_wildcard = packet.iter().any(|&b| b == b'+' || b == b'#');
         assert!(has_wildcard);
+        assert_eq!(&packet[4..18], b"test/+/topic/#");
+        #[cfg(feature = "strict-protocol-compliance")]
+        assert!(MqttPacket::from_bytes_v5(&packet).is_err());
     }
 
     #[test]

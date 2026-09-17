@@ -2,7 +2,7 @@
 
 use crate::mqtt_serde::mqttv5::packet_id_ack::v5_packet_id_ack;
 
-v5_packet_id_ack!(MqttPubRec, PUBREC, 0x00, "PUBREC", PubRec5, false);
+v5_packet_id_ack!(MqttPubRec, PUBREC, 0x00, "PUBREC", PubRec5);
 
 #[cfg(test)]
 mod tests {

@@ -75,6 +75,43 @@ impl MqttPacket {
         }
     }
 
+    pub(crate) fn validate(&self) -> Result<(), ParseError> {
+        match self {
+            // V5
+            MqttPacket::Connect5(p) => p.validate(),
+            MqttPacket::ConnAck5(p) => p.validate(),
+            MqttPacket::Publish5(p) => p.validate(),
+            MqttPacket::PubAck5(p) => p.validate(),
+            MqttPacket::PubRec5(p) => p.validate(),
+            MqttPacket::PubRel5(p) => p.validate(),
+            MqttPacket::PubComp5(p) => p.validate(),
+            MqttPacket::Subscribe5(p) => p.validate(),
+            MqttPacket::SubAck5(p) => p.validate(),
+            MqttPacket::Unsubscribe5(p) => p.validate(),
+            MqttPacket::UnsubAck5(p) => p.validate(),
+            MqttPacket::PingReq5(p) => p.validate(),
+            MqttPacket::PingResp5(p) => p.validate(),
+            MqttPacket::Disconnect5(p) => p.validate(),
+            MqttPacket::Auth(p) => p.validate(),
+
+            // V3
+            MqttPacket::Connect3(p) => p.validate(),
+            MqttPacket::ConnAck3(p) => p.validate(),
+            MqttPacket::Publish3(p) => p.validate(),
+            MqttPacket::PubAck3(p) => p.validate(),
+            MqttPacket::PubRec3(p) => p.validate(),
+            MqttPacket::PubRel3(p) => p.validate(),
+            MqttPacket::PubComp3(p) => p.validate(),
+            MqttPacket::Subscribe3(p) => p.validate(),
+            MqttPacket::SubAck3(p) => p.validate(),
+            MqttPacket::Unsubscribe3(p) => p.validate(),
+            MqttPacket::UnsubAck3(p) => p.validate(),
+            MqttPacket::PingReq3(p) => p.validate(),
+            MqttPacket::PingResp3(p) => p.validate(),
+            MqttPacket::Disconnect3(p) => p.validate(),
+        }
+    }
+
     pub fn to_bytes(&self) -> Result<Vec<u8>, ParseError> {
         match self {
             // V5
@@ -229,6 +266,11 @@ impl ControlPacketType {
 }
 
 pub trait MqttControlPacket {
+    /// Validates packet fields when strict protocol compliance is enabled.
+    fn validate(&self) -> Result<(), ParseError> {
+        Ok(())
+    }
+
     // MQTT 5.0: 2.1.2, MQTT control packet type
     fn control_packet_type(&self) -> u8;
 
@@ -259,6 +301,7 @@ pub trait MqttControlPacket {
 
     // encoder to existing buffer
     fn encode_to_buffer(&self, bytes: &mut Vec<u8>) -> Result<(), ParseError> {
+        self.validate()?;
         let vhdr = self.variable_header()?;
         let payload = self.payload()?;
         let remaining_length = vhdr.len() + payload.len();
@@ -270,6 +313,7 @@ pub trait MqttControlPacket {
 
     // encoder
     fn to_bytes(&self) -> Result<Vec<u8>, ParseError> {
+        self.validate()?;
         let vhdr = self.variable_header()?;
         let payload = self.payload()?;
         let remaining_length = vhdr.len() + payload.len();

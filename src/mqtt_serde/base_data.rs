@@ -142,6 +142,8 @@ impl Utf8String {
     pub fn decode(bytes: &[u8]) -> Result<(String, usize), ParseError> {
         let (data, len) = BinaryData::decode(bytes)?;
         let s = String::from_utf8(data).map_err(|e| ParseError::Utf8Error(e.utf8_error()))?;
+        #[cfg(feature = "strict-protocol-compliance")]
+        super::validate_mqtt_utf8_string(&s)?;
         Ok((s, len))
     }
 }

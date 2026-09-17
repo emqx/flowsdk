@@ -48,6 +48,11 @@ impl Will {
 
         // MQTT 5.0: 3.1.3.2 Will Properties
         let (properties, consumed) = parse_properties_hdr(buffer)?;
+        #[cfg(feature = "strict-protocol-compliance")]
+        crate::mqtt_serde::validation::properties(
+            &properties,
+            crate::mqtt_serde::validation::PropertyContext::Will,
+        )?;
         offset += consumed;
 
         // MQTT 5.0: 3.1.3.3 Will Topic

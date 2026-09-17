@@ -4,7 +4,7 @@ This document describes the protocol compliance features implemented in the MQTT
 
 ## Feature Flag: `strict-protocol-compliance`
 
-The library includes a feature flag `strict-protocol-compliance` that enables additional MQTT 5.0 protocol compliance validations. This feature is **enabled by default** but can be disabled if needed.
+The library includes a feature flag `strict-protocol-compliance` that enables additional MQTT 3.1.1 and MQTT 5.0 protocol compliance validations. This feature is **enabled by default** but can be disabled if needed.
 
 ### Enabling/Disabling the Feature
 
@@ -21,19 +21,40 @@ cargo test --no-default-features
 
 ## Implemented Validations
 
+Complete packet encoding (`to_bytes`, `encode_to_buffer`) and decoding share field validation, including direct typed packet decoders. Raw/partial inspection APIs do not provide complete packet validation. These checks do not establish broker conformance or validate session-dependent rules such as whether a Topic Alias has already been registered.
+
+| Boundary | Validation |
+|---|---|
+| MQTT 3.1.1 and 5.0 | Nonzero packet identifiers, required subscription/acknowledgment payloads, valid topic names and filters, reserved flags, Will flags, and QoS/DUP combinations |
+| CONNACK | A failed connection cannot set Session Present |
+| MQTT 5.0 properties | Allowed packet/Will contexts, singleton uniqueness, boolean and numeric ranges, and Response Topic syntax |
+| MQTT 5.0 reason codes | Allowed codes for CONNACK, AUTH, DISCONNECT, PUBACK/PUBREC/PUBREL/PUBCOMP, SUBACK, and UNSUBACK |
+| MQTT 5.0 subscriptions | QoS and Retain Handling are 0–2; reserved bits are zero |
+
+User Properties may repeat. Subscription Identifiers may repeat in PUBLISH but may appear only once in SUBSCRIBE. An empty MQTT 5.0 PUBLISH topic is permitted only with a nonzero Topic Alias; the endpoint checks the alias mapping. MQTT 3.1.1 PUBLISH topics must be nonempty.
+
+The rules follow the [MQTT 3.1.1 specification](https://docs.oasis-open.org/mqtt/mqtt/v3.1.1/mqtt-v3.1.1.html) and [MQTT 5.0 specification](https://docs.oasis-open.org/mqtt/mqtt/v5.0/mqtt-v5.0.html), including MQTT 5.0 Table 2-4 for property contexts and the per-packet reason-code tables in section 3.
+
+The regression suite uses raw byte fixtures for malformed input:
+
+```sh
+cargo test -p flowsdk --test codec_validation
+cargo test -p flowsdk --no-default-features --features strict-protocol-compliance --test codec_validation
+```
+
+
 ### General Validations
 
 #### UTF-8 String Validation
-When `strict-protocol-compliance` is enabled, all UTF-8 strings are validated to ensure they comply with MQTT 5.0 specification:
+With `strict-protocol-compliance`, decoded MQTT UTF-8 strings and strings encoded in complete packets are validated for both protocol versions:
 
 - **Null characters (U+0000)** are rejected
-- **UTF-16 surrogate pairs (U+D800-U+DFFF)** are rejected  
-- **BOM (Byte Order Mark, U+FEFF)** at the beginning of strings is rejected
+- Malformed UTF-8 and **surrogate code points (U+D800-U+DFFF)** are rejected
+- **U+FEFF** is allowed and preserved, including at the beginning of a string
+- Binary payloads, passwords, correlation data, and authentication data may contain zero bytes
 
 **Error Messages:**
 - `"UTF-8 string contains null character (U+0000)"`
-- `"UTF-8 string contains surrogate character (U+XXXX)"`
-- `"UTF-8 string starts with BOM (U+FEFF)"`
 
 #### Variable Byte Integer (VBI) Validation
 Non-minimal VBI encodings are detected and rejected. A VBI is considered non-minimal if it uses more bytes than necessary to represent a value.
@@ -107,7 +128,7 @@ The payload must contain at least one subscription.
 - `"SUBSCRIBE payload must contain at least one subscription"`
 
 #### Subscription Options Validation
-Reserved bits in Subscription Options must be 0.
+Reserved bits in Subscription Options must be 0. Maximum QoS and Retain Handling must each be 0, 1, or 2.
 
 **Error Message:**
 - `"SUBSCRIBE Subscription Options reserved bits must be 0"`
@@ -135,13 +156,13 @@ Comprehensive validation of topic filter syntax including:
 #### Shared Subscription Validation
 Shared subscriptions must follow the format `$share/ShareName/TopicFilter`:
 
-- ShareName cannot be empty
+- ShareName cannot be empty or contain `+` or `#`
 - TopicFilter cannot be empty
 - The TopicFilter part is validated according to normal topic filter rules
 
 **Error Messages:**
 - `"Invalid shared subscription format: must be $share/ShareName/TopicFilter"`
-- `"Shared subscription ShareName cannot be empty"`
+- `"Shared subscription ShareName cannot be empty or contain wildcards"`
 - `"Shared subscription TopicFilter cannot be empty"`
 
 ### SUBACK Packet Validation
@@ -277,26 +298,26 @@ cargo test protocol_compliance_tests
 
 When `strict-protocol-compliance` is **disabled**, the library maintains backward compatibility and only performs basic validations that were already implemented. This ensures that existing code continues to work without changes.
 
-When `strict-protocol-compliance` is **enabled** (default), the library provides maximum compliance with the MQTT 5.0 specification, which may reject some packets that were previously accepted.
+When `strict-protocol-compliance` is **enabled** (default), the checks above apply to MQTT 3.1.1 and MQTT 5.0. Malformed packets previously accepted by the codec may now return `ParseError`.
 
 ## Examples
 
 ```rust
-use flowsdk::mqtt_serde::encode_utf8_string;
+use flowsdk::mqtt_serde::parser::parse_utf8_string;
 
 // With strict-protocol-compliance enabled (default):
-let result = encode_utf8_string("hello\u{0000}world");
+let result = parse_utf8_string(b"\x00\x03a\x00b");
 assert!(result.is_err()); // Rejected due to null character
 
 // With strict-protocol-compliance disabled:
-// The same string would be accepted (only length validation)
+// The same well-formed UTF-8 string containing U+0000 is accepted
 ```
 
 ```rust
-use flowsdk::mqtt_serde::mqttv5::subscribe::TopicSubscription;
+use flowsdk::mqtt_serde::mqttv5::subscribev5::TopicSubscription;
 
 // With strict-protocol-compliance enabled:
-let result = TopicSubscription::from_bytes(b"$share/group/topic\x80"); // Invalid subscription options
+let result = TopicSubscription::from_bytes(b"\x00\x01a\x80"); // Invalid subscription options
 assert!(result.is_err()); // Rejected due to reserved bits
 
 // With strict-protocol-compliance disabled:

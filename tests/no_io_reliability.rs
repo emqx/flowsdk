@@ -690,16 +690,17 @@ fn receive_maximum_and_malformed_connack_are_rejected() {
         .handle_incoming(&incoming(1, 2, false))
         .iter()
         .any(|e| matches!(e, MqttEvent::Error(_))));
-    for properties in [
-        vec![Property::ReceiveMaximum(0)],
-        vec![Property::ServerKeepAlive(1), Property::ServerKeepAlive(2)],
-        vec![Property::RetainAvailable(2)],
+    // Raw packets keep this endpoint test independent of encoder validation.
+    for bytes in [
+        vec![0x20, 6, 0, 0, 3, 0x21, 0, 0],
+        vec![0x20, 9, 0, 0, 6, 0x13, 0, 1, 0x13, 0, 2],
+        vec![0x20, 5, 0, 0, 2, 0x25, 2],
     ] {
         let mut client = NoIoMqttClient::new(MqttClientOptions::default());
         client.connect().unwrap();
         drain(&mut client);
         assert!(client
-            .handle_incoming(&connack(false, properties))
+            .handle_incoming(&bytes)
             .iter()
             .any(|e| matches!(e, MqttEvent::Error(_))));
         assert!(!client.is_connected());

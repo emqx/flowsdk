@@ -88,6 +88,8 @@ impl TopicSubscription {
 
     /// Encodes this topic subscription to bytes for inclusion in SUBSCRIBE payload.
     pub fn to_bytes(&self) -> Result<Vec<u8>, ParseError> {
+        #[cfg(feature = "strict-protocol-compliance")]
+        crate::mqtt_serde::validation::subscription(self)?;
         let mut bytes = Vec::new();
 
         // Topic Filter (UTF-8 String)
@@ -145,6 +147,8 @@ impl TopicSubscription {
             retain_handling,
         );
 
+        #[cfg(feature = "strict-protocol-compliance")]
+        crate::mqtt_serde::validation::subscription(&subscription)?;
         Ok((subscription, offset))
     }
 }
@@ -190,6 +194,21 @@ impl MqttSubscribe {
 }
 
 impl MqttControlPacket for MqttSubscribe {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        packet_id(self.packet_id)?;
+        require(
+            !self.subscriptions.is_empty(),
+            "SUBSCRIBE must contain a subscription",
+        )?;
+        properties(&self.properties, PropertyContext::Subscribe)?;
+        for sub in &self.subscriptions {
+            subscription(sub)?;
+        }
+        Ok(())
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::SUBSCRIBE as u8
     }
@@ -313,13 +332,22 @@ impl MqttControlPacket for MqttSubscribe {
             properties,
         };
 
-        Ok(ParseOk::Packet(MqttPacket::Subscribe5(subscribe), offset))
+        crate::mqtt_serde::parser::validated_packet(MqttPacket::Subscribe5(subscribe), offset)
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn malformed_subscription(sub: &TopicSubscription) -> Vec<u8> {
+        let mut body = vec![0, 1, 0];
+        body.extend(encode_utf8_string(&sub.topic_filter).unwrap());
+        body.push(sub.encode_subscription_options());
+        let mut bytes = vec![0x82, body.len() as u8];
+        bytes.extend(body);
+        bytes
+    }
 
     #[test]
     fn test_topic_subscription_simple() {
@@ -567,7 +595,7 @@ mod tests {
         let properties = vec![
             Property::SubscriptionIdentifier(12345),
             Property::UserProperty("client_type".to_string(), "test_client".to_string()),
-            Property::ReasonString("Test subscription".to_string()),
+            Property::UserProperty("purpose".to_string(), "Test subscription".to_string()),
         ];
         let original_subscribe = MqttSubscribe::new(0x7FFF, subscriptions, properties);
 
@@ -657,7 +685,8 @@ mod tests {
                 0,
             )],
         );
-        let bytes = sub.to_bytes().unwrap();
+        assert!(sub.to_bytes().is_err());
+        let bytes = malformed_subscription(&sub.subscriptions[0]);
         let result = MqttSubscribe::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));
     }
@@ -669,7 +698,8 @@ mod tests {
             1,
             vec![TopicSubscription::new_simple("a/#/b".to_string(), 1)],
         );
-        let bytes = sub.to_bytes().unwrap();
+        assert!(sub.to_bytes().is_err());
+        let bytes = malformed_subscription(&sub.subscriptions[0]);
         let result = MqttSubscribe::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));
     }
@@ -681,7 +711,8 @@ mod tests {
             1,
             vec![TopicSubscription::new_simple("a/b+".to_string(), 1)],
         );
-        let bytes = sub.to_bytes().unwrap();
+        assert!(sub.to_bytes().is_err());
+        let bytes = malformed_subscription(&sub.subscriptions[0]);
         let result = MqttSubscribe::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));
     }
@@ -691,7 +722,8 @@ mod tests {
         // [MQTT-4.7.3-1]
         let sub =
             MqttSubscribe::new_simple(1, vec![TopicSubscription::new_simple("".to_string(), 1)]);
-        let bytes = sub.to_bytes().unwrap();
+        assert!(sub.to_bytes().is_err());
+        let bytes = malformed_subscription(&sub.subscriptions[0]);
         let result = MqttSubscribe::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));
     }
@@ -710,7 +742,8 @@ mod tests {
                 1,
                 vec![TopicSubscription::new_simple(topic.to_string(), 1)],
             );
-            let bytes = sub.to_bytes().unwrap();
+            assert!(sub.to_bytes().is_err());
+            let bytes = malformed_subscription(&sub.subscriptions[0]);
             let result = MqttSubscribe::from_bytes(&bytes);
             assert!(matches!(result, Err(ParseError::ParseError(_))));
         }

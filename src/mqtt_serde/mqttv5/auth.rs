@@ -100,6 +100,13 @@ impl Default for MqttAuth {
 }
 
 impl MqttControlPacket for MqttAuth {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        reason(ControlPacketType::AUTH, self.reason_code)?;
+        properties(&self.properties, PropertyContext::Auth)
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::AUTH as u8
     }
@@ -151,10 +158,10 @@ impl MqttControlPacket for MqttAuth {
 
         // MQTT 5.0 section 3.15.2.1 permits omitting Success and empty properties.
         if size == 0 {
-            return Ok(ParseOk::Packet(
+            return crate::mqtt_serde::parser::validated_packet(
                 MqttPacket::Auth(MqttAuth::new_success()),
                 total_len,
-            ));
+            );
         }
 
         // Parse reason code
@@ -180,7 +187,7 @@ impl MqttControlPacket for MqttAuth {
         }
 
         let auth = MqttAuth::new(reason_code, properties);
-        Ok(ParseOk::Packet(MqttPacket::Auth(auth), total_len))
+        crate::mqtt_serde::parser::validated_packet(MqttPacket::Auth(auth), total_len)
     }
 }
 

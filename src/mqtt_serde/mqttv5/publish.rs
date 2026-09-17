@@ -66,6 +66,23 @@ impl MqttPublish {
 }
 
 impl MqttControlPacket for MqttPublish {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        publish(self.qos, self.dup, self.packet_id)?;
+        properties(&self.properties, PropertyContext::Publish)?;
+        if self.topic_name.is_empty() {
+            require(
+                self.properties
+                    .iter()
+                    .any(|p| matches!(p, Property::TopicAlias(_))),
+                "Empty topic requires a Topic Alias",
+            )
+        } else {
+            topic(&self.topic_name)
+        }
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::PUBLISH as u8
     }
@@ -113,6 +130,7 @@ impl MqttControlPacket for MqttPublish {
         // but we can optimize encode_to_buffer further later if needed.
         // For now, let's at least avoid the clone in Default implementation of encode_to_buffer
 
+        self.validate()?;
         let vhdr = self.variable_header()?;
         let remaining_length = vhdr.len() + self.payload.len();
 
@@ -222,10 +240,11 @@ impl MqttControlPacket for MqttPublish {
             properties,
         };
 
-        Ok(ParseOk::Packet(MqttPacket::Publish5(publish), offset))
+        crate::mqtt_serde::parser::validated_packet(MqttPacket::Publish5(publish), offset)
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, ParseError> {
+        self.validate()?;
         let vhdr = self.variable_header()?;
         let remaining_length = vhdr.len() + self.payload.len();
         let fixed_hdr = self.fixed_header(remaining_length);
@@ -341,8 +360,9 @@ mod tests {
     #[test]
     fn test_publish_qos0_dup1_is_invalid() {
         // [MQTT-3.3.1-2]
-        let publish = MqttPublish::new(0, "topic".to_string(), None, vec![], false, true);
-        let bytes = publish.to_bytes().unwrap();
+        let publish = MqttPublish::new(0, "topic".to_string(), None, vec![], false, false);
+        let mut bytes = publish.to_bytes().unwrap();
+        bytes[0] |= 0x08;
 
         let result = MqttPublish::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));
@@ -364,13 +384,15 @@ mod tests {
     #[test]
     fn test_publish_topic_with_wildcard_is_invalid() {
         // [MQTT-3.3.2-2]
-        let publish = MqttPublish::new(1, "topic/+".to_string(), Some(1), vec![], false, false);
-        let bytes = publish.to_bytes().unwrap();
+        let publish = MqttPublish::new(1, "topic/a".to_string(), Some(1), vec![], false, false);
+        let mut bytes = publish.to_bytes().unwrap();
+        bytes[10] = b'+';
         let result = MqttPublish::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));
 
-        let publish = MqttPublish::new(1, "topic/#".to_string(), Some(1), vec![], false, false);
-        let bytes = publish.to_bytes().unwrap();
+        let publish = MqttPublish::new(1, "topic/a".to_string(), Some(1), vec![], false, false);
+        let mut bytes = publish.to_bytes().unwrap();
+        bytes[10] = b'#';
         let result = MqttPublish::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));
     }

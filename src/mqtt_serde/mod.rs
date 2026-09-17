@@ -5,6 +5,8 @@ pub mod control_packet;
 pub mod mqttv3;
 pub mod mqttv5;
 pub mod parser;
+#[cfg(feature = "strict-protocol-compliance")]
+mod validation;
 
 use crate::mqtt_serde::base_data::{BinaryData, TwoByteInteger, Utf8String, VariableByteInteger};
 use crate::mqtt_serde::parser::ParseError;
@@ -34,36 +36,12 @@ pub(crate) fn encode_utf8_string(s: &str) -> Result<Vec<u8>, ParseError> {
 
 #[cfg(feature = "strict-protocol-compliance")]
 fn validate_mqtt_utf8_string(s: &str) -> Result<(), ParseError> {
-    // MQTT 5.0 Spec: UTF-8 strings MUST NOT contain these characters:
-    // - U+0000 (null character)
-    // - U+D800 to U+DFFF (UTF-16 surrogate pairs)
-    // - BOM (Byte Order Mark) at the beginning
-
-    for (i, ch) in s.char_indices() {
-        let code_point = ch as u32;
-
-        match code_point {
-            // Check for null character
-            0x0000 => {
-                return Err(ParseError::ParseError(
-                    "UTF-8 string contains null character (U+0000)".to_string(),
-                ));
-            }
-            // Check for UTF-16 surrogate pairs
-            0xD800..=0xDFFF => {
-                return Err(ParseError::ParseError(format!(
-                    "UTF-8 string contains surrogate character (U+{:04X})",
-                    code_point
-                )));
-            }
-            // Check for BOM at the beginning
-            0xFEFF if i == 0 => {
-                return Err(ParseError::ParseError(
-                    "UTF-8 string starts with BOM (U+FEFF)".to_string(),
-                ));
-            }
-            _ => {} // Valid character
-        }
+    // Rust strings already exclude malformed UTF-8 and surrogate code points.
+    // MQTT requires U+FEFF to be preserved, including at the start of a string.
+    if s.contains('\0') {
+        return Err(ParseError::ParseError(
+            "UTF-8 string contains null character (U+0000)".to_string(),
+        ));
     }
 
     Ok(())
@@ -72,6 +50,7 @@ fn validate_mqtt_utf8_string(s: &str) -> Result<(), ParseError> {
 /// Validates MQTT topic filter syntax according to MQTT 5.0 specification
 #[cfg(feature = "strict-protocol-compliance")]
 pub fn validate_topic_filter(topic_filter: &str) -> Result<(), ParseError> {
+    validate_mqtt_utf8_string(topic_filter)?;
     if topic_filter.is_empty() {
         return Err(ParseError::ParseError(
             "Topic filter cannot be empty".to_string(),
@@ -146,9 +125,9 @@ pub fn validate_shared_subscription(topic_filter: &str) -> Result<(), ParseError
             )
         })?;
 
-        if share_name.is_empty() {
+        if share_name.is_empty() || share_name.contains(['+', '#']) {
             return Err(ParseError::ParseError(
-                "Shared subscription ShareName cannot be empty".to_string(),
+                "Shared subscription ShareName cannot be empty or contain wildcards".to_string(),
             ));
         }
 
@@ -203,10 +182,8 @@ mod protocol_compliance_tests {
     fn test_utf8_string_validation_bom() {
         let test_string = "\u{FEFF}hello";
         let result = encode_utf8_string(test_string);
-        assert!(result.is_err());
-        if let Err(ParseError::ParseError(msg)) = result {
-            assert!(msg.contains("BOM"));
-        }
+        let bytes = result.unwrap();
+        assert_eq!(Utf8String::decode(&bytes).unwrap().0, test_string);
     }
 
     #[cfg(feature = "strict-protocol-compliance")]

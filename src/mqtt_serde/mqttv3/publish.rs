@@ -46,6 +46,13 @@ impl MqttPublish {
 }
 
 impl MqttControlPacket for MqttPublish {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        publish(self.qos, self.dup, self.message_id)?;
+        topic(&self.topic_name)
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::PUBLISH as u8
     }
@@ -112,7 +119,7 @@ impl MqttControlPacket for MqttPublish {
         // Payload
         let payload = buffer[offset..total_len].to_vec();
 
-        Ok(ParseOk::Packet(
+        crate::mqtt_serde::parser::validated_packet(
             MqttPacket::Publish3(MqttPublish {
                 dup,
                 qos,
@@ -122,7 +129,7 @@ impl MqttControlPacket for MqttPublish {
                 payload,
             }),
             total_len,
-        ))
+        )
     }
 }
 
