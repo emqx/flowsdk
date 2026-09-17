@@ -43,7 +43,7 @@ fn run_example() -> io::Result<()> {
     let mut transport = TcpStream::connect(&broker)?;
     transport.set_nodelay(true)?;
 
-    client.connect();
+    client.connect().unwrap();
     let connect_bytes = client.take_outgoing();
 
     if connect_bytes.is_empty() {

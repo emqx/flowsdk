@@ -1,14 +1,14 @@
 # Tokio Async MQTT Client
 
-A production-ready, fully-featured MQTT v5 client built on Tokio. This client provides both async (fire-and-forget) and sync (wait-for-acknowledgment) APIs for all MQTT operations.
+An MQTT v5 client built on Tokio. For custom I/O and Rust protocol-engine behavior, see [the sans-I/O guide](../../docs/NO_IO_CLIENT.md). This client provides both async (fire-and-forget) and sync (wait-for-acknowledgment) APIs for all MQTT operations.
 
 ## Features
 
-- ✅ **MQTT v5 Protocol Support** - Full compliance with MQTT v5 specification
+- ✅ **MQTT v5 Protocol Support** - MQTT v5 packet handling and negotiated broker limits
 - 🚀 **High Performance** - Built on Tokio for efficient async I/O
 - 🔄 **Auto Reconnection** - Configurable automatic reconnection with exponential backoff
 - 📦 **Message Buffering** - Queue messages during disconnection
-- 🔐 **Enhanced Authentication** - Support for SCRAM, OAuth, and custom auth flows
+- 🔐 **Enhanced Authentication** - AUTH packet exchange for application-managed authentication flows
 - ⚡ **Sync & Async APIs** - Choose between fire-and-forget or wait-for-acknowledgment
 - 🎯 **Event-Driven** - Flexible event handler trait for all MQTT events
 - 📊 **QoS 0, 1, 2** - Full Quality of Service support

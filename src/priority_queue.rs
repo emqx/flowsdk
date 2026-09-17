@@ -80,6 +80,10 @@ where
         Some((prio, item))
     }
 
+    pub(crate) fn iter_mut(&mut self) -> impl Iterator<Item = &mut T> {
+        self.map.values_mut().flat_map(|queue| queue.iter_mut())
+    }
+
     /// Current number of elements in the queue.
     pub fn len(&self) -> usize {
         self.size

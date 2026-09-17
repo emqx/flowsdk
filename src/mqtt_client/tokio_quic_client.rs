@@ -211,8 +211,7 @@ async fn run_engine_loop(
                         let _ = resp.send(engine.unsubscribe(cmd).map_err(|e| e.into()));
                     }
                     QuicCommand::Disconnect { resp } => {
-                        engine.disconnect();
-                        let _ = resp.send(Ok(()));
+                        let _ = resp.send(engine.disconnect().map_err(Into::into));
                     }
                 }
             }

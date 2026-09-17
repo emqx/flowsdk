@@ -115,3 +115,7 @@ required-features = ["quic"]
 [[example]]
 name = "tokio_async_mqtt_quic_example"
 required-features = ["quic"]
+
+[[example]]
+name = "no_io_tls_client_example"
+required-features = ["rustls-tls"]

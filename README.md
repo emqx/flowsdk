@@ -14,7 +14,7 @@ It allows you to build **messaging-based micro-middleware** that runs within you
 
 ## Key Features
 
-*   **Robust MQTT v5.0 Client**: Full support for MQTT v5.0 features (shared subscriptions, request/response, properties).
+*   **MQTT 3.1.1 and 5.0 Clients**: Publish/subscribe, QoS delivery, shared subscriptions, and MQTT 5 properties. Request/response correlation is application-managed.
 *   **Async & Sync Dual API**: Built on `tokio` for high-performance async I/O, with convenience wrappers for synchronous-style operations.
 *   **Multi-Transport Support**:
     *   **TCP**: Standard reliable transport.
@@ -22,7 +22,7 @@ It allows you to build **messaging-based micro-middleware** that runs within you
     *   **QUIC**: Next-gen low-latency, encrypted transport (via `quinn`).
 *   **AI/LLM Friendly**: Codebase and docs are structured for easy consumption by AI tools, making it a great target for agentic coding.
 *   **Cross-Platform & FFI**: Native Rust implementation with C bindings (`flowsdk_ffi`) for integration with other languages.
-*   **Production Ready**: Includes advanced flow control, priority queuing, and comprehensive event handling.
+*   **Flow Control and Recovery**: Bounded queues, negotiated broker limits, in-memory session recovery, and explicit error events.
 
 ---
 
@@ -96,6 +96,7 @@ Detailed documentation is available in the [`docs/`](docs/) directory.
 
 | Document | Description |
 | :--- | :--- |
+| [Rust Sans-I/O Client](docs/NO_IO_CLIENT.md) | Custom I/O, checked commands, recovery, deadlines, and TLS/mTLS examples. |
 | [Client API Guide](docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md) | **Start Here**. Complete reference for the `TokioAsyncMqttClient` API. |
 | [Async Client Architecture](docs/ASYNC_CLIENT.md) | Deep dive into the event-driven design and callback system. |
 | [Builder Pattern](docs/BUILDER_PATTERN.md) | Guide to using the configuration builders for options and commands. |

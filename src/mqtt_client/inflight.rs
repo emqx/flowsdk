@@ -96,10 +96,18 @@ impl InflightQueue {
         qos: u8,
         stream: Option<u64>,
     ) -> Result<(), MqttClientError> {
+        if packet_id == 0 || self.entries.contains_key(&packet_id) {
+            return Err(MqttClientError::InvalidPacketId { packet_id });
+        }
         // Validation for PUBLISH should happen in MqttEngine before calling push,
         // but we keep a check here as a safety measure.
-        if matches!(packet, MqttPacket::Publish5(_) | MqttPacket::Publish3(_))
-            && !self.can_push_publish()
+        if matches!(
+            packet,
+            MqttPacket::Publish5(_)
+                | MqttPacket::Publish3(_)
+                | MqttPacket::PubRel5(_)
+                | MqttPacket::PubRel3(_)
+        ) && !self.can_push_publish()
         {
             return Err(MqttClientError::BufferFull {
                 buffer_type: "inflight_publish".to_string(),
@@ -108,7 +116,13 @@ impl InflightQueue {
         }
 
         let now = Instant::now();
-        if matches!(packet, MqttPacket::Publish5(_) | MqttPacket::Publish3(_)) {
+        if matches!(
+            packet,
+            MqttPacket::Publish5(_)
+                | MqttPacket::Publish3(_)
+                | MqttPacket::PubRel5(_)
+                | MqttPacket::PubRel3(_)
+        ) {
             self.publish_count += 1;
         }
 
@@ -128,6 +142,20 @@ impl InflightQueue {
             self.deadline_queue.push_back((packet_id, now));
         }
         Ok(())
+    }
+
+    pub fn get(&self, packet_id: u16) -> Option<&InflightEntry> {
+        self.entries.get(&packet_id)
+    }
+
+    pub fn transition_pubrel(&mut self, packet_id: u16, packet: MqttPacket) {
+        if let Some(entry) = self.entries.get_mut(&packet_id) {
+            entry.packet = packet;
+            entry.sent_at = Instant::now();
+            if self.mqtt_version != 5 {
+                self.deadline_queue.push_back((packet_id, entry.sent_at));
+            }
+        }
     }
 
     pub fn contains(&self, packet_id: u16) -> bool {
@@ -150,7 +178,10 @@ impl InflightQueue {
         if let Some(entry) = self.entries.remove(&packet_id) {
             if matches!(
                 entry.packet,
-                MqttPacket::Publish5(_) | MqttPacket::Publish3(_)
+                MqttPacket::Publish5(_)
+                    | MqttPacket::Publish3(_)
+                    | MqttPacket::PubRel5(_)
+                    | MqttPacket::PubRel3(_)
             ) {
                 self.publish_count -= 1;
             }
