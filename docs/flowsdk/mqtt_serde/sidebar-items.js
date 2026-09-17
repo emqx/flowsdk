@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"fn":["packet_id","topic_name"],"mod":["base_data","control_packet","mqttv3","mqttv5","parser"]};
+window.SIDEBAR_ITEMS = {"fn":["packet_id","topic_name","validate_shared_subscription","validate_topic_filter"],"mod":["base_data","control_packet","mqttv3","mqttv5","parser"]};

@@ -71,7 +71,7 @@
 <a href=#71 id=71 data-nosnippet>71</a>
 <a href=#72 id=72 data-nosnippet>72</a><span class="doccomment">/// Validates MQTT topic filter syntax according to MQTT 5.0 specification
 <a href=#73 id=73 data-nosnippet>73</a></span><span class="attr">#[cfg(feature = <span class="string">"strict-protocol-compliance"</span>)]
-<a href=#74 id=74 data-nosnippet>74</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>validate_topic_filter(topic_filter: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;(), ParseError&gt; {
+<a href=#74 id=74 data-nosnippet>74</a></span><span class="kw">pub fn </span>validate_topic_filter(topic_filter: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;(), ParseError&gt; {
 <a href=#75 id=75 data-nosnippet>75</a>    <span class="kw">if </span>topic_filter.is_empty() {
 <a href=#76 id=76 data-nosnippet>76</a>        <span class="kw">return </span><span class="prelude-val">Err</span>(ParseError::ParseError(
 <a href=#77 id=77 data-nosnippet>77</a>            <span class="string">"Topic filter cannot be empty"</span>.to_string(),
@@ -128,7 +128,7 @@
 <a href=#128 id=128 data-nosnippet>128</a>
 <a href=#129 id=129 data-nosnippet>129</a><span class="doccomment">/// Validates shared subscription syntax according to MQTT 5.0 specification
 <a href=#130 id=130 data-nosnippet>130</a></span><span class="attr">#[cfg(feature = <span class="string">"strict-protocol-compliance"</span>)]
-<a href=#131 id=131 data-nosnippet>131</a></span><span class="kw">pub</span>(<span class="kw">crate</span>) <span class="kw">fn </span>validate_shared_subscription(topic_filter: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;(), ParseError&gt; {
+<a href=#131 id=131 data-nosnippet>131</a></span><span class="kw">pub fn </span>validate_shared_subscription(topic_filter: <span class="kw-2">&amp;</span>str) -&gt; <span class="prelude-ty">Result</span>&lt;(), ParseError&gt; {
 <a href=#132 id=132 data-nosnippet>132</a>    <span class="kw">if </span>topic_filter.starts_with(<span class="string">"$share/"</span>) {
 <a href=#133 id=133 data-nosnippet>133</a>        <span class="comment">// Extract share name and topic filter
 <a href=#134 id=134 data-nosnippet>134</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>parts = topic_filter.splitn(<span class="number">3</span>, <span class="string">'/'</span>);
