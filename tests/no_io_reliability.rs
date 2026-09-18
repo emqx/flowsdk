@@ -563,6 +563,132 @@ fn resumed_publications_obey_a_reduced_send_quota() {
 }
 
 #[test]
+fn pubrel_replay_ignores_reduced_receive_maximum() {
+    for output_capacity in [1, 10] {
+        let mut client = connected(
+            MqttClientOptions::builder()
+                .max_outgoing_packet_count(output_capacity)
+                .build(),
+            vec![Property::ReceiveMaximum(2)],
+        );
+        let mut ids = Vec::new();
+        for _ in 0..2 {
+            let id = client
+                .publish(PublishCommand::simple("t", vec![], 2, false))
+                .unwrap()
+                .unwrap();
+            drain(&mut client);
+            client.handle_incoming(&[0x50, 2, (id >> 8) as u8, id as u8]);
+            assert!(matches!(drain(&mut client).as_slice(),
+                [MqttPacket::PubRel5(rel)] if rel.packet_id == id));
+            ids.push(id);
+        }
+        client.handle_connection_lost();
+        client.connect().unwrap();
+        drain(&mut client);
+        client.handle_incoming(&connack(true, vec![Property::ReceiveMaximum(1)]));
+
+        let replayed = drain(&mut client);
+        let expected: Vec<_> = ids
+            .iter()
+            .map(|&id| {
+                MqttPacket::PubRel5(
+                    flowsdk::mqtt_serde::mqttv5::pubrelv5::MqttPubRel::new_success(id),
+                )
+            })
+            .collect();
+        assert_eq!(replayed, expected, "output capacity {output_capacity}");
+        // Both exchanges must remain registered until their own PUBCOMP arrives.
+        for id in ids {
+            let events = client.handle_incoming(&[0x70, 2, (id >> 8) as u8, id as u8]);
+            assert!(events.iter().any(|event| matches!(event,
+                MqttEvent::Published(result) if result.packet_id == Some(id) && result.qos == 2)));
+            assert!(client.is_connected());
+        }
+        assert!(drain(&mut client).is_empty());
+    }
+}
+
+#[test]
+fn pubrel_replay_is_not_blocked_by_earlier_publish_replay() {
+    let mut client = connected(MqttClientOptions::default(), vec![]);
+    let mut publishes = Vec::new();
+    let mut pubrels = Vec::new();
+    for qos in [1, 1, 2, 2] {
+        let id = client
+            .publish(PublishCommand::simple("t", vec![], qos, false))
+            .unwrap()
+            .unwrap();
+        drain(&mut client);
+        if qos == 2 {
+            client.handle_incoming(&[0x50, 2, (id >> 8) as u8, id as u8]);
+            drain(&mut client);
+            pubrels.push(id);
+        } else {
+            publishes.push(id);
+        }
+    }
+    client.handle_connection_lost();
+    client.connect().unwrap();
+    drain(&mut client);
+    client.handle_incoming(&connack(true, vec![Property::ReceiveMaximum(1)]));
+    let replayed = drain(&mut client);
+    let replayed_pubrels: Vec<_> = replayed
+        .iter()
+        .filter_map(|packet| match packet {
+            MqttPacket::PubRel5(rel) => Some(rel.packet_id),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(replayed_pubrels, pubrels);
+    let replayed_publishes: Vec<_> = replayed
+        .iter()
+        .filter_map(|packet| match packet {
+            MqttPacket::Publish5(p) => Some((p.packet_id.unwrap(), p.dup)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(replayed_publishes, [(publishes[0], true)]);
+    let id = publishes[0];
+    client.handle_incoming(&[0x40, 2, (id >> 8) as u8, id as u8]);
+    assert!(matches!(drain(&mut client).as_slice(),
+        [MqttPacket::Publish5(p)] if p.packet_id == Some(publishes[1]) && p.dup));
+}
+
+#[test]
+fn pubrel_replay_does_not_consume_the_new_connections_publish_quota() {
+    let mut client = connected(MqttClientOptions::default(), vec![]);
+    let id = client
+        .publish(PublishCommand::simple("old", vec![], 2, false))
+        .unwrap()
+        .unwrap();
+    drain(&mut client);
+    client.handle_incoming(&[0x50, 2, (id >> 8) as u8, id as u8]);
+    drain(&mut client);
+    client.handle_connection_lost();
+    client.connect().unwrap();
+    drain(&mut client);
+    client.handle_incoming(&connack(true, vec![Property::ReceiveMaximum(1)]));
+    assert!(matches!(drain(&mut client).as_slice(),
+        [MqttPacket::PubRel5(rel)] if rel.packet_id == id));
+    let first = client
+        .publish(PublishCommand::simple("new", vec![], 1, false))
+        .unwrap()
+        .unwrap();
+    let second = client
+        .publish(PublishCommand::simple("new", vec![], 1, false))
+        .unwrap()
+        .unwrap();
+    assert!(matches!(drain(&mut client).as_slice(),
+        [MqttPacket::Publish5(p)] if p.packet_id == Some(first)));
+    // PUBCOMP replenishes the new connection's quota, capped by Receive Maximum.
+    client.handle_incoming(&[0x70, 2, (id >> 8) as u8, id as u8]);
+    assert!(matches!(drain(&mut client).as_slice(),
+        [MqttPacket::Publish5(p)] if p.packet_id == Some(second)));
+    assert!(client.is_connected());
+}
+
+#[test]
 fn queued_publications_leave_capacity_for_session_replay() {
     let mut client = connected(
         MqttClientOptions::builder()

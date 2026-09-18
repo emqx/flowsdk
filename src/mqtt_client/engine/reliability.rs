@@ -813,7 +813,9 @@ impl MqttEngine {
                 MqttPacket::Publish3(p) => p.qos,
                 _ => 2,
             };
-            if !self.inflight_queue.can_push_publish() {
+            if matches!(packet, MqttPacket::Publish5(_) | MqttPacket::Publish3(_))
+                && !self.inflight_queue.can_push_publish()
+            {
                 break;
             }
             match self.enqueue_packet(packet.clone()) {

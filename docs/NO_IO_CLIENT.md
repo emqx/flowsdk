@@ -52,6 +52,11 @@ limit to the broker. The engine honors negotiated keep-alive, packet-size, QoS,
 retain and subscription capabilities. Topic aliases are scoped to the connection;
 resumed publications carry their full topic names.
 
+On an active connection, a QoS 2 PUBLISH holds its send quota until PUBCOMP.
+After session resumption, pending PUBREL packets are replayed with their original
+identifiers ahead of PUBLISH replay and do not consume the new connection's
+PUBLISH quota. Transport buffer limits still apply to replay output.
+
 With `auto_ack(false)`, use `puback(id, reason, properties)`,
 `pubrec(id, reason, properties)` and `pubcomp(id, reason, properties)` after accepting
 or persisting a message. Wait for `PubRelReceived` before PUBCOMP. Failed ACK commands
