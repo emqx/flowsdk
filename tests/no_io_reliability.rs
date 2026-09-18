@@ -1122,6 +1122,109 @@ fn failed_connect_preserves_publications_waiting_for_replay() {
 }
 
 #[test]
+fn interrupted_handshakes_preserve_deferred_replay() {
+    for (qos, resumed) in [(1, true), (2, true), (1, false), (2, false)] {
+        for interruptions in [1, 3] {
+            let mut client = connected(MqttClientOptions::default(), vec![]);
+            let ids: Vec<_> = (0..2)
+                .map(|value| {
+                    let id = client
+                        .publish(PublishCommand::simple("t", vec![value], qos, false))
+                        .unwrap()
+                        .unwrap();
+                    drain(&mut client);
+                    id
+                })
+                .collect();
+            client.handle_connection_lost();
+            client.connect().unwrap();
+            drain(&mut client);
+            client.handle_incoming(&connack(true, vec![Property::ReceiveMaximum(1)]));
+            assert_eq!(drain(&mut client).len(), 1);
+            for _ in 0..interruptions {
+                client.handle_connection_lost();
+                client.connect().unwrap();
+                drain(&mut client);
+            }
+            client.handle_connection_lost();
+            client.connect().unwrap();
+            drain(&mut client);
+            let events = client.handle_incoming(&connack(resumed, vec![]));
+            if !resumed {
+                let mut failed: Vec<_> = events
+                    .iter()
+                    .filter_map(|event| match event {
+                        MqttEvent::OperationFailed {
+                            packet_id: Some(id),
+                            error: MqttClientError::SessionExpired,
+                            ..
+                        } => Some(*id),
+                        _ => None,
+                    })
+                    .collect();
+                failed.sort_unstable();
+                assert_eq!(failed, ids);
+            }
+            let replay = drain(&mut client);
+            let actual: Vec<_> = replay
+                .iter()
+                .map(|p| match p {
+                    MqttPacket::Publish5(p) if p.dup => p.packet_id.unwrap(),
+                    other => panic!("unexpected replay {other:?}"),
+                })
+                .collect();
+            assert_eq!(actual, if resumed { ids.clone() } else { vec![] });
+            for id in ids {
+                if resumed {
+                    let ack = if qos == 1 { 0x40 } else { 0x50 };
+                    client.handle_incoming(&[ack, 2, (id >> 8) as u8, id as u8]);
+                    drain(&mut client);
+                    if qos == 2 {
+                        client.handle_incoming(&[0x70, 2, (id >> 8) as u8, id as u8]);
+                    }
+                }
+                let mut command = PublishCommand::simple("reused", vec![], 1, false);
+                command.packet_id = Some(id);
+                assert_eq!(client.publish(command).unwrap(), Some(id));
+                drain(&mut client);
+            }
+        }
+    }
+}
+
+#[test]
+fn assigned_client_id_leaves_room_for_reconnect() {
+    let mut client = connected(
+        MqttClientOptions::builder()
+            .client_id("")
+            .max_outgoing_buffer_bytes(128)
+            .build(),
+        vec![
+            Property::ReceiveMaximum(1),
+            Property::AssignedClientIdentifier("a".repeat(60)),
+        ],
+    );
+    client
+        .publish(PublishCommand::simple("t", vec![], 1, false))
+        .unwrap();
+    drain(&mut client);
+    assert!(matches!(
+        client.publish(PublishCommand::simple("t", vec![0; 80], 1, false)),
+        Err(MqttClientError::BufferFull { .. })
+    ));
+    client
+        .publish(PublishCommand::simple("t", vec![0; 20], 1, false))
+        .unwrap();
+    client.handle_connection_lost();
+    client.connect().unwrap();
+    assert!(
+        matches!(drain(&mut client).as_slice(), [MqttPacket::Connect5(p)] if p.client_id == "a".repeat(60))
+    );
+    client.handle_incoming(&connack(true, vec![]));
+    assert_eq!(drain(&mut client).len(), 2);
+}
+
+#[test]
 fn expired_session_reports_failures_and_keeps_accepted_unsent_publications() {
     let mut client = connected(
         MqttClientOptions::default(),

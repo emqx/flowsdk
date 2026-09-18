@@ -88,7 +88,7 @@ impl MqttEngine {
         self.events.extend(events);
     }
 
-    pub(super) fn connect_properties(&mut self) -> Result<Vec<Property>, MqttClientError> {
+    pub(super) fn connect_properties(&self) -> Result<Vec<Property>, MqttClientError> {
         use Property::*;
         let mut properties = self.options.connect_properties.clone();
         if let Some(v) = self.options.session_expiry_interval {
@@ -150,14 +150,6 @@ impl MqttEngine {
                 "Authentication Data requires Authentication Method",
             ));
         }
-        for p in &merged {
-            match p {
-                SessionExpiryInterval(v) => self.reliability.session_expiry = *v,
-                ReceiveMaximum(v) => self.reliability.incoming_receive_maximum = *v,
-                TopicAliasMaximum(v) => self.reliability.incoming_alias_maximum = *v,
-                _ => {}
-            }
-        }
         Ok(merged)
     }
 
@@ -210,6 +202,25 @@ impl MqttEngine {
                 _ => return Err(invalid("CONNACK", "Property is not valid in CONNACK")),
             }
         }
+        // The next CONNECT uses the assigned identifier, including any change
+        // in the encoded Remaining Length. Sizing must not alter negotiated state.
+        let reserve = self
+            .connect_packet()?
+            .to_bytes()
+            .map_err(MqttClientError::from)?
+            .len()
+            .max(6);
+        if self
+            .options
+            .max_outgoing_buffer_bytes
+            .is_some_and(|limit| reserve > limit)
+        {
+            return Err(invalid(
+                "max_outgoing_buffer_bytes",
+                "The reconnect CONNECT packet exceeds the outgoing byte limit",
+            ));
+        }
+        self.reliability.control_reserve = reserve;
         Ok(())
     }
 
