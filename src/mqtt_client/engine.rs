@@ -100,8 +100,9 @@ pub enum QuicZeroRttStatus {
 /// Events emitted by the MqttEngine to be handled by the application (I/O layer)
 #[derive(Debug, serde::Serialize)]
 pub enum MqttEvent {
-    /// An operation failed or exceeded its application deadline. A timeout does
-    /// not cancel the MQTT exchange; a late acknowledgement may still complete it.
+    /// An operation failed or exceeded its application deadline. A CONNECT
+    /// timeout ends the connection attempt. Other acknowledgement timeouts keep
+    /// the MQTT exchange active, so a late acknowledgement may still complete it.
     OperationFailed {
         operation: OperationKind,
         packet_id: Option<u16>,
@@ -378,16 +379,12 @@ impl MqttEngine {
     /// session and the inflight queue are **retained** so QoS 1/2 messages can be
     /// resumed if the server reports `session_present`.
     pub fn reset_for_new_transport(&mut self) {
-        self.is_connected = false;
+        self.close_input();
         self.outgoing_buffer.clear();
         self.configured_subscriptions_pending = false;
         self.stream_retransmissions.clear();
         self.inflight_queue
             .update_receive_maximum(self.options.receive_maximum);
-        self.reliability.connecting = false;
-        self.reliability.failed = false;
-        self.reliability.responses.clear();
-        self.reliability.deadlines.clear();
         self.reliability.incoming_aliases.clear();
         self.reliability.outgoing_aliases.clear();
         // Queued application messages retain canonical topics, never old aliases.
@@ -499,7 +496,7 @@ impl MqttEngine {
     /// and return early, leaving remaining bytes in the internal buffer. The caller should
     /// consume events via `take_events()` and call `handle_incoming(&[])` again to resume processing.
     pub fn handle_incoming(&mut self, data: &[u8]) -> Vec<MqttEvent> {
-        if self.reliability.failed {
+        if self.reliability.input_closed {
             return self.take_events();
         }
         if let Some(capacity) = self.options.max_incoming_buffer_bytes {
@@ -515,7 +512,7 @@ impl MqttEngine {
         self.flush_responses();
 
         loop {
-            if !self.reliability.responses.is_empty() || self.reliability.failed {
+            if !self.reliability.responses.is_empty() || self.reliability.input_closed {
                 break;
             }
             if let Err(error) = Self::validate_input_buffer(&self.options, self.parser.buffer_mut())
@@ -566,6 +563,9 @@ impl MqttEngine {
         packet: ParsedPacket,
         stream: Option<u64>,
     ) -> (Option<MqttEvent>, Option<MqttPacket>) {
+        if !self.accept_incoming(packet.packet_type()) {
+            return (None, None);
+        }
         let mut event = None;
         let mut response = None;
 
@@ -592,7 +592,7 @@ impl MqttEngine {
                     event = Some(MqttEvent::PingResponse(PingResult { success: true }));
                 }
                 crate::mqtt_serde::control_packet::ControlPacketType::DISCONNECT => {
-                    self.is_connected = false;
+                    self.handle_connection_lost();
                     event = Some(MqttEvent::Disconnected(None));
                 }
                 _ => {}
@@ -674,13 +674,13 @@ impl MqttEngine {
                     reason_code,
                     properties,
                 } => {
-                    event = Some(self.auth_received(reason_code, properties));
+                    event = self.auth_received(reason_code, properties);
                 }
                 VariableHeader::DisconnectV5 {
                     reason_code,
                     properties,
                 } => {
-                    self.is_connected = false;
+                    self.handle_connection_lost();
                     event = Some(MqttEvent::DisconnectReceived {
                         reason_code,
                         properties,
@@ -690,7 +690,7 @@ impl MqttEngine {
                     if packet.packet_type
                         == crate::mqtt_serde::control_packet::ControlPacketType::DISCONNECT =>
                 {
-                    self.is_connected = false;
+                    self.handle_connection_lost();
                     event = Some(MqttEvent::Disconnected(None));
                 }
                 _ => {}
@@ -867,7 +867,7 @@ impl MqttEngine {
                 all_bytes.extend(packet);
             }
             self.flush_responses();
-            if !self.reliability.failed {
+            if !self.reliability.input_closed {
                 let events = self.handle_incoming(&[]);
                 self.events.extend(events);
             }
@@ -948,8 +948,9 @@ impl MqttEngine {
         self.previous_inflight = self.inflight_queue.snapshot_for_reconnect();
         self.previous_inflight.extend(self.session_replay.drain(..));
         self.reliability.control_reserve = reserve;
-        self.reliability.failed = false;
+        self.reliability.input_closed = false;
         self.reliability.connecting = true;
+        self.reliability.reauthenticating = false;
         self.next_reconnect_at = None;
         self.start_deadline(OperationKind::Connect, None);
         Ok(())
@@ -1331,8 +1332,7 @@ impl MqttEngine {
         }
         if !self.is_connected {
             self.next_reconnect_at = None;
-            self.reliability.connecting = false;
-            self.reliability.deadlines.clear();
+            self.close_input();
             return Ok(());
         }
         let packet = if self.options.mqtt_version == 5 {
@@ -1342,9 +1342,7 @@ impl MqttEngine {
         };
         self.enqueue_packet(packet)?;
         self.next_reconnect_at = None;
-        self.is_connected = false;
-        self.reliability.deadlines.clear();
-        self.ping_sent_at = None;
+        self.close_input();
         Ok(())
     }
 
@@ -1390,9 +1388,14 @@ impl MqttEngine {
                 message: "Authentication method cannot change during a connection".into(),
             });
         }
-        if reason_code == 0x19 && !self.is_connected {
+        let valid_state = match reason_code {
+            0x19 => self.is_connected && !self.reliability.reauthenticating,
+            0x18 => self.reliability.connecting || self.reliability.reauthenticating,
+            _ => false,
+        };
+        if !valid_state || self.reliability.input_closed {
             return Err(MqttClientError::ProtocolViolation {
-                message: "Reauthentication requires an established MQTT connection".into(),
+                message: "AUTH is not valid in the current authentication state".into(),
             });
         }
         if !properties
@@ -1404,10 +1407,14 @@ impl MqttEngine {
         self.enqueue_packet(MqttPacket::Auth(authv5::MqttAuth::new(
             reason_code,
             properties,
-        )))
+        )))?;
+        if reason_code == 0x19 {
+            self.reliability.reauthenticating = true;
+        }
+        Ok(())
     }
 
-    fn auth_received(&self, reason_code: u8, properties: Vec<Property>) -> MqttEvent {
+    fn auth_received(&mut self, reason_code: u8, properties: Vec<Property>) -> Option<MqttEvent> {
         let expected = self
             .options
             .connect_properties
@@ -1423,19 +1430,25 @@ impl MqttEngine {
                 _ => None,
             })
             .collect();
-        let minimal_success = reason_code == 0 && properties.is_empty();
-        if expected.is_none()
-            || !matches!(reason_code, 0 | 0x18)
-            || (!minimal_success && (methods.len() != 1 || Some(methods[0]) != expected))
+        let valid_state = match reason_code {
+            0 => self.is_connected && self.reliability.reauthenticating,
+            0x18 => self.reliability.connecting || self.reliability.reauthenticating,
+            _ => false,
+        };
+        if expected.is_none() || !valid_state || methods.len() != 1 || Some(methods[0]) != expected
         {
-            return MqttEvent::Error(MqttClientError::ProtocolViolation {
-                message: "Server AUTH must use the CONNECT authentication method and reason code 0 or 0x18".into(),
+            self.fail_connection(MqttClientError::ProtocolViolation {
+                message: "Server AUTH must use the CONNECT authentication method during an active authentication exchange".into(),
             });
+            return None;
         }
-        MqttEvent::AuthReceived(super::client::AuthResult {
+        if reason_code == 0 {
+            self.reliability.reauthenticating = false;
+        }
+        Some(MqttEvent::AuthReceived(super::client::AuthResult {
             reason_code,
             properties,
-        })
+        }))
     }
 
     // --- Internal Helpers ---
@@ -1463,7 +1476,16 @@ impl MqttEngine {
     ) -> (Vec<MqttEvent>, Vec<MqttPacket>) {
         let mut events = Vec::new();
         let mut responses: Vec<MqttPacket> = Vec::new();
+        if !self.accept_incoming(packet.packet_type()) {
+            return (self.take_events(), responses);
+        }
         if let Err(error) = self.validate_ack(&packet, stream) {
+            if self.mqtt_version() != 5
+                || matches!(error, MqttClientError::ProtocolViolation { .. })
+            {
+                self.fail_connection(error);
+                return (self.take_events(), responses);
+            }
             return (vec![MqttEvent::Error(error)], responses);
         }
         match packet {
@@ -1507,6 +1529,8 @@ impl MqttEngine {
 
                 if self.is_connected {
                     self.restore_session(ack.session_present, &mut events);
+                } else {
+                    self.handle_connection_lost();
                 }
             }
             MqttPacket::ConnAck3(ack) => {
@@ -1534,6 +1558,8 @@ impl MqttEngine {
 
                 if self.is_connected {
                     self.restore_session(ack.session_present, &mut events);
+                } else {
+                    self.handle_connection_lost();
                 }
             }
             MqttPacket::PubAck5(ack) => {
@@ -1662,7 +1688,9 @@ impl MqttEngine {
                 }
             }
             MqttPacket::Auth(auth) => {
-                events.push(self.auth_received(auth.reason_code, auth.properties));
+                if let Some(event) = self.auth_received(auth.reason_code, auth.properties) {
+                    events.push(event);
+                }
             }
             MqttPacket::Disconnect5(d) => {
                 self.handle_connection_lost();
@@ -1679,7 +1707,9 @@ impl MqttEngine {
     fn restore_session(&mut self, session_present: bool, events: &mut Vec<MqttEvent>) {
         let mut previous = std::mem::take(&mut self.previous_inflight);
         let resumed = session_present && !self.options.sessionless;
-        if resumed {
+        let replay_unacknowledged = resumed
+            || (self.mqtt_version() != 5 && !self.options.clean_start && !self.options.sessionless);
+        if replay_unacknowledged {
             // A PUBLISH waiting for quota must not block PUBREL recovery. Keep the
             // original order within each packet type while replaying PUBREL first.
             previous.sort_by_key(|(_, packet)| {
@@ -1687,7 +1717,7 @@ impl MqttEngine {
             });
         }
         for (id, mut packet) in previous {
-            if resumed
+            if replay_unacknowledged
                 && matches!(
                     packet,
                     MqttPacket::Publish3(_)
@@ -3088,6 +3118,9 @@ impl QuicMqttEngine {
             let data_ids: Vec<StreamId> = self.data_streams.keys().copied().collect();
             let max_event_count = self.mqtt_engine.options().max_event_count;
             for stream_id in data_ids {
+                if self.mqtt_engine.reliability.input_closed {
+                    break;
+                }
                 if !self.data_streams.contains_key(&stream_id) {
                     continue;
                 }
@@ -3502,6 +3535,12 @@ impl QuicMqttEngine {
     ) {
         let max_event_count = mqtt_engine.options().max_event_count;
         loop {
+            if mqtt_engine.reliability.input_closed {
+                if let Some(ds) = data_streams.get_mut(&stream_id) {
+                    ds.parser.buffer_mut().clear();
+                }
+                break;
+            }
             // Back-pressure: stop once the event buffer is full (mirrors
             // `handle_incoming`). This bounds the number of events produced in a
             // single tick even for packets that emit events but no response bytes
@@ -4191,6 +4230,52 @@ impl QuicMqttEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn establish_connection(engine: &mut MqttEngine) {
+        engine.connect().unwrap();
+        engine.take_outgoing();
+        let connack: &[u8] = if engine.mqtt_version() == 5 {
+            &[0x20, 3, 0, 0, 0]
+        } else {
+            &[0x20, 2, 0, 0]
+        };
+        let events = engine.handle_incoming(connack);
+        assert!(engine.is_connected(), "{events:?}");
+        assert!(matches!(events.as_slice(), [MqttEvent::Connected(_)]));
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn closed_mqtt_connection_discards_quic_stream_input() {
+        use quinn_proto::{Dir, Side, StreamId};
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::default()).unwrap();
+        establish_connection(&mut engine.mqtt_engine);
+        let data = StreamId::new(Side::Client, Dir::Bi, 1);
+        let mut stream = QuicStream::new(1024, 5, 10);
+        let publication = MqttPacket::Publish5(MqttPublish::new(
+            1,
+            "t".into(),
+            Some(7),
+            vec![],
+            false,
+            false,
+        ));
+        stream.parser.feed(&publication.to_bytes().unwrap());
+        engine.data_streams.insert(data, stream);
+        engine.mqtt_engine.disconnect().unwrap();
+        engine.mqtt_engine.take_outgoing();
+        let mut events = Vec::new();
+        QuicMqttEngine::drain_data_stream(
+            &mut engine.data_streams,
+            &mut engine.mqtt_engine,
+            data,
+            &mut events,
+        );
+        assert!(events.is_empty());
+        let stream = engine.data_streams.get_mut(&data).unwrap();
+        assert!(stream.parser.buffer_mut().is_empty());
+        assert!(stream.outgoing.is_empty());
+    }
     use crate::mqtt_client::opts::MqttClientOptions;
     use crate::mqtt_serde::mqttv5::pingreqv5;
 
@@ -4380,11 +4465,16 @@ mod tests {
     fn connack_preserves_new_early_operations_without_replaying_them() {
         for resumed in [false, true] {
             let mut engine = MqttEngine::new(MqttClientOptions::builder().build());
+            if resumed {
+                establish_connection(&mut engine);
+                engine.handle_connection_lost();
+            }
             engine.connect().unwrap();
             engine.take_outgoing();
             let command = PublishCommand::simple("early", vec![1], 1, false);
             let (packet_id, _) = engine.publish_encoded(command, Some(4)).unwrap();
-            engine.handle_incoming(&[0x20, 3, u8::from(resumed), 0, 0]);
+            let events = engine.handle_incoming(&[0x20, 3, u8::from(resumed), 0, 0]);
+            assert!(engine.is_connected(), "{events:?}");
             assert!(engine.take_outgoing().is_empty());
             let pid = packet_id.unwrap();
             let (events, _) = engine
@@ -4495,6 +4585,7 @@ mod tests {
     fn test_event_buffer_limit() {
         let options = MqttClientOptions::builder().max_event_count(1).build();
         let mut engine = MqttEngine::new(options);
+        establish_connection(&mut engine);
 
         // Mock incoming data: 2 PINGRESP packets
         // PINGRESP (v5) is fixed header 0xD0, length 0x00.
@@ -4523,6 +4614,7 @@ mod tests {
     #[test]
     fn reduced_type_only_parser_counts_fragmented_qos0_publish_without_payload_event() {
         let mut engine = MqttEngine::new(MqttClientOptions::builder().mqtt_version(5).build());
+        establish_connection(&mut engine);
         engine.set_parse_level(ParseLevel::TypeOnly);
         let publish = MqttPublish::new_with_prop(
             0,
@@ -4551,6 +4643,7 @@ mod tests {
     #[test]
     fn reduced_headers_parser_generates_qos2_handshake_without_payload_event() {
         let mut engine = MqttEngine::new(MqttClientOptions::builder().mqtt_version(5).build());
+        establish_connection(&mut engine);
         engine.set_parse_level(ParseLevel::HeadersParsed);
         let publish = MqttPublish::new_with_prop(
             2,
@@ -4587,6 +4680,7 @@ mod tests {
     #[test]
     fn reduced_headers_parser_handles_fragmented_v3_qos1_publish() {
         let mut engine = MqttEngine::new(MqttClientOptions::builder().mqtt_version(4).build());
+        establish_connection(&mut engine);
         engine.set_parse_level(ParseLevel::HeadersParsed);
         let publish = crate::mqtt_serde::mqttv3::publish::MqttPublish::new(
             "bench/events".to_string(),
@@ -4673,6 +4767,7 @@ mod tests {
     #[test]
     fn test_ingest_stream_packet_emits_event() {
         let mut engine = MqttEngine::new(MqttClientOptions::builder().build());
+        establish_connection(&mut engine);
         let (events, resp) = engine.ingest_stream_packet(
             MqttPacket::PingResp5(crate::mqtt_serde::mqttv5::pingrespv5::MqttPingResp::new()),
             0,
@@ -5014,6 +5109,7 @@ mod tests {
         use quinn_proto::{Dir, Side, StreamId};
         let mut engine =
             QuicMqttEngine::new(MqttClientOptions::builder().auto_ack(false).build()).unwrap();
+        establish_connection(&mut engine.mqtt_engine);
         let data = StreamId::new(Side::Client, Dir::Bi, 1);
         engine
             .data_streams

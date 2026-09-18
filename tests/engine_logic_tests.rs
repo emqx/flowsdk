@@ -343,6 +343,8 @@ fn test_back_pressure_event_buffer() {
     };
 
     let mut engine = MqttEngine::new(options);
+    engine.connect().unwrap();
+    engine.take_outgoing();
 
     let connack = MqttPacket::ConnAck5(MqttConnAck5::new(false, 0, None))
         .to_bytes()

@@ -37,8 +37,10 @@ pending. Intentional `disconnect()?` cancels retries; flush its bytes before clo
 A successful CONNACK with Session Present resumes QoS state subject to the new
 broker limits. Session Present without locally established session state is rejected
 with an error and `Disconnected`; the transport owner must close the connection.
-Without a resumed session, outstanding operations emit
-`OperationFailed`; the application decides whether to publish again. Only the
+In MQTT 5, without a resumed session, outstanding operations emit
+`OperationFailed`; the application decides whether to publish again. In MQTT 3.1.1,
+`clean_start(false)` retains and retries unacknowledged QoS 1/2 publications and
+PUBREL with their original identifiers even when Session Present is zero. Only the
 configured `subscription_topics` are automatically restored. Runtime subscriptions
 are not stored as a durable subscription registry.
 
@@ -56,6 +58,8 @@ On an active connection, a QoS 2 PUBLISH holds its send quota until PUBCOMP.
 After session resumption, pending PUBREL packets are replayed with their original
 identifiers ahead of PUBLISH replay and do not consume the new connection's
 PUBLISH quota. Transport buffer limits still apply to replay output.
+Incoming receive quota also resets on each connection, independently of retained
+QoS 2 state. A resumed PUBLISH consumes quota; a resumed PUBREL does not.
 
 With `auto_ack(false)`, use `puback(id, reason, properties)`,
 `pubrec(id, reason, properties)` and `pubcomp(id, reason, properties)` after accepting
@@ -72,6 +76,20 @@ processing, not when the socket reports a completed write. A timeout emits one
 `OperationFailed` event, but an ACK timeout does not cancel the MQTT exchange or
 release its packet ID. A late valid acknowledgment can still complete it. MQTT 5
 publications are not retransmitted on the same live connection.
+
+A CONNECT deadline ends that connection attempt. Late CONNACK packets cannot
+revive it. After local DISCONNECT, refused CONNACK, peer DISCONNECT, or a terminal
+protocol error, buffered and later input is ignored until a new CONNECT is queued.
+The transport owner must close the old connection and establish a new transport
+before reconnecting. Duplicate or unsolicited CONNACK packets and mismatched
+SUBACK result counts terminate the connection.
+
+Enhanced authentication accepts AUTH continuation during the initial handshake;
+CONNACK completes that handshake. After connection, AUTH replies require an active
+client-initiated re-authentication. Every server AUTH must include the negotiated
+method, including success. Invalid AUTH state or method closes the connection under
+the engine's strict validation policy. Ordinary publications can continue during
+valid re-authentication.
 
 Packet-count limits still apply. Optional `max_incoming_packet_size`,
 `max_incoming_buffer_bytes`, and `max_outgoing_buffer_bytes` add byte limits;
