@@ -44,8 +44,8 @@ pub struct InflightQueue {
     mqtt_version: u8,
     /// Default retransmission timeout
     retransmission_timeout: Duration,
-    /// Current number of PUBLISH packets in the queue (for flow control)
-    publish_count: usize,
+    /// Send quota consumed by PUBLISH packets on the current connection.
+    publish_quota_used: usize,
 }
 
 impl InflightQueue {
@@ -60,13 +60,13 @@ impl InflightQueue {
             },
             mqtt_version,
             retransmission_timeout,
-            publish_count: 0,
+            publish_quota_used: 0,
         }
     }
 
     /// Check if another PUBLISH message can be sent
     pub fn can_push_publish(&self) -> bool {
-        self.publish_count < self.receive_maximum as usize
+        self.publish_quota_used < self.receive_maximum as usize
     }
 
     /// Update the receive maximum limit (e.g., from CONNACK)
@@ -101,13 +101,8 @@ impl InflightQueue {
         }
         // Validation for PUBLISH should happen in MqttEngine before calling push,
         // but we keep a check here as a safety measure.
-        if matches!(
-            packet,
-            MqttPacket::Publish5(_)
-                | MqttPacket::Publish3(_)
-                | MqttPacket::PubRel5(_)
-                | MqttPacket::PubRel3(_)
-        ) && !self.can_push_publish()
+        if matches!(packet, MqttPacket::Publish5(_) | MqttPacket::Publish3(_))
+            && !self.can_push_publish()
         {
             return Err(MqttClientError::BufferFull {
                 buffer_type: "inflight_publish".to_string(),
@@ -116,14 +111,8 @@ impl InflightQueue {
         }
 
         let now = Instant::now();
-        if matches!(
-            packet,
-            MqttPacket::Publish5(_)
-                | MqttPacket::Publish3(_)
-                | MqttPacket::PubRel5(_)
-                | MqttPacket::PubRel3(_)
-        ) {
-            self.publish_count += 1;
+        if matches!(packet, MqttPacket::Publish5(_) | MqttPacket::Publish3(_)) {
+            self.publish_quota_used += 1;
         }
 
         let entry = InflightEntry {
@@ -183,7 +172,9 @@ impl InflightQueue {
                     | MqttPacket::PubRel5(_)
                     | MqttPacket::PubRel3(_)
             ) {
-                self.publish_count -= 1;
+                // A replayed PUBREL consumes no quota on the new connection.
+                // Its PUBCOMP still replenishes quota, capped at the initial limit.
+                self.publish_quota_used = self.publish_quota_used.saturating_sub(1);
             }
             Some(entry)
         } else {
@@ -268,7 +259,7 @@ impl InflightQueue {
         if self.mqtt_version != 5 {
             self.deadline_queue.clear();
         }
-        self.publish_count = 0;
+        self.publish_quota_used = 0;
     }
 
     pub fn len(&self) -> usize {

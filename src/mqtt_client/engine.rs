@@ -1677,8 +1677,15 @@ impl MqttEngine {
     }
 
     fn restore_session(&mut self, session_present: bool, events: &mut Vec<MqttEvent>) {
-        let previous = std::mem::take(&mut self.previous_inflight);
+        let mut previous = std::mem::take(&mut self.previous_inflight);
         let resumed = session_present && !self.options.sessionless;
+        if resumed {
+            // A PUBLISH waiting for quota must not block PUBREL recovery. Keep the
+            // original order within each packet type while replaying PUBREL first.
+            previous.sort_by_key(|(_, packet)| {
+                !matches!(packet, MqttPacket::PubRel3(_) | MqttPacket::PubRel5(_))
+            });
+        }
         for (id, mut packet) in previous {
             if resumed
                 && matches!(
@@ -3627,7 +3634,9 @@ impl QuicMqttEngine {
             self.mqtt_engine.configured_subscriptions_pending = false;
         }
         while let Some((packet_id, packet)) = self.mqtt_engine.session_replay.front().cloned() {
-            if !self.mqtt_engine.inflight_queue.can_push_publish() {
+            if matches!(packet, MqttPacket::Publish5(_) | MqttPacket::Publish3(_))
+                && !self.mqtt_engine.inflight_queue.can_push_publish()
+            {
                 break;
             }
             let stream = self.ensure_default_pub_stream()?;
@@ -4259,6 +4268,82 @@ mod tests {
         engine.route_session_work().unwrap();
         assert!(engine.mqtt_engine.session_replay.is_empty());
         assert_eq!(engine.data_streams[&replacement].pending_packets, 2);
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn quic_pubrel_replay_ignores_quota_and_tracks_replacement_stream() {
+        use quinn_proto::{Dir, Side, StreamId};
+        for pending_publishes in [0, 2] {
+            let mut engine = QuicMqttEngine::new(MqttClientOptions::default()).unwrap();
+            engine.mqtt_engine.connect().unwrap();
+            engine.mqtt_engine.take_outgoing();
+            engine.mqtt_engine.handle_incoming(&[0x20, 3, 0, 0, 0]);
+            let old = StreamId::new(Side::Client, Dir::Bi, 1);
+            engine
+                .data_streams
+                .insert(old, QuicStream::new(1024, 5, 10));
+            for _ in 0..pending_publishes {
+                engine
+                    .publish_on(old.into(), PublishCommand::simple("t", vec![], 1, false))
+                    .unwrap();
+            }
+            let mut ids = Vec::new();
+            for _ in 0..2 {
+                let id = engine
+                    .publish_on(old.into(), PublishCommand::simple("t", vec![], 2, false))
+                    .unwrap()
+                    .unwrap();
+                let (_, response) = engine.mqtt_engine.ingest_stream_packet(
+                    MqttPacket::PubRec5(MqttPubRec::new(id, 0, vec![])),
+                    old.into(),
+                );
+                assert!(matches!(parse_packets(&response, 5).as_slice(),
+                    [MqttPacket::PubRel5(rel)] if rel.packet_id == id));
+                ids.push(id);
+            }
+            engine.reset_connection_state();
+            engine.mqtt_engine.connect().unwrap();
+            engine.mqtt_engine.take_outgoing();
+            engine
+                .mqtt_engine
+                .handle_incoming(&[0x20, 6, 1, 0, 3, 0x21, 0, 1]);
+            let replacement = StreamId::new(Side::Client, Dir::Bi, 2);
+            engine
+                .data_streams
+                .insert(replacement, QuicStream::new(1024, 5, 10));
+            engine.default_pub_stream = Some(replacement);
+            engine.route_session_work().unwrap();
+            let output = parse_packets(&engine.data_streams[&replacement].outgoing, 5);
+            let replayed: Vec<_> = output
+                .iter()
+                .filter_map(|packet| match packet {
+                    MqttPacket::PubRel5(rel) => Some(rel.packet_id),
+                    _ => None,
+                })
+                .collect();
+            assert_eq!(replayed, ids);
+            assert_eq!(
+                output
+                    .iter()
+                    .filter(|p| matches!(p, MqttPacket::Publish5(_)))
+                    .count(),
+                usize::from(pending_publishes > 0)
+            );
+            assert!(engine.control_outgoing.is_empty());
+            for id in ids {
+                assert_eq!(
+                    engine.mqtt_engine.inflight_queue.get(id).unwrap().stream,
+                    Some(replacement.into())
+                );
+                let (events, _) = engine.mqtt_engine.ingest_stream_packet(
+                    MqttPacket::PubComp5(MqttPubComp::new(id, 0, vec![])),
+                    replacement.into(),
+                );
+                assert!(events.iter().any(|event| matches!(event,
+                    MqttEvent::Published(result) if result.packet_id == Some(id) && result.qos == 2)));
+            }
+        }
     }
 
     #[test]
