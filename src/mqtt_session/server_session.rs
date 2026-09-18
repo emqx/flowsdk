@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::mqtt_serde::control_packet::MqttPacket;
+use crate::mqtt_serde::mqttv5::common::properties::Property;
 use crate::mqtt_serde::mqttv5::puback::MqttPubAck;
 use crate::mqtt_serde::mqttv5::pubcomp::MqttPubComp;
 use crate::mqtt_serde::mqttv5::publish::MqttPublish;
@@ -10,12 +11,19 @@ use crate::mqtt_serde::mqttv5::subscribe::{MqttSubscribe, TopicSubscription};
 use crate::mqtt_serde::mqttv5::unsubscribe::MqttUnsubscribe;
 use std::collections::{HashMap, HashSet, VecDeque};
 
+struct Subscription {
+    options: TopicSubscription,
+    identifier: Option<u32>,
+}
+
 /// In-memory MQTT 5 session with non-shared subscriptions and a local retained store.
 /// The caller supplies validated packets and drives acknowledgments/transmission.
 /// Broker-wide routing, shared subscriptions and persistent storage are external.
+/// Each matching subscription produces a separate publication with its granted
+/// QoS and optional Subscription Identifier, including retained replay.
 pub struct ServerSession {
     // The client's subscriptions. The key is the topic filter.
-    subscriptions: HashMap<String, TopicSubscription>,
+    subscriptions: HashMap<String, Subscription>,
 
     // QoS 1 and QoS 2 messages that have been sent to the client but not acknowledged.
     // The key is the packet identifier.
@@ -64,14 +72,27 @@ impl ServerSession {
     }
 
     pub fn handle_incoming_subscribe(&mut self, subscribe: MqttSubscribe) {
-        for subscription in subscribe.subscriptions {
-            let existed = self.subscriptions.contains_key(&subscription.topic_filter);
-            if !subscription.topic_filter.starts_with("$share/")
-                && (subscription.retain_handling == 0
-                    || (subscription.retain_handling == 1 && !existed))
+        // A SUBSCRIBE's identifier applies to all of its topic filters. Keeping
+        // it with the options also makes replacement and unsubscribe atomic.
+        let identifier = subscribe
+            .properties
+            .iter()
+            .find_map(|property| match property {
+                Property::SubscriptionIdentifier(identifier) => Some(*identifier),
+                _ => None,
+            });
+        for options in subscribe.subscriptions {
+            let subscription = Subscription {
+                options,
+                identifier,
+            };
+            let options = &subscription.options;
+            let existed = self.subscriptions.contains_key(&options.topic_filter);
+            if !options.topic_filter.starts_with("$share/")
+                && (options.retain_handling == 0 || (options.retain_handling == 1 && !existed))
             {
                 for publish in self.retained_publishes.values() {
-                    if topic_matches(&subscription.topic_filter, &publish.topic_name) {
+                    if topic_matches(&options.topic_filter, &publish.topic_name) {
                         self.pending_publishes.push_back(forwarded_publish(
                             publish,
                             &subscription,
@@ -81,7 +102,7 @@ impl ServerSession {
                 }
             }
             self.subscriptions
-                .insert(subscription.topic_filter.clone(), subscription);
+                .insert(options.topic_filter.clone(), subscription);
         }
     }
 
@@ -108,8 +129,8 @@ impl ServerSession {
                     .insert(publish.topic_name.clone(), retained);
             }
         }
-        for subscription in self.subscriptions.values() {
-            if topic_matches(&subscription.topic_filter, &publish.topic_name) {
+        for (filter, subscription) in &self.subscriptions {
+            if topic_matches(filter, &publish.topic_name) {
                 self.pending_publishes
                     .push_back(forwarded_publish(&publish, subscription, false));
             }
@@ -250,13 +271,23 @@ impl ServerSession {
 
 fn forwarded_publish(
     publish: &MqttPublish,
-    subscription: &TopicSubscription,
+    subscription: &Subscription,
     retained_replay: bool,
 ) -> MqttPublish {
     let mut forwarded = publish.clone();
-    forwarded.qos = publish.qos.min(subscription.qos);
+    forwarded.qos = publish.qos.min(subscription.options.qos);
     forwarded.dup = false;
-    forwarded.retain = retained_replay || (publish.retain && subscription.retain_as_published);
+    forwarded.retain =
+        retained_replay || (publish.retain && subscription.options.retain_as_published);
+    // Identifiers belong to this receiving subscription, not the source message.
+    forwarded
+        .properties
+        .retain(|property| !matches!(property, Property::SubscriptionIdentifier(_)));
+    if let Some(identifier) = subscription.identifier {
+        forwarded
+            .properties
+            .push(Property::SubscriptionIdentifier(identifier));
+    }
     // The subscriber's packet identifier is assigned when its send quota permits.
     forwarded.packet_id = None;
     forwarded
