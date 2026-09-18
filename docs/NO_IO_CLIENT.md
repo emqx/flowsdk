@@ -37,6 +37,9 @@ pending. Intentional `disconnect()?` cancels retries; flush its bytes before clo
 A successful CONNACK with Session Present resumes QoS state subject to the new
 broker limits. Session Present without locally established session state is rejected
 with an error and `Disconnected`; the transport owner must close the connection.
+Pending replay survives interrupted CONNECT attempts until CONNACK resolves the
+session. Packets incompatible with the new broker limits emit `OperationFailed`
+and are removed so compatible replay can continue, including on QUIC streams.
 In MQTT 5, without a resumed session, outstanding operations emit
 `OperationFailed`; the application decides whether to publish again. In MQTT 3.1.1,
 `clean_start(false)` retains and retries unacknowledged QoS 1/2 publications and
@@ -58,6 +61,8 @@ On an active connection, a QoS 2 PUBLISH holds its send quota until PUBCOMP.
 After session resumption, pending PUBREL packets are replayed with their original
 identifiers ahead of PUBLISH replay and do not consume the new connection's
 PUBLISH quota. Transport buffer limits still apply to replay output.
+QUIC data-stream input waits for CONNACK on the control stream, so early responses
+to 0-RTT operations cannot overtake MQTT session establishment.
 Incoming receive quota also resets on each connection, independently of retained
 QoS 2 state. A resumed PUBLISH consumes quota; a resumed PUBREL does not.
 
@@ -97,6 +102,9 @@ Packet-count limits still apply. Optional `max_incoming_packet_size`,
 packet/buffer limits and 8 MiB outgoing capacity. Limits should reflect your payloads
 and transport. Publish admission reserves space for protocol responses, CONNECT and
 the largest outstanding publication, so queued data cannot block session recovery.
+The CONNECT reserve is refreshed when the broker assigns a client identifier. An
+assigned identifier that makes CONNECT exceed the byte limit produces a configuration
+error and closes the MQTT connection.
 The publication reserve is released once all tracked operations complete.
 Input that cannot be retained within the configured limit terminates
 that connection with an error. Applications must also bound their own extracted

@@ -1871,10 +1871,16 @@ impl TokioClientWorker {
 
     async fn handle_outgoing(&mut self) -> Result<(), MqttClientError> {
         let bytes = self.engine.take_outgoing();
-        if !bytes.is_empty() {
-            self.write_to_transport(&bytes).await?;
-        }
-        Ok(())
+        let result = if bytes.is_empty() {
+            Ok(())
+        } else {
+            self.write_to_transport(&bytes).await
+        };
+        // Draining output can unblock parsing and generate application events.
+        // Deliver those events even if writing their acknowledgements fails.
+        let events = self.engine.take_events();
+        self.dispatch_events(events).await;
+        result
     }
 
     /// Update the tick timer (for keep-alive and retransmissions)
@@ -2451,6 +2457,92 @@ mod config_builder_tests {
     use super::*;
     use std::time::Duration;
     use tokio::time::sleep;
+
+    #[async_trait]
+    impl Transport for tokio::io::DuplexStream {
+        async fn connect(_: &str) -> Result<Self, super::super::transport::TransportError> {
+            unreachable!("test transport is constructed in memory")
+        }
+        async fn close(&mut self) -> Result<(), super::super::transport::TransportError> {
+            self.shutdown().await?;
+            Ok(())
+        }
+        fn peer_addr(&self) -> Result<String, super::super::transport::TransportError> {
+            Ok("memory".into())
+        }
+        fn local_addr(&self) -> Result<String, super::super::transport::TransportError> {
+            Ok("memory".into())
+        }
+    }
+
+    struct MessageRecorder(mpsc::UnboundedSender<Vec<u8>>);
+
+    #[async_trait]
+    impl TokioMqttEventHandler for MessageRecorder {
+        async fn on_message_received(&mut self, message: &MqttMessage) {
+            self.0.send(message.payload.to_vec()).unwrap();
+        }
+    }
+
+    #[tokio::test]
+    async fn outgoing_drain_dispatches_buffered_message_events() {
+        use crate::mqtt_serde::mqttv5::publishv5::MqttPublish;
+        for write_fails in [false, true] {
+            let (messages, mut received) = mpsc::unbounded_channel();
+            let (_commands, rx) = mpsc::channel(1);
+            let mut worker = TokioClientWorker::new(
+                MqttClientOptions::builder()
+                    .keep_alive(0)
+                    .max_outgoing_packet_count(1)
+                    .build(),
+                Box::new(MessageRecorder(messages)),
+                rx,
+                TokioAsyncClientConfig::default(),
+            );
+            worker.engine.connect().unwrap();
+            worker.engine.take_outgoing();
+            let events = worker.engine.handle_incoming(&[0x20, 3, 0, 0, 0]);
+            worker.dispatch_events(events).await;
+            let (transport, peer) = tokio::io::duplex(1024);
+            worker.stream = Some(Box::new(transport));
+            let mut peer = Some(peer);
+            if write_fails {
+                peer.take();
+            }
+            let bytes: Vec<_> = (1..=3)
+                .flat_map(|id| {
+                    MqttPacket::Publish5(MqttPublish::new(
+                        1,
+                        "t".into(),
+                        Some(id),
+                        vec![id as u8],
+                        false,
+                        false,
+                    ))
+                    .to_bytes()
+                    .unwrap()
+                })
+                .collect();
+            let events = worker.engine.handle_incoming(&bytes);
+            worker.dispatch_events(events).await;
+            assert_eq!(worker.handle_outgoing().await.is_err(), write_fails);
+            for id in 1..=3 {
+                assert_eq!(received.try_recv().unwrap(), vec![id]);
+            }
+            assert!(received.try_recv().is_err());
+            assert!(worker.engine.take_events().is_empty());
+            if let Some(mut peer) = peer {
+                let mut acknowledgements = [0; 12];
+                peer.read_exact(&mut acknowledgements).await.unwrap();
+                assert_eq!(
+                    acknowledgements,
+                    [0x40, 2, 0, 1, 0x40, 2, 0, 2, 0x40, 2, 0, 3]
+                );
+                worker.handle_outgoing().await.unwrap();
+                assert!(received.try_recv().is_err());
+            }
+        }
+    }
 
     #[test]
     fn test_receive_maximum_default() {

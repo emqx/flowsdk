@@ -14,9 +14,7 @@ use rustls::{
     pki_types::ServerName,
     NamedGroup,
 };
-#[cfg(feature = "quic-proto")]
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 #[cfg(feature = "quic-proto")]
 use std::{
@@ -902,18 +900,68 @@ impl MqttEngine {
                 reason: "Packet and event limits must be nonzero".into(),
             });
         }
+        let packet = self.connect_packet()?;
+        if let MqttPacket::Connect5(connect) = &packet {
+            for property in &connect.properties {
+                match property {
+                    Property::SessionExpiryInterval(v) => self.reliability.session_expiry = *v,
+                    Property::ReceiveMaximum(v) => self.reliability.incoming_receive_maximum = *v,
+                    Property::TopicAliasMaximum(v) => self.reliability.incoming_alias_maximum = *v,
+                    _ => {}
+                }
+            }
+        }
+        if self.session.is_none() {
+            self.session = Some(ClientSession::new());
+        }
+
+        let reserve = packet
+            .to_bytes()
+            .map_err(MqttClientError::from)?
+            .len()
+            .max(6);
+        self.enqueue_packet(packet)?;
+        // An interrupted handshake may already own deferred replay entries.
+        // Keep them until CONNACK resolves the session, refreshing live entries
+        // by identifier so a newer QoS stage wins without duplicating work.
+        self.previous_inflight
+            .retain(|(id, _)| self.reliability.reserved.contains(id));
+        let mut positions: HashMap<_, _> = self
+            .previous_inflight
+            .iter()
+            .enumerate()
+            .map(|(index, (id, _))| (*id, index))
+            .collect();
+        for (id, packet) in self
+            .inflight_queue
+            .snapshot_for_reconnect()
+            .into_iter()
+            .chain(self.session_replay.drain(..))
+        {
+            if let Some(&index) = positions.get(&id) {
+                self.previous_inflight[index].1 = packet;
+            } else {
+                positions.insert(id, self.previous_inflight.len());
+                self.previous_inflight.push((id, packet));
+            }
+        }
+        self.reliability.control_reserve = reserve;
+        self.reliability.input_closed = false;
+        self.reliability.connecting = true;
+        self.reliability.reauthenticating = false;
+        self.next_reconnect_at = None;
+        self.start_deadline(OperationKind::Connect, None);
+        Ok(())
+    }
+
+    fn connect_packet(&self) -> Result<MqttPacket, MqttClientError> {
         let properties = if self.options.mqtt_version == 5 {
             self.connect_properties()?
         } else {
             Vec::new()
         };
 
-        // Initialize session if needed
-        if self.session.is_none() {
-            self.session = Some(ClientSession::new());
-        }
-
-        let packet = if self.options.mqtt_version == 5 {
+        Ok(if self.options.mqtt_version == 5 {
             let connect = connectv5::MqttConnect::new(
                 self.options.client_id.clone(),
                 self.options.username.clone(),
@@ -939,23 +987,7 @@ impl MqttEngine {
                 message: will.will_message.clone(),
             });
             MqttPacket::Connect3(connect)
-        };
-
-        let reserve = packet
-            .to_bytes()
-            .map_err(MqttClientError::from)?
-            .len()
-            .max(6);
-        self.enqueue_packet(packet)?;
-        self.previous_inflight = self.inflight_queue.snapshot_for_reconnect();
-        self.previous_inflight.extend(self.session_replay.drain(..));
-        self.reliability.control_reserve = reserve;
-        self.reliability.input_closed = false;
-        self.reliability.connecting = true;
-        self.reliability.reauthenticating = false;
-        self.next_reconnect_at = None;
-        self.start_deadline(OperationKind::Connect, None);
-        Ok(())
+        })
     }
 
     /// Queue a PUBLISH packet.
@@ -3197,6 +3229,12 @@ impl QuicMqttEngine {
                     continue;
                 }
 
+                // Control and data streams are independently ordered. Keep early
+                // responses under QUIC flow control until CONNACK is processed.
+                if self.mqtt_engine.reliability.connecting {
+                    continue;
+                }
+
                 // Back-pressure: stop reading inbound data once the application
                 // event buffer is full (mirrors `handle_incoming`). Undecoded bytes
                 // stay in quinn-proto's receive buffer, flow-controlling the peer,
@@ -3633,6 +3671,10 @@ impl QuicMqttEngine {
                 }
             }
 
+            if mqtt_engine.reliability.connecting {
+                break;
+            }
+
             if let Some(capacity) = mqtt_engine.options.max_outgoing_buffer_bytes {
                 let first = data_streams
                     .get_mut(&stream_id)
@@ -3745,6 +3787,22 @@ impl QuicMqttEngine {
             self.mqtt_engine.configured_subscriptions_pending = false;
         }
         while let Some((packet_id, packet)) = self.mqtt_engine.session_replay.front().cloned() {
+            let encoded = packet
+                .to_bytes()
+                .map_err(MqttClientError::from)
+                .and_then(|bytes| {
+                    self.mqtt_engine.validate_packet_capabilities(&packet)?;
+                    self.mqtt_engine.check_packet_size(&bytes)?;
+                    Ok(bytes)
+                });
+            let bytes = match encoded {
+                Ok(bytes) => bytes,
+                Err(error) => {
+                    self.mqtt_engine.session_replay.pop_front();
+                    self.mqtt_engine.fail_operation(packet_id, &packet, error);
+                    continue;
+                }
+            };
             if matches!(packet, MqttPacket::Publish5(_) | MqttPacket::Publish3(_))
                 && !self.mqtt_engine.inflight_queue.can_push_publish()
             {
@@ -3752,9 +3810,6 @@ impl QuicMqttEngine {
             }
             let stream = self.ensure_default_pub_stream()?;
             self.ensure_stream_capacity(stream)?;
-            let bytes = packet.to_bytes().map_err(MqttClientError::from)?;
-            self.mqtt_engine.validate_packet_capabilities(&packet)?;
-            self.mqtt_engine.check_packet_size(&bytes)?;
             self.enqueue_on_stream(stream, &bytes)?;
             let qos = match &packet {
                 MqttPacket::Publish5(p) => p.qos,
@@ -4302,6 +4357,7 @@ impl QuicMqttEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mqtt_serde::mqttv5::connackv5;
 
     fn establish_connection(engine: &mut MqttEngine) {
         engine.connect().unwrap();
@@ -4314,6 +4370,314 @@ mod tests {
         let events = engine.handle_incoming(connack);
         assert!(engine.is_connected(), "{events:?}");
         assert!(matches!(events.as_slice(), [MqttEvent::Connected(_)]));
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn quic_early_responses_wait_for_connack() {
+        use quinn_proto::{Dir, Side, StreamId};
+        for status in [
+            QuicZeroRttStatus::Attempted,
+            QuicZeroRttStatus::Accepted,
+            QuicZeroRttStatus::Rejected,
+        ] {
+            for subscribe in [false, true] {
+                let mut engine = QuicMqttEngine::new(MqttClientOptions::default()).unwrap();
+                engine.mqtt_engine.connect().unwrap();
+                engine.mqtt_engine.take_outgoing();
+                engine.zero_rtt_status = QuicZeroRttStatus::Attempted;
+                let data = StreamId::new(Side::Client, Dir::Bi, 1);
+                engine
+                    .data_streams
+                    .insert(data, QuicStream::new(1024, 5, 10));
+                let id = if subscribe {
+                    engine
+                        .subscribe_on(data.into(), SubscribeCommand::single("t", 1))
+                        .unwrap()
+                } else {
+                    engine
+                        .publish_on(data.into(), PublishCommand::simple("t", vec![], 1, false))
+                        .unwrap()
+                        .unwrap()
+                };
+                engine.zero_rtt_status = status;
+                let ack = if subscribe {
+                    vec![0x90, 4, (id >> 8) as u8, id as u8, 0, 1]
+                } else {
+                    vec![0x40, 2, (id >> 8) as u8, id as u8]
+                };
+                engine
+                    .data_streams
+                    .get_mut(&data)
+                    .unwrap()
+                    .parser
+                    .feed(&ack);
+                let mut events = Vec::new();
+                QuicMqttEngine::drain_data_stream(
+                    &mut engine.data_streams,
+                    &mut engine.mqtt_engine,
+                    data,
+                    &mut events,
+                );
+                assert!(events.is_empty(), "{status:?}: {events:?}");
+                assert!(!engine.mqtt_engine.reliability.input_closed);
+                assert_eq!(
+                    &engine
+                        .data_streams
+                        .get_mut(&data)
+                        .unwrap()
+                        .parser
+                        .buffer_mut()[..],
+                    ack
+                );
+                events.extend(engine.mqtt_engine.handle_incoming(&[0x20, 3, 0, 0, 0]));
+                QuicMqttEngine::drain_data_stream(
+                    &mut engine.data_streams,
+                    &mut engine.mqtt_engine,
+                    data,
+                    &mut events,
+                );
+                assert!(matches!(events.first(), Some(MqttEvent::Connected(_))));
+                assert_eq!(events.len(), 2, "{events:?}");
+                if subscribe {
+                    assert!(matches!(&events[1], MqttEvent::Subscribed(r) if r.packet_id == id));
+                } else {
+                    assert!(
+                        matches!(&events[1], MqttEvent::Published(r) if r.packet_id == Some(id))
+                    );
+                }
+                assert!(!engine.mqtt_engine.reliability.reserved.contains(&id));
+            }
+        }
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn quic_partial_early_response_completes_after_connack() {
+        use quinn_proto::{Dir, Side, StreamId};
+        let mut engine = QuicMqttEngine::new(MqttClientOptions::default()).unwrap();
+        engine.mqtt_engine.connect().unwrap();
+        engine.mqtt_engine.take_outgoing();
+        engine.zero_rtt_status = QuicZeroRttStatus::Attempted;
+        let data = StreamId::new(Side::Client, Dir::Bi, 1);
+        engine
+            .data_streams
+            .insert(data, QuicStream::new(1024, 5, 10));
+        let id = engine
+            .publish_on(data.into(), PublishCommand::simple("t", vec![], 1, false))
+            .unwrap()
+            .unwrap();
+        engine
+            .data_streams
+            .get_mut(&data)
+            .unwrap()
+            .parser
+            .feed(&[0x40, 2]);
+        let mut events = Vec::new();
+        QuicMqttEngine::drain_data_stream(
+            &mut engine.data_streams,
+            &mut engine.mqtt_engine,
+            data,
+            &mut events,
+        );
+        assert!(events.is_empty());
+        events.extend(engine.mqtt_engine.handle_incoming(&[0x20, 3, 0, 0, 0]));
+        QuicMqttEngine::drain_data_stream(
+            &mut engine.data_streams,
+            &mut engine.mqtt_engine,
+            data,
+            &mut events,
+        );
+        assert!(matches!(events.as_slice(), [MqttEvent::Connected(_)]));
+        engine
+            .data_streams
+            .get_mut(&data)
+            .unwrap()
+            .parser
+            .feed(&[(id >> 8) as u8, id as u8]);
+        QuicMqttEngine::drain_data_stream(
+            &mut engine.data_streams,
+            &mut engine.mqtt_engine,
+            data,
+            &mut events,
+        );
+        assert!(
+            matches!(events.as_slice(), [MqttEvent::Connected(_), MqttEvent::Published(r)] if r.packet_id == Some(id))
+        );
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn quic_early_input_is_discarded_after_refusal_or_timeout() {
+        use quinn_proto::{Dir, Side, StreamId};
+        for timeout in [false, true] {
+            let mut options = MqttClientOptions::default();
+            options.operation_timeouts.connect = Some(Duration::from_millis(1));
+            let mut engine = QuicMqttEngine::new(options).unwrap();
+            engine.mqtt_engine.connect().unwrap();
+            engine.mqtt_engine.take_outgoing();
+            let data = StreamId::new(Side::Client, Dir::Bi, 1);
+            let mut stream = QuicStream::new(1024, 5, 10);
+            stream.parser.feed(&[0x40, 2, 0, 1]);
+            engine.data_streams.insert(data, stream);
+            let mut events = Vec::new();
+            QuicMqttEngine::drain_data_stream(
+                &mut engine.data_streams,
+                &mut engine.mqtt_engine,
+                data,
+                &mut events,
+            );
+            assert!(events.is_empty());
+            if timeout {
+                engine
+                    .mqtt_engine
+                    .handle_tick(Instant::now() + Duration::from_secs(1));
+            } else {
+                engine.mqtt_engine.handle_incoming(&[0x20, 3, 0, 0x87, 0]);
+            }
+            assert!(engine.mqtt_engine.reliability.input_closed);
+            QuicMqttEngine::drain_data_stream(
+                &mut engine.data_streams,
+                &mut engine.mqtt_engine,
+                data,
+                &mut events,
+            );
+            assert!(events.is_empty());
+            assert!(engine
+                .data_streams
+                .get_mut(&data)
+                .unwrap()
+                .parser
+                .buffer_mut()
+                .is_empty());
+            assert!(engine.data_streams[&data].outgoing.is_empty());
+        }
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn quic_replay_fails_incompatible_packets_and_continues() {
+        use quinn_proto::{Dir, Side, StreamId};
+        for property in [
+            Property::MaximumPacketSize(32),
+            Property::MaximumQoS(1),
+            Property::RetainAvailable(0),
+        ] {
+            let mut engine = QuicMqttEngine::new(MqttClientOptions::default()).unwrap();
+            establish_connection(&mut engine.mqtt_engine);
+            let old = StreamId::new(Side::Client, Dir::Bi, 1);
+            engine
+                .data_streams
+                .insert(old, QuicStream::new(1024, 5, 10));
+            let bad = engine
+                .publish_on(
+                    old.into(),
+                    PublishCommand::simple("t", vec![0; 64], 2, true),
+                )
+                .unwrap()
+                .unwrap();
+            let good = engine
+                .publish_on(old.into(), PublishCommand::simple("t", vec![], 1, false))
+                .unwrap()
+                .unwrap();
+            engine.reset_connection_state();
+            engine.mqtt_engine.connect().unwrap();
+            engine.mqtt_engine.take_outgoing();
+            let ack = MqttPacket::ConnAck5(connackv5::MqttConnAck::new(
+                true,
+                0,
+                Some(vec![property.clone()]),
+            ));
+            engine.mqtt_engine.handle_incoming(&ack.to_bytes().unwrap());
+            let replacement = StreamId::new(Side::Client, Dir::Bi, 2);
+            engine
+                .data_streams
+                .insert(replacement, QuicStream::new(1024, 5, 10));
+            engine.default_pub_stream = Some(replacement);
+            engine.route_session_work().unwrap();
+            assert!(engine.mqtt_engine.session_replay.is_empty(), "{property:?}");
+            let events = engine.take_events();
+            assert!(
+                matches!(events.as_slice(), [MqttEvent::OperationFailed { packet_id: Some(id), operation: OperationKind::Publish, .. }] if *id == bad),
+                "{events:?}"
+            );
+            assert!(!engine.mqtt_engine.reliability.reserved.contains(&bad));
+            assert!(
+                matches!(parse_packets(&engine.data_streams[&replacement].outgoing, 5).as_slice(), [MqttPacket::Publish5(p)] if p.packet_id == Some(good) && p.dup)
+            );
+            engine.route_session_work().unwrap();
+            assert!(engine.take_events().is_empty());
+            assert_eq!(engine.data_streams[&replacement].pending_packets, 1);
+        }
+    }
+
+    #[test]
+    fn assigned_client_id_reserve_matches_encoded_connect() {
+        for length in [60, 115, 116, 117, 128] {
+            let mut engine = MqttEngine::new(MqttClientOptions::builder().client_id("").build());
+            engine.connect().unwrap();
+            engine.take_outgoing();
+            let ack = MqttPacket::ConnAck5(connackv5::MqttConnAck::new(
+                false,
+                0,
+                Some(vec![Property::AssignedClientIdentifier("a".repeat(length))]),
+            ));
+            engine.handle_incoming(&ack.to_bytes().unwrap());
+            let reserve = engine.reliability.control_reserve;
+            engine.handle_connection_lost();
+            engine.connect().unwrap();
+            assert_eq!(
+                reserve,
+                engine.take_outgoing().len(),
+                "identifier length {length}"
+            );
+        }
+    }
+
+    #[test]
+    fn connect_reservation_preserves_negotiated_session_expiry() {
+        let mut engine = MqttEngine::new(
+            MqttClientOptions::builder()
+                .client_id("")
+                .session_expiry_interval(3600)
+                .build(),
+        );
+        engine.connect().unwrap();
+        engine.take_outgoing();
+        let ack = MqttPacket::ConnAck5(connackv5::MqttConnAck::new(
+            false,
+            0,
+            Some(vec![
+                Property::SessionExpiryInterval(30),
+                Property::AssignedClientIdentifier("assigned".into()),
+            ]),
+        ));
+        engine.handle_incoming(&ack.to_bytes().unwrap());
+        assert!(engine.is_connected());
+        assert_eq!(engine.reliability.session_expiry, 30);
+    }
+
+    #[test]
+    fn assigned_identifier_that_cannot_fit_connect_reports_configuration_error() {
+        let mut engine = MqttEngine::new(
+            MqttClientOptions::builder()
+                .client_id("")
+                .max_outgoing_buffer_bytes(64)
+                .build(),
+        );
+        engine.connect().unwrap();
+        engine.take_outgoing();
+        let ack = MqttPacket::ConnAck5(connackv5::MqttConnAck::new(
+            false,
+            0,
+            Some(vec![Property::AssignedClientIdentifier("a".repeat(64))]),
+        ));
+        let events = engine.handle_incoming(&ack.to_bytes().unwrap());
+        assert!(!engine.is_connected());
+        assert!(events.iter().any(|e| matches!(e, MqttEvent::Error(MqttClientError::InvalidConfiguration { field, .. }) if field == "max_outgoing_buffer_bytes")));
+        assert!(events
+            .iter()
+            .any(|e| matches!(e, MqttEvent::Disconnected(_))));
     }
 
     #[cfg(feature = "quic-proto")]
