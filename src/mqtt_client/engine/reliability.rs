@@ -13,6 +13,9 @@ pub(super) enum ReceiveStage {
 pub(super) struct ProtocolState {
     pub reserved: HashSet<u16>,
     pub received: HashMap<u16, (ReceiveStage, Option<u64>)>,
+    // Session exchanges can outlive the connection on which PUBLISH used quota.
+    pub received_on_connection: HashSet<u16>,
+    pub incoming_quota_used: usize,
     pub incoming_aliases: HashMap<u16, String>,
     pub outgoing_aliases: HashMap<u16, String>,
     pub incoming_alias_maximum: u16,
@@ -29,7 +32,9 @@ pub(super) struct ProtocolState {
     // CONNECT creates an ID allocator before a successful CONNACK establishes state.
     pub has_session: bool,
     pub connecting: bool,
-    pub failed: bool,
+    // Remains terminal after a reset/close until CONNECT is successfully queued.
+    pub input_closed: bool,
+    pub reauthenticating: bool,
     pub queued_bytes: usize,
     pub control_reserve: usize,
     pub replay_reserve: usize,
@@ -42,6 +47,8 @@ impl ProtocolState {
         Self {
             reserved: HashSet::new(),
             received: HashMap::new(),
+            received_on_connection: HashSet::new(),
+            incoming_quota_used: 0,
             incoming_aliases: HashMap::new(),
             outgoing_aliases: HashMap::new(),
             incoming_alias_maximum: 0,
@@ -57,7 +64,8 @@ impl ProtocolState {
             session_expiry: 0,
             has_session: false,
             connecting: false,
-            failed: false,
+            input_closed: false,
+            reauthenticating: false,
             queued_bytes: 0,
             control_reserve: 6,
             replay_reserve: 0,
@@ -462,9 +470,44 @@ impl MqttEngine {
         }
     }
 
+    pub(super) fn close_input(&mut self) {
+        self.is_connected = false;
+        self.reliability.connecting = false;
+        self.reliability.input_closed = true;
+        self.reliability.reauthenticating = false;
+        self.reliability.responses.clear();
+        self.reliability.deadlines.clear();
+        self.reliability.received_on_connection.clear();
+        self.reliability.incoming_quota_used = 0;
+        self.parser.buffer_mut().clear();
+        self.ping_sent_at = None;
+    }
+
+    pub(super) fn accept_incoming(
+        &mut self,
+        packet_type: crate::mqtt_serde::control_packet::ControlPacketType,
+    ) -> bool {
+        use crate::mqtt_serde::control_packet::ControlPacketType::*;
+        if self.reliability.input_closed {
+            return false;
+        }
+        let valid = match packet_type {
+            CONNACK => self.reliability.connecting && !self.is_connected,
+            AUTH | DISCONNECT => {
+                self.is_connected || (self.mqtt_version() == 5 && self.reliability.connecting)
+            }
+            _ => self.is_connected,
+        };
+        if !valid {
+            self.fail_connection(MqttClientError::ProtocolViolation {
+                message: format!("Unexpected {packet_type:?} in the current connection state"),
+            });
+        }
+        valid
+    }
+
     pub(super) fn fail_connection(&mut self, error: MqttClientError) {
         self.connection_lost_at(Instant::now());
-        self.reliability.failed = true;
         self.events.push(MqttEvent::Error(error));
         self.events.push(MqttEvent::Disconnected(None));
     }
@@ -519,20 +562,28 @@ impl MqttEngine {
         if id == 0 {
             return Err(MqttClientError::InvalidPacketId { packet_id: id });
         }
-        if let Some((stage, previous_stream)) = self.reliability.received.get_mut(&id) {
+        if let Some((stage, previous_stream)) = self.reliability.received.get(&id) {
             if (qos == 1) != matches!(stage, ReceiveStage::Publish(1)) {
                 return Err(MqttClientError::InvalidPacketId { packet_id: id });
             }
             if previous_stream.is_some() && *previous_stream != stream {
                 return Err(invalid("PUBLISH", "QoS handshake moved between streams"));
             }
+        }
+        if !self.reliability.received_on_connection.contains(&id) {
+            if self.reliability.incoming_quota_used
+                >= self.reliability.incoming_receive_maximum as usize
+            {
+                return Err(MqttClientError::ProtocolViolation {
+                    message: "Incoming Receive Maximum exceeded".into(),
+                });
+            }
+            self.reliability.received_on_connection.insert(id);
+            self.reliability.incoming_quota_used += 1;
+        }
+        if let Some((_, previous_stream)) = self.reliability.received.get_mut(&id) {
             *previous_stream = stream;
             return Ok(false);
-        }
-        if self.reliability.received.len() >= self.reliability.incoming_receive_maximum as usize {
-            return Err(MqttClientError::ProtocolViolation {
-                message: "Incoming Receive Maximum exceeded".into(),
-            });
         }
         self.reliability
             .received
@@ -614,6 +665,11 @@ impl MqttEngine {
             }
         } else {
             self.reliability.received.remove(&id);
+            self.reliability.received_on_connection.remove(&id);
+            // Even PUBCOMP for a resumed PUBREL replenishes the peer's quota,
+            // capped at the initial limit (MQTT 5 section 4.9).
+            self.reliability.incoming_quota_used =
+                self.reliability.incoming_quota_used.saturating_sub(1);
         }
     }
 
@@ -784,6 +840,24 @@ impl MqttEngine {
         };
         if !valid || entry.stream != stream {
             return Err(MqttClientError::InvalidPacketId { packet_id: id });
+        }
+        let counts = match (&entry.packet, packet) {
+            (MqttPacket::Subscribe3(sent), MqttPacket::SubAck3(ack)) => {
+                Some((sent.subscriptions.len(), ack.return_codes.len()))
+            }
+            (MqttPacket::Subscribe5(sent), MqttPacket::SubAck5(ack)) => {
+                Some((sent.subscriptions.len(), ack.reason_codes.len()))
+            }
+            _ => None,
+        };
+        if let Some((expected, actual)) = counts {
+            if expected != actual {
+                return Err(MqttClientError::ProtocolViolation {
+                    message: format!(
+                        "SUBACK has {actual} results for {expected} subscription filters"
+                    ),
+                });
+            }
         }
         Ok(())
     }
