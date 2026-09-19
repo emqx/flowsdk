@@ -2,7 +2,7 @@
 
 use crate::mqtt_serde::mqttv5::packet_id_ack::v5_packet_id_ack;
 
-v5_packet_id_ack!(MqttPubComp, PUBCOMP, 0x00, "PUBCOMP", PubComp5, false);
+v5_packet_id_ack!(MqttPubComp, PUBCOMP, 0x00, "PUBCOMP", PubComp5);
 
 #[cfg(test)]
 mod tests {
@@ -103,8 +103,6 @@ mod tests {
     fn test_pubcomp_error_conditions() {
         // Test various PUBCOMP reason codes
         let error_codes = vec![
-            0x80, // Unspecified error
-            0x83, // Implementation specific error
             0x92, // Packet Identifier not found
         ];
 
@@ -167,7 +165,7 @@ mod tests {
         // Test complete roundtrip with properties
         let original_pubcomp = MqttPubComp::new(
             0xDEAD,
-            0x83,
+            0x92,
             vec![
                 Property::ReasonString("Processing completed with warnings".to_string()),
                 Property::UserProperty("timestamp".to_string(), "2025-01-01T12:00:00Z".to_string()),

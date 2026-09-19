@@ -39,6 +39,21 @@ impl MqttSubscribe {
 }
 
 impl MqttControlPacket for MqttSubscribe {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        packet_id(self.message_id)?;
+        require(
+            !self.subscriptions.is_empty(),
+            "SUBSCRIBE must contain a subscription",
+        )?;
+        for sub in &self.subscriptions {
+            crate::mqtt_serde::validate_topic_filter(&sub.topic_filter)?;
+            require(sub.qos <= 2, "Subscription QoS cannot exceed 2")?;
+        }
+        Ok(())
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::SUBSCRIBE as u8
     }
@@ -125,10 +140,10 @@ impl MqttControlPacket for MqttSubscribe {
             ));
         }
 
-        Ok(ParseOk::Packet(
+        crate::mqtt_serde::parser::validated_packet(
             MqttPacket::Subscribe3(MqttSubscribe::new(message_id, subscriptions)),
             total_len,
-        ))
+        )
     }
 }
 

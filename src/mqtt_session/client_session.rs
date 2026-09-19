@@ -121,7 +121,9 @@ impl ClientSession {
 
         for (packet_id, publish) in &self.unacknowledged_publishes {
             if !self.unacknowledged_pubrels.contains_key(packet_id) {
-                packets_to_resend.push(MqttPacket::Publish5(publish.clone()));
+                let mut publish = publish.clone();
+                publish.dup = true;
+                packets_to_resend.push(MqttPacket::Publish5(publish));
             }
         }
 

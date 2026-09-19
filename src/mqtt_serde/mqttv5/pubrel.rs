@@ -2,7 +2,7 @@
 
 use crate::mqtt_serde::mqttv5::packet_id_ack::v5_packet_id_ack;
 
-v5_packet_id_ack!(MqttPubRel, PUBREL, 0x02, "PUBREL", PubRel5, true);
+v5_packet_id_ack!(MqttPubRel, PUBREL, 0x02, "PUBREL", PubRel5);
 
 #[cfg(test)]
 mod tests {
@@ -69,14 +69,14 @@ mod tests {
             Property::ReasonString("Packet processing error".to_string()),
             Property::UserProperty("context".to_string(), "test".to_string()),
         ];
-        let pubrel = MqttPubRel::new(0xABCD, 0x80, properties); // 0x80 = Unspecified error
+        let pubrel = MqttPubRel::new(0xABCD, 0x92, properties); // Packet Identifier not found
         let bytes = pubrel.to_bytes().unwrap();
 
         // Test that it can be parsed back
         match MqttPubRel::from_bytes(&bytes).unwrap() {
             ParseOk::Packet(MqttPacket::PubRel5(parsed_pubrel), _) => {
                 assert_eq!(parsed_pubrel.packet_id, 0xABCD);
-                assert_eq!(parsed_pubrel.reason_code, 0x80);
+                assert_eq!(parsed_pubrel.reason_code, 0x92);
                 assert_eq!(parsed_pubrel.properties.len(), 2);
             }
             _ => panic!("Expected PUBREL packet"),
@@ -117,8 +117,6 @@ mod tests {
     fn test_pubrel_error_conditions() {
         // Test various PUBREL reason codes
         let error_codes = vec![
-            0x80, // Unspecified error
-            0x83, // Implementation specific error
             0x92, // Packet Identifier not found
         ];
 

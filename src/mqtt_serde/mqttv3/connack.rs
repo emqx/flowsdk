@@ -32,6 +32,16 @@ impl MqttConnAck {
 }
 
 impl MqttControlPacket for MqttConnAck {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        require(self.return_code <= 5, "Invalid CONNACK return code")?;
+        require(
+            !self.session_present || self.return_code == 0,
+            "Failed CONNACK cannot set Session Present",
+        )
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::CONNACK as u8
     }
@@ -93,10 +103,10 @@ impl MqttControlPacket for MqttConnAck {
             ));
         }
 
-        Ok(ParseOk::Packet(
+        crate::mqtt_serde::parser::validated_packet(
             MqttPacket::ConnAck3(MqttConnAck::new(session_present, return_code)),
             total_len,
-        ))
+        )
     }
 }
 

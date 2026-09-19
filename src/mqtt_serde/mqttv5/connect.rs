@@ -81,6 +81,22 @@ impl MqttConnect {
 }
 
 impl MqttControlPacket for MqttConnect {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        string(&self.protocol_name)?;
+        string(&self.client_id)?;
+        if let Some(username) = &self.username {
+            string(username)?;
+        }
+        if let Some(will) = &self.will {
+            require(will.will_qos <= 2, "Will QoS cannot exceed 2")?;
+            topic(&will.will_topic)?;
+        }
+        properties(&self.properties, PropertyContext::Connect)?;
+        Ok(())
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::CONNECT as u8
     }
@@ -142,6 +158,11 @@ impl MqttControlPacket for MqttConnect {
             }
             // MQTT 5.0: 3.1.3.2.8
             will_properties.extend(will.properties.user_properties.clone());
+            #[cfg(feature = "strict-protocol-compliance")]
+            crate::mqtt_serde::validation::properties(
+                &will_properties,
+                crate::mqtt_serde::validation::PropertyContext::Will,
+            )?;
             bytes.extend(encode_properities_hdr(&will_properties)?);
             bytes.extend(crate::mqtt_serde::encode_utf8_string(&will.will_topic)?);
             bytes.extend(crate::mqtt_serde::encode_binary_data(&will.will_message)?);
@@ -163,6 +184,8 @@ impl MqttControlPacket for MqttConnect {
         if packet_type != ControlPacketType::CONNECT as u8 {
             return Err(ParseError::InvalidPacketType);
         }
+        #[cfg(feature = "strict-protocol-compliance")]
+        crate::mqtt_serde::validation::fixed_header(buffer[0])?;
 
         let (size, vbi_len) = parse_remaining_length(&buffer[1..])?;
         let mut offset: usize = 1 + vbi_len;
@@ -316,7 +339,7 @@ impl MqttControlPacket for MqttConnect {
             )));
         }
 
-        Ok(ParseOk::Packet(packet, offset))
+        crate::mqtt_serde::parser::validated_packet(packet, offset)
     }
 }
 
@@ -435,7 +458,7 @@ mod tests {
             true,
             vec![
                 Property::SessionExpiryInterval(3600),
-                Property::PayloadFormatIndicator(1),
+                Property::RequestProblemInformation(1),
             ],
         );
 
@@ -484,11 +507,11 @@ mod tests {
     #[test]
     fn test_connect_invalid_will_qos_3() {
         // [MQTT-3.1.2-12]
-        let will = Will::new("topic".to_string(), vec![1, 2, 3], 3, false); // QoS 3 is invalid
+        let will = Will::new("topic".to_string(), vec![1, 2, 3], 2, false); // Start from a valid Will
         let connect = MqttConnect::new("c".to_string(), None, None, Some(will), 60, true, vec![]);
 
         let mut bytes = connect.to_bytes().unwrap();
-        bytes[9] |= 0x18; // Manually set Will QoS to 3, just in case connect_flags changes
+        bytes[9] |= 0x18; // Corrupt the wire flags to Will QoS 3
 
         let result = MqttConnect::from_bytes(&bytes);
         assert!(matches!(result, Err(ParseError::ParseError(_))));

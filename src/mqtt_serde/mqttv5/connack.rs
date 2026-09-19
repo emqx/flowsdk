@@ -27,6 +27,20 @@ impl MqttConnAck {
 }
 
 impl MqttControlPacket for MqttConnAck {
+    #[cfg(feature = "strict-protocol-compliance")]
+    fn validate(&self) -> Result<(), ParseError> {
+        use crate::mqtt_serde::validation::*;
+        reason(ControlPacketType::CONNACK, self.reason_code)?;
+        properties(
+            self.properties.as_deref().unwrap_or_default(),
+            PropertyContext::ConnAck,
+        )?;
+        require(
+            !self.session_present || self.reason_code == 0,
+            "Failed CONNACK cannot set Session Present",
+        )
+    }
+
     fn control_packet_type(&self) -> u8 {
         ControlPacketType::CONNACK as u8
     }
@@ -60,6 +74,8 @@ pub fn parse_connack(buffer: &[u8]) -> Result<ParseOk, ParseError> {
     if packet_type != ControlPacketType::CONNACK as u8 {
         return Err(ParseError::InvalidPacketType);
     }
+    #[cfg(feature = "strict-protocol-compliance")]
+    crate::mqtt_serde::validation::fixed_header(buffer[0])?;
 
     let (size, vbi_len) = parse_remaining_length(&buffer[1..])?;
 
@@ -101,10 +117,10 @@ pub fn parse_connack(buffer: &[u8]) -> Result<ParseOk, ParseError> {
         return Err(ParseError::InvalidLength);
     }
 
-    Ok(ParseOk::Packet(
+    crate::mqtt_serde::parser::validated_packet(
         MqttPacket::ConnAck5(MqttConnAck::new(session_present, reason_code, properties)),
         offset,
-    ))
+    )
 }
 
 #[cfg(test)]

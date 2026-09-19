@@ -111,7 +111,7 @@ pub fn read_string(buffer: &[u8]) -> Result<(String, usize), ParseError> {
 }
 
 pub fn write_string(s: &str) -> Result<Vec<u8>, ParseError> {
-    Ok(Utf8String::encode(s))
+    super::encode_utf8_string(s)
 }
 
 pub fn read_u8(buffer: &[u8]) -> Result<u8, ParseError> {
@@ -133,3 +133,9 @@ fn vbi(buffer: &[u8]) -> Result<(usize, usize), ParseError> {
 
 pub mod leveled;
 pub mod stream;
+
+/// Complete a typed decode only after validating fields shared with the encoder.
+pub(crate) fn validated_packet(packet: MqttPacket, consumed: usize) -> ParserResult {
+    packet.validate()?;
+    Ok(ParseOk::Packet(packet, consumed))
+}

@@ -119,7 +119,10 @@ impl MqttParser {
             return Ok(None);
         }
 
-        match MqttPacket::from_bytes_with_version(&self.buffer, self.mqtt_version) {
+        let Some(frame_len) = packet_frame_len(&self.buffer)? else {
+            return Ok(None);
+        };
+        match MqttPacket::from_bytes_with_version(&self.buffer[..frame_len], self.mqtt_version) {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 // A full packet was parsed, advance the buffer
                 self.buffer.advance(consumed);
@@ -150,23 +153,9 @@ impl MqttParser {
         }
 
         match self.parse_level {
-            ParseLevel::Full => {
-                assert!(
-                    self.mqtt_version != 0,
-                    "MQTT version must be set before parsing packets"
-                );
-                match MqttPacket::from_bytes_with_version(&self.buffer, self.mqtt_version) {
-                    Ok(ParseOk::Packet(packet, consumed)) => {
-                        self.buffer.advance(consumed);
-                        Ok(Some(ParsedPacket::Full(packet)))
-                    }
-                    Ok(ParseOk::Continue(_, _)) => Ok(None),
-                    Err(e) => Err(e),
-                    Ok(ParseOk::TopicName(_, _)) => Err(ParseError::ParseError(
-                        "Unexpected ParseOk variant".to_string(),
-                    )),
-                }
-            }
+            ParseLevel::Full => self
+                .next_packet()
+                .map(|packet| packet.map(ParsedPacket::Full)),
             ParseLevel::TypeOnly => match parse_type_only(&self.buffer) {
                 Ok(LeveledParseOk::Packet(pkt, consumed)) => {
                     self.buffer.advance(consumed);

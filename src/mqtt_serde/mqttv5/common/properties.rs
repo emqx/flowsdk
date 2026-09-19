@@ -72,6 +72,8 @@ pub enum Property {
 
 impl Property {
     fn encode(&self, bytes: &mut Vec<u8>) -> Result<(), parser::ParseError> {
+        #[cfg(feature = "strict-protocol-compliance")]
+        crate::mqtt_serde::validation::property_value(self)?;
         match self {
             Property::PayloadFormatIndicator(val) => {
                 bytes.push(property_id(PropertyID::PayloadFormatIndicator));
@@ -234,6 +236,8 @@ fn parse_properties(buffer: &[u8]) -> Result<(Vec<Property>, usize), ParseError>
 
     while offset < buffer.len() {
         let (prop, consumed) = parse_property(&buffer[offset..])?;
+        #[cfg(feature = "strict-protocol-compliance")]
+        crate::mqtt_serde::validation::property_value(&prop)?;
         properties.push(prop);
         offset += consumed;
     }

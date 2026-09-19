@@ -28,12 +28,12 @@ pub use commands::{
     PublishBuilderError, PublishCommand, PublishCommandBuilder, SubscribeBuilderError,
     SubscribeCommand, SubscribeCommandBuilder, UnsubscribeCommand,
 };
-pub use engine::{MqttEngine, MqttEvent, MqttMessage};
+pub use engine::{MqttEngine, MqttEvent, MqttMessage, OperationKind};
 #[cfg(feature = "quic-proto")]
 pub use engine::{QuicMqttEngine, QuicZeroRttConfig, QuicZeroRttStatus};
 pub use error::{MqttClientError, MqttClientResult};
 pub use no_io_client::NoIoMqttClient;
-pub use opts::{MqttClientOptions, MqttClientOptionsBuilder};
+pub use opts::{MqttClientOptions, MqttClientOptionsBuilder, OperationTimeouts};
 #[cfg(feature = "rustls-tls")]
 pub use tls_engine::TlsMqttEngine;
 #[cfg(feature = "async-client")]

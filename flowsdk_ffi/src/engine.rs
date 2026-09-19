@@ -80,7 +80,12 @@ impl MqttEngineFFI {
         let mut engine = self.engine.lock().unwrap();
         engine.reset_for_new_transport();
         self.events.lock().unwrap().clear();
-        engine.connect();
+        if let Err(error) = engine.connect() {
+            self.events
+                .lock()
+                .unwrap()
+                .extend(map_events(vec![MqttEvent::Error(error)]));
+        }
     }
 
     pub fn handle_incoming(&self, data: Vec<u8>) -> Vec<MqttEventFFI> {
@@ -361,9 +366,11 @@ fn map_event(event: MqttEvent) -> Option<MqttEventFFI> {
         MqttEvent::PingResponse(res) => Some(MqttEventFFI::PingResponse {
             success: res.success,
         }),
-        MqttEvent::Error(err) => Some(MqttEventFFI::Error {
-            message: format!("{:?}", err),
-        }),
+        MqttEvent::OperationFailed { error: err, .. } | MqttEvent::Error(err) => {
+            Some(MqttEventFFI::Error {
+                message: format!("{:?}", err),
+            })
+        }
         MqttEvent::TransportClosed {
             reason,
             by_peer,
@@ -781,7 +788,7 @@ impl TlsMqttEngineFFI {
         let mut engine = self.engine.lock().unwrap();
         engine.reset_for_new_transport()?;
         self.events.lock().unwrap().clear();
-        engine.connect();
+        engine.connect()?;
         Ok(())
     }
 

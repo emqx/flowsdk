@@ -211,7 +211,7 @@ mod tests {
             server.write_tls(&mut output).unwrap();
             client.handle_socket_data(&output).unwrap();
         }
-        client.connect();
+        client.connect().unwrap();
         for _ in 0..20 {
             exchange(&mut client, &mut server, &mut received);
         }

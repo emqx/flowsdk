@@ -1807,6 +1807,17 @@ impl TokioClientWorker {
                     }
                     self.event_handler.on_ping_response(&res).await;
                 }
+                MqttEvent::OperationFailed {
+                    operation, error, ..
+                } => {
+                    if operation == super::engine::OperationKind::Connect {
+                        if let Some(tx) = self.pending_connect.take() {
+                            let _ = tx.send(Err(error.clone()));
+                        }
+                        self.handle_connection_lost().await;
+                    }
+                    self.event_handler.on_error(&error).await;
+                }
                 MqttEvent::Error(err) => {
                     self.event_handler.on_error(&err).await;
                 }
@@ -2233,7 +2244,14 @@ impl TokioClientWorker {
                 self.stream = Some(transport);
 
                 // Initiate MQTT CONNECT packet through engine
-                self.engine.connect();
+                self.engine.reset_for_new_transport();
+                if let Err(error) = self.engine.connect() {
+                    self.stream = None;
+                    if let Some(tx) = self.pending_connect.take() {
+                        let _ = tx.send(Err(error.clone()));
+                    }
+                    self.event_handler.on_error(&error).await;
+                }
             }
             Err(e) => {
                 self.event_handler.on_error(&e).await;
@@ -2307,12 +2325,16 @@ impl TokioClientWorker {
 
     /// Handle ping command
     async fn handle_ping(&mut self) {
-        self.engine.send_ping();
+        if let Err(error) = self.engine.send_ping() {
+            self.event_handler.on_error(&error).await;
+        }
     }
 
     /// Handle AUTH command for enhanced authentication (MQTT v5)
     async fn handle_auth(&mut self, reason_code: u8, properties: Vec<Property>) {
-        self.engine.auth(reason_code, properties);
+        if let Err(error) = self.engine.auth(reason_code, properties) {
+            self.event_handler.on_error(&error).await;
+        }
     }
 
     /// Handle synchronous connect command
@@ -2383,12 +2405,16 @@ impl TokioClientWorker {
     /// Handle synchronous ping command
     async fn handle_ping_sync(&mut self, response_tx: tokio::sync::oneshot::Sender<PingResult>) {
         self.pending_ping = Some(response_tx);
-        self.engine.send_ping();
+        if let Err(error) = self.engine.send_ping() {
+            self.event_handler.on_error(&error).await;
+        }
     }
 
     /// Handle disconnect command
     async fn handle_disconnect(&mut self) {
-        self.engine.disconnect();
+        if let Err(error) = self.engine.disconnect() {
+            self.event_handler.on_error(&error).await;
+        }
     }
 
     /// Handle connection lost
