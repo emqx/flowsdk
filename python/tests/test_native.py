@@ -234,7 +234,7 @@ class NativeBindingsTests(unittest.TestCase):
             engine.handle_incoming(b"\x20\x03\x00\x00\x00" if version == 5 else b"\x20\x02\x00\x00")
             engine.take_events()
             client.protocol = SimpleNamespace(closed=False, pump=lambda: None)
-            for qos in (1, 2):
+            for qos in (1, 2, 1):
                 body = b"\x00\x01t\x00\x07" + (b"\x00" if version == 5 else b"") + b"data"
                 engine.handle_incoming(bytes([0x30 | qos << 1, len(body)]) + body)
                 events = engine.take_events()
@@ -246,6 +246,8 @@ class NativeBindingsTests(unittest.TestCase):
                 self.assertEqual(outgoing[0], 0x40 if qos == 1 else 0x50)
                 self.assertEqual(outgoing[2:4], b"\x00\x07")
                 if qos == 2:
+                    with self.assertRaises(flowsdk.MqttErrorFfi.Engine):
+                        await client.complete_qos2(7)
                     engine.handle_incoming(b"\x62\x02\x00\x07")
                     event = engine.take_events()[0]
                     self.assertTrue(event.is_pub_rel_received())
@@ -256,7 +258,7 @@ class NativeBindingsTests(unittest.TestCase):
                 await client.acknowledge(0, 1)
             with self.assertRaises(flowsdk.MqttErrorFfi.InvalidArgument):
                 await client.acknowledge(7, 1, stream_id=4)
-        for version in (3, 5): asyncio.run(run(version))
+        for version in (3, 4, 5): asyncio.run(run(version))
 
     def test_reduced_parser_reports_metadata_and_rejects_ack_waiting_operations(self):
         client = flowsdk.FlowMqttClient("parse-level")

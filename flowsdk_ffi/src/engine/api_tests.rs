@@ -28,6 +28,17 @@ fn connected(engine: &mut MqttEngine, version: u8) {
     engine.take_events();
 }
 
+fn incoming_publish(version: u8, qos: u8, packet_id: u16) -> Vec<u8> {
+    let mut body = vec![0, 1, b't'];
+    body.extend_from_slice(&packet_id.to_be_bytes());
+    if version == 5 {
+        body.push(0);
+    }
+    let mut packet = vec![0x30 | (qos << 1), body.len() as u8];
+    packet.extend(body);
+    packet
+}
+
 #[test]
 fn every_property_preserves_its_type_and_value_across_the_ffi() {
     let values = vec![
@@ -181,8 +192,8 @@ fn connect_validates_credentials_and_preserves_all_will_fields() {
 }
 
 #[test]
-fn manual_acknowledgements_validate_reason_codes_and_encode_each_version() {
-    for version in [3, 5] {
+fn manual_acknowledgements_validate_reason_codes_and_advance_receive_state() {
+    for version in [3, 4, 5] {
         let mut opts = options(version);
         opts.engine_options = Some(MqttEngineOptionsFFI {
             auto_ack: Some(false),
@@ -195,6 +206,20 @@ fn manual_acknowledgements_validate_reason_codes_and_encode_each_version() {
             (MqttAcknowledgementFFI::PubRec, 0x50),
             (MqttAcknowledgementFFI::PubComp, 0x70),
         ] {
+            let incoming = match kind {
+                MqttAcknowledgementFFI::PubAck => incoming_publish(version, 1, 42),
+                MqttAcknowledgementFFI::PubRec => incoming_publish(version, 2, 42),
+                MqttAcknowledgementFFI::PubComp => vec![0x62, 2, 0, 42],
+            };
+            let events = engine.handle_incoming(incoming);
+            assert!(
+                events.iter().any(|event| match kind {
+                    MqttAcknowledgementFFI::PubComp =>
+                        matches!(event, MqttEventFFI::PubRelReceived { packet_id: 42, .. }),
+                    _ => matches!(event, MqttEventFFI::MessageReceived(_)),
+                }),
+                "incoming packet did not advance the receive exchange"
+            );
             engine.acknowledge(kind, 42, 0, vec![], None).unwrap();
             let bytes = engine.take_outgoing();
             assert_eq!(bytes[0], header);
@@ -219,6 +244,16 @@ fn manual_acknowledgements_validate_reason_codes_and_encode_each_version() {
                 assert!(engine.acknowledge(kind, 42, 0x80, vec![], None).is_err());
             }
         }
+        let events = engine.handle_incoming(incoming_publish(version, 1, 42));
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, MqttEventFFI::MessageReceived(_))));
+        assert!(engine
+            .acknowledge(MqttAcknowledgementFFI::PubComp, 42, 0, vec![], None)
+            .is_err());
+        engine
+            .acknowledge(MqttAcknowledgementFFI::PubAck, 42, 0, vec![], None)
+            .unwrap();
     }
     let engine = MqttEngineFFI::new(None, 5).unwrap();
     assert!(engine
@@ -245,12 +280,30 @@ fn tls_manual_ack_and_parser_controls_reach_the_mqtt_engine() {
     .unwrap();
     connected(engine.engine.lock().unwrap().engine_mut(), 5);
     engine
+        .engine
+        .lock()
+        .unwrap()
+        .engine_mut()
+        .handle_incoming(&incoming_publish(5, 1, 42));
+    engine
         .acknowledge(MqttAcknowledgementFFI::PubAck, 42, 0, vec![], None)
         .unwrap();
     assert_eq!(
         engine.engine.lock().unwrap().engine_mut().take_outgoing()[0],
         0x40
     );
+    assert!(engine
+        .acknowledge(MqttAcknowledgementFFI::PubAck, 42, 0, vec![], None)
+        .is_err());
+    let events = engine
+        .engine
+        .lock()
+        .unwrap()
+        .engine_mut()
+        .handle_incoming(&incoming_publish(5, 2, 42));
+    assert!(events
+        .iter()
+        .any(|event| matches!(event, MqttEvent::MessageReceived(_))));
     assert!(engine
         .acknowledge(MqttAcknowledgementFFI::PubRec, 42, 0, vec![], Some(4))
         .is_err());

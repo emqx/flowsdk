@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 use super::*;
+#[cfg(feature = "quic")]
 use flowsdk::mqtt_serde::control_packet::MqttPacket;
+use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
 use flowsdk::mqtt_serde::parser::leveled::ParseLevel;
 
 impl From<MqttParseLevelFFI> for ParseLevel {
@@ -13,14 +15,13 @@ impl From<MqttParseLevelFFI> for ParseLevel {
     }
 }
 
-fn acknowledgement(
+fn acknowledgement_properties(
     engine: &MqttEngine,
     kind: MqttAcknowledgementFFI,
     packet_id: u16,
     reason_code: u8,
     properties: Vec<MqttPropertyFFI>,
-) -> Result<MqttPacket, MqttErrorFFI> {
-    use flowsdk::mqtt_serde::{mqttv3, mqttv5};
+) -> Result<Vec<Property>, MqttErrorFFI> {
     if engine.options().auto_ack {
         return Err(properties::invalid(
             "Manual acknowledgements require auto_ack=False",
@@ -47,26 +48,23 @@ fn acknowledgement(
             "Invalid acknowledgement reason code for this packet/version",
         ));
     }
-    Ok(match (engine.mqtt_version(), kind) {
-        (5, MqttAcknowledgementFFI::PubAck) => MqttPacket::PubAck5(
-            mqttv5::pubackv5::MqttPubAck::new(packet_id, reason_code, properties),
-        ),
-        (5, MqttAcknowledgementFFI::PubRec) => MqttPacket::PubRec5(
-            mqttv5::pubrecv5::MqttPubRec::new(packet_id, reason_code, properties),
-        ),
-        (5, MqttAcknowledgementFFI::PubComp) => MqttPacket::PubComp5(
-            mqttv5::pubcompv5::MqttPubComp::new(packet_id, reason_code, properties),
-        ),
-        (_, MqttAcknowledgementFFI::PubAck) => {
-            MqttPacket::PubAck3(mqttv3::puback::MqttPubAck::new(packet_id))
-        }
-        (_, MqttAcknowledgementFFI::PubRec) => {
-            MqttPacket::PubRec3(mqttv3::pubrec::MqttPubRec::new(packet_id))
-        }
-        (_, MqttAcknowledgementFFI::PubComp) => {
-            MqttPacket::PubComp3(mqttv3::pubcomp::MqttPubComp::new(packet_id))
-        }
-    })
+    Ok(properties)
+}
+
+fn acknowledge_received(
+    engine: &mut MqttEngine,
+    kind: MqttAcknowledgementFFI,
+    packet_id: u16,
+    reason_code: u8,
+    properties: Vec<MqttPropertyFFI>,
+) -> Result<(), MqttErrorFFI> {
+    let properties = acknowledgement_properties(engine, kind, packet_id, reason_code, properties)?;
+    match kind {
+        MqttAcknowledgementFFI::PubAck => engine.puback(packet_id, reason_code, properties),
+        MqttAcknowledgementFFI::PubRec => engine.pubrec(packet_id, reason_code, properties),
+        MqttAcknowledgementFFI::PubComp => engine.pubcomp(packet_id, reason_code, properties),
+    }
+    .map_err(Into::into)
 }
 
 #[cfg_attr(feature = "uniffi-bindings", uniffi::export)]
@@ -91,8 +89,7 @@ impl MqttEngineFFI {
             return Err(properties::invalid("Stream IDs require QUIC"));
         }
         let mut engine = self.engine.lock().unwrap();
-        let packet = acknowledgement(&engine, kind, packet_id, reason_code, properties)?;
-        engine.enqueue_packet(packet).map_err(Into::into)
+        acknowledge_received(&mut engine, kind, packet_id, reason_code, properties)
     }
 }
 
@@ -120,11 +117,13 @@ impl TlsMqttEngineFFI {
             return Err(properties::invalid("Stream IDs require QUIC"));
         }
         let mut engine = self.engine.lock().unwrap();
-        let packet = acknowledgement(engine.engine(), kind, packet_id, reason_code, properties)?;
-        engine
-            .engine_mut()
-            .enqueue_packet(packet)
-            .map_err(Into::into)
+        acknowledge_received(
+            engine.engine_mut(),
+            kind,
+            packet_id,
+            reason_code,
+            properties,
+        )
     }
 }
 
@@ -146,8 +145,31 @@ impl QuicMqttEngineFFI {
         properties: Vec<MqttPropertyFFI>,
         stream_id: Option<u64>,
     ) -> Result<(), MqttErrorFFI> {
+        use flowsdk::mqtt_serde::{mqttv3, mqttv5};
+
         let mut engine = self.engine.lock().unwrap();
-        let packet = acknowledgement(engine.engine(), kind, packet_id, reason_code, properties)?;
+        let properties =
+            acknowledgement_properties(engine.engine(), kind, packet_id, reason_code, properties)?;
+        let packet = match (engine.engine().mqtt_version(), kind) {
+            (5, MqttAcknowledgementFFI::PubAck) => MqttPacket::PubAck5(
+                mqttv5::pubackv5::MqttPubAck::new(packet_id, reason_code, properties),
+            ),
+            (5, MqttAcknowledgementFFI::PubRec) => MqttPacket::PubRec5(
+                mqttv5::pubrecv5::MqttPubRec::new(packet_id, reason_code, properties),
+            ),
+            (5, MqttAcknowledgementFFI::PubComp) => MqttPacket::PubComp5(
+                mqttv5::pubcompv5::MqttPubComp::new(packet_id, reason_code, properties),
+            ),
+            (_, MqttAcknowledgementFFI::PubAck) => {
+                MqttPacket::PubAck3(mqttv3::puback::MqttPubAck::new(packet_id))
+            }
+            (_, MqttAcknowledgementFFI::PubRec) => {
+                MqttPacket::PubRec3(mqttv3::pubrec::MqttPubRec::new(packet_id))
+            }
+            (_, MqttAcknowledgementFFI::PubComp) => {
+                MqttPacket::PubComp3(mqttv3::pubcomp::MqttPubComp::new(packet_id))
+            }
+        };
         let stream = stream_id
             .or_else(|| engine.control_stream_id())
             .ok_or_else(|| properties::invalid("QUIC has no control stream"))?;
