@@ -389,7 +389,7 @@ class NativeBindingsTests(unittest.TestCase):
             self.assertEqual(client._pending_ping, {})
         asyncio.run(run())
 
-    def test_disconnect_preserves_outgoing_and_incoming_properties(self):
+    def test_local_disconnect_preserves_properties_and_closes_input(self):
         engine = flowsdk.MqttEngineFfi("native-disconnect", 5)
         engine.connect()
         engine.take_outgoing()
@@ -405,11 +405,25 @@ class NativeBindingsTests(unittest.TestCase):
         engine.disconnect_with_options(flowsdk.MqttDisconnectOptionsFfi(reason_code=4, properties=properties))
         packet = bytes(engine.take_outgoing())
         self.assertEqual(packet, b"\xe0\x08\x04\x06\x1f\x00\x03bye")
+        self.assertFalse(engine.is_connected())
+        self.assertEqual(engine.handle_incoming(b"\xe0\x08\x80\x06\x1f\x00\x03bye"), [])
+        self.assertEqual(engine.take_events(), [])
+
+    def test_peer_disconnect_preserves_properties(self):
+        engine = flowsdk.MqttEngineFfi("native-peer-disconnect", 5)
+        engine.connect()
+        engine.take_outgoing()
+        engine.handle_incoming(b"\x20\x03\x00\x00\x00")
+        engine.take_events()
+        self.assertTrue(engine.is_connected())
         engine.handle_incoming(b"\xe0\x08\x80\x06\x1f\x00\x03bye")
-        event = engine.take_events()[0]
+        events = engine.take_events()
+        self.assertEqual(len(events), 1)
+        event = events[0]
         self.assertTrue(event.is_disconnected())
         self.assertEqual(event.reason_code, 0x80)
-        self.assertEqual(event.properties, properties)
+        self.assertEqual(event.properties, [flowsdk.MqttPropertyFfi.REASON_STRING(value="bye")])
+        self.assertFalse(engine.is_connected())
 
 
 if __name__ == "__main__":
