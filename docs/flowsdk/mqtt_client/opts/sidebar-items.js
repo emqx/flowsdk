@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["TlsBackend"],"struct":["MqttClientOptions"],"type":["MqttClientOptionsBuilder"]};
+window.SIDEBAR_ITEMS = {"enum":["TlsBackend"],"struct":["MqttClientOptions","OperationTimeouts"],"type":["MqttClientOptionsBuilder"]};
