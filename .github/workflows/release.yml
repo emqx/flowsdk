@@ -217,11 +217,11 @@ jobs:
       with:
         targets: ${{ matrix.target }}
 
-    - name: Install musl toolchain
+    - name: Install musl and vendored OpenSSL build tools
       if: runner.os == 'Linux'
       run: |
         sudo apt-get update
-        sudo apt-get install --yes musl-tools
+        sudo apt-get install --yes musl-tools make perl
 
     - name: Install protoc
       uses: arduino/setup-protoc@v3

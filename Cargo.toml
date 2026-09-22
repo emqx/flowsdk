@@ -96,6 +96,11 @@ clap = { version = "4.5", features = ["derive"] }
 openssl = "0.10"
 tempfile = "3"
 
+# Cargo also builds dev-dependencies for examples. Build a musl-compatible
+# OpenSSL for certificate fixtures instead of searching for a host installation.
+[target.'cfg(target_env = "musl")'.dev-dependencies]
+openssl = { version = "0.10", features = ["vendored"] }
+
 [[example]]
 name = "no_io_quic_async_client_example"
 required-features = ["quic"]
