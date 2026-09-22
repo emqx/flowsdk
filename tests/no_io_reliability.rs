@@ -213,13 +213,14 @@ mod initial_authentication_commands {
         client
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     fn assert_no_prohibited_output<T: std::fmt::Debug>(
         client: &mut NoIoMqttClient,
         result: Result<T, MqttClientError>,
     ) {
         let output = packets(&client.take_outgoing());
-        // MQTT-3.1.2-30 is a sender rule, independent of strict receiver validation.
-        // Either rejecting or deferring the command is acceptable.
+        // Strict compliance enforces MQTT-3.1.2-30. Either rejecting or deferring
+        // the command is acceptable.
         assert!(
             output
                 .iter()
@@ -228,6 +229,7 @@ mod initial_authentication_commands {
         );
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn ping_before_any_challenge_cannot_send_pingreq() {
         let mut client = awaiting_connack(false);
@@ -235,6 +237,7 @@ mod initial_authentication_commands {
         assert_no_prohibited_output(&mut client, result);
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn ping_during_initial_authentication_cannot_send_pingreq() {
         let mut client = awaiting_connack(true);
@@ -242,6 +245,7 @@ mod initial_authentication_commands {
         assert_no_prohibited_output(&mut client, result);
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn subscribe_before_connack_cannot_send_subscribe() {
         let mut client = awaiting_connack(false);
@@ -249,6 +253,7 @@ mod initial_authentication_commands {
         assert_no_prohibited_output(&mut client, result);
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn unsubscribe_before_connack_cannot_send_unsubscribe() {
         let mut client = awaiting_connack(false);
@@ -306,6 +311,7 @@ mod initial_authentication_commands {
         send_normal_commands(&mut client);
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn rejected_commands_leave_handshake_and_packet_ids_intact() {
         let mut client = awaiting_connack(true);
@@ -349,6 +355,7 @@ mod initial_authentication_commands {
         );
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn encoded_commands_cannot_bypass_initial_authentication() {
         let mut engine = MqttEngine::new(auth_options());
@@ -405,6 +412,7 @@ mod initial_authentication_commands {
         ));
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn direct_enqueue_only_allows_auth_and_disconnect_before_connack() {
         use flowsdk::mqtt_serde::mqttv5::{authv5::MqttAuth, disconnectv5::MqttDisconnect};
@@ -433,6 +441,65 @@ mod initial_authentication_commands {
         assert!(matches!(
             packets(&engine.take_outgoing()).as_slice(),
             [MqttPacket::Auth(_), MqttPacket::Disconnect5(_)]
+        ));
+    }
+
+    #[cfg(not(feature = "strict-protocol-compliance"))]
+    #[test]
+    fn commands_can_send_during_initial_authentication_without_strict_validation() {
+        for challenged in [false, true] {
+            let mut client = awaiting_connack(challenged);
+            send_normal_commands(&mut client);
+        }
+    }
+
+    #[cfg(not(feature = "strict-protocol-compliance"))]
+    #[test]
+    fn encoded_and_direct_sends_are_allowed_without_strict_validation() {
+        let mut engine = MqttEngine::new(auth_options());
+        engine.connect().unwrap();
+        engine.take_outgoing();
+        for qos in 0..=2 {
+            let (_, bytes) = engine
+                .publish_encoded(
+                    PublishCommand::simple("test/topic", b"payload".to_vec(), qos, false),
+                    Some(4),
+                )
+                .unwrap();
+            assert!(
+                matches!(packets(&bytes).as_slice(), [MqttPacket::Publish5(p)] if p.qos == qos)
+            );
+        }
+        let (_, bytes) = engine
+            .subscribe_encoded(SubscribeCommand::single("test/topic", 1), Some(4))
+            .unwrap();
+        assert!(matches!(
+            packets(&bytes).as_slice(),
+            [MqttPacket::Subscribe5(_)]
+        ));
+        let (_, bytes) = engine
+            .unsubscribe_encoded(
+                UnsubscribeCommand::from_topics(vec!["test/topic".into()]),
+                Some(4),
+            )
+            .unwrap();
+        assert!(matches!(
+            packets(&bytes).as_slice(),
+            [MqttPacket::Unsubscribe5(_)]
+        ));
+        engine
+            .enqueue_packet(MqttPacket::Publish5(MqttPublish::new(
+                0,
+                "test/topic".into(),
+                None,
+                vec![],
+                false,
+                false,
+            )))
+            .unwrap();
+        assert!(matches!(
+            packets(&engine.take_outgoing()).as_slice(),
+            [MqttPacket::Publish5(_)]
         ));
     }
 
