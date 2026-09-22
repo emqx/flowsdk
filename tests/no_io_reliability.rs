@@ -164,6 +164,303 @@ fn drain(client: &mut NoIoMqttClient) -> Vec<MqttPacket> {
     result
 }
 
+mod initial_authentication_commands {
+    use super::*;
+    use flowsdk::mqtt_client::{engine::MqttEngine, UnsubscribeCommand};
+
+    fn method_properties() -> Vec<Property> {
+        vec![Property::AuthenticationMethod("test-method".into())]
+    }
+
+    fn auth_options() -> MqttClientOptions {
+        MqttClientOptions::builder()
+            .mqtt_version(5)
+            .keep_alive(0)
+            .reconnect(false)
+            .connect_properties(method_properties())
+            .operation_timeouts(OperationTimeouts {
+                publish: Some(Duration::from_secs(10)),
+                subscribe: Some(Duration::from_secs(10)),
+                unsubscribe: Some(Duration::from_secs(10)),
+                ..OperationTimeouts::default()
+            })
+            .build()
+    }
+
+    fn awaiting_connack(challenged: bool) -> NoIoMqttClient {
+        let mut client = NoIoMqttClient::new(auth_options());
+        client.connect().unwrap();
+        assert!(
+            matches!(packets(&client.take_outgoing()).as_slice(), [MqttPacket::Connect5(p)]
+                if p.properties == method_properties())
+        );
+        assert!(!client.is_connected());
+        assert!(client.take_events().is_empty());
+        if challenged {
+            let events = client.handle_incoming(b"\xf0\x10\x18\x0e\x15\x00\x0btest-method");
+            assert!(
+                matches!(events.as_slice(), [MqttEvent::AuthReceived(a)]
+                    if a.reason_code == 0x18 && a.properties == method_properties()),
+                "invalid AUTH challenge setup: {events:#?}"
+            );
+            client.auth(0x18, vec![]).unwrap();
+            assert!(
+                matches!(packets(&client.take_outgoing()).as_slice(), [MqttPacket::Auth(a)]
+                    if a.reason_code == 0x18 && a.properties == method_properties())
+            );
+            assert!(!client.is_connected());
+        }
+        client
+    }
+
+    fn assert_no_prohibited_output<T: std::fmt::Debug>(
+        client: &mut NoIoMqttClient,
+        result: Result<T, MqttClientError>,
+    ) {
+        let output = packets(&client.take_outgoing());
+        // MQTT-3.1.2-30 is a sender rule, independent of strict receiver validation.
+        // Either rejecting or deferring the command is acceptable.
+        assert!(
+            output
+                .iter()
+                .all(|p| matches!(p, MqttPacket::Auth(_) | MqttPacket::Disconnect5(_))),
+            "command returned {result:?}, but sent prohibited packets before CONNACK: {output:#?}"
+        );
+    }
+
+    #[test]
+    fn ping_before_any_challenge_cannot_send_pingreq() {
+        let mut client = awaiting_connack(false);
+        let result = client.ping();
+        assert_no_prohibited_output(&mut client, result);
+    }
+
+    #[test]
+    fn ping_during_initial_authentication_cannot_send_pingreq() {
+        let mut client = awaiting_connack(true);
+        let result = client.ping();
+        assert_no_prohibited_output(&mut client, result);
+    }
+
+    #[test]
+    fn subscribe_before_connack_cannot_send_subscribe() {
+        let mut client = awaiting_connack(false);
+        let result = client.subscribe(SubscribeCommand::single("test/topic", 1));
+        assert_no_prohibited_output(&mut client, result);
+    }
+
+    #[test]
+    fn unsubscribe_before_connack_cannot_send_unsubscribe() {
+        let mut client = awaiting_connack(false);
+        let result = client.unsubscribe(UnsubscribeCommand::from_topics(vec!["test/topic".into()]));
+        assert_no_prohibited_output(&mut client, result);
+    }
+
+    #[test]
+    fn commands_can_send_after_authenticated_connack() {
+        let mut client = awaiting_connack(true);
+        let events = client.handle_incoming(&connack(false, method_properties()));
+        assert!(client.is_connected(), "{events:#?}");
+        assert!(matches!(events.as_slice(), [MqttEvent::Connected(r)] if r.reason_code == 0));
+        send_normal_commands(&mut client);
+    }
+
+    fn send_normal_commands(client: &mut NoIoMqttClient) {
+        client.ping().unwrap();
+        client
+            .subscribe(SubscribeCommand::single("test/topic", 1))
+            .unwrap();
+        client
+            .unsubscribe(UnsubscribeCommand::from_topics(vec!["test/topic".into()]))
+            .unwrap();
+        assert!(matches!(
+            packets(&client.take_outgoing()).as_slice(),
+            [
+                MqttPacket::PingReq5(_),
+                MqttPacket::Subscribe5(_),
+                MqttPacket::Unsubscribe5(_)
+            ]
+        ));
+    }
+
+    #[test]
+    fn commands_can_send_during_reauthentication() {
+        let mut client = awaiting_connack(false);
+        client.handle_incoming(&connack(false, method_properties()));
+        client.auth(0x19, vec![]).unwrap();
+        assert!(
+            matches!(packets(&client.take_outgoing()).as_slice(), [MqttPacket::Auth(a)] if a.reason_code == 0x19)
+        );
+        let events = client.handle_incoming(b"\xf0\x10\x18\x0e\x15\x00\x0btest-method");
+        assert!(matches!(events.as_slice(), [MqttEvent::AuthReceived(a)] if a.reason_code == 0x18));
+        send_normal_commands(&mut client);
+    }
+
+    #[test]
+    fn commands_without_enhanced_authentication_can_send_before_connack() {
+        let mut opts = auth_options();
+        opts.connect_properties.clear();
+        let mut client = NoIoMqttClient::new(opts);
+        client.connect().unwrap();
+        client.take_outgoing();
+        send_normal_commands(&mut client);
+    }
+
+    #[test]
+    fn rejected_commands_leave_handshake_and_packet_ids_intact() {
+        let mut client = awaiting_connack(true);
+        assert!(matches!(
+            client.ping(),
+            Err(MqttClientError::InvalidState { .. })
+        ));
+        assert!(matches!(
+            client.subscribe(SubscribeCommand::single("test/topic", 1)),
+            Err(MqttClientError::InvalidState { .. })
+        ));
+        assert!(matches!(
+            client.unsubscribe(UnsubscribeCommand::from_topics(vec!["test/topic".into()])),
+            Err(MqttClientError::InvalidState { .. })
+        ));
+        assert!(client.take_outgoing().is_empty());
+        assert!(
+            client.next_tick_at().is_none(),
+            "rejected operations must not start deadlines"
+        );
+        assert!(client.take_events().is_empty());
+        client.auth(0x18, vec![]).unwrap();
+        assert!(matches!(
+            packets(&client.take_outgoing()).as_slice(),
+            [MqttPacket::Auth(_)]
+        ));
+        let events = client.handle_incoming(&connack(false, method_properties()));
+        assert!(matches!(events.as_slice(), [MqttEvent::Connected(r)] if r.reason_code == 0));
+        assert!(client.is_connected());
+        assert_eq!(
+            client
+                .subscribe(SubscribeCommand::single("test/topic", 1))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            client
+                .unsubscribe(UnsubscribeCommand::from_topics(vec!["test/topic".into()]))
+                .unwrap(),
+            2
+        );
+    }
+
+    #[test]
+    fn encoded_commands_cannot_bypass_initial_authentication() {
+        let mut engine = MqttEngine::new(auth_options());
+        engine.connect().unwrap();
+        engine.take_outgoing();
+        for qos in 0..=2 {
+            assert!(matches!(
+                engine.publish_encoded(
+                    PublishCommand::simple("test/topic", b"payload".to_vec(), qos, false),
+                    Some(4)
+                ),
+                Err(MqttClientError::InvalidState { .. })
+            ));
+        }
+        let mut subscribe = SubscribeCommand::single("test/topic", 1);
+        subscribe.packet_id = Some(7);
+        let unsubscribe = UnsubscribeCommand::new(Some(8), vec!["test/topic".into()], vec![]);
+        assert!(matches!(
+            engine.subscribe_encoded(subscribe.clone(), Some(4)),
+            Err(MqttClientError::InvalidState { .. })
+        ));
+        assert!(matches!(
+            engine.unsubscribe_encoded(unsubscribe.clone(), Some(4)),
+            Err(MqttClientError::InvalidState { .. })
+        ));
+        assert!(engine.take_outgoing().is_empty());
+        assert!(engine.next_tick_at().is_none());
+        assert!(engine.take_events().is_empty());
+
+        let events = engine.handle_incoming(&connack(false, method_properties()));
+        assert!(engine.is_connected(), "{events:#?}");
+        for qos in 0..=2 {
+            let (_, bytes) = engine
+                .publish_encoded(
+                    PublishCommand::simple("test/topic", b"payload".to_vec(), qos, false),
+                    Some(4),
+                )
+                .unwrap();
+            assert!(
+                matches!(packets(&bytes).as_slice(), [MqttPacket::Publish5(p)] if p.qos == qos)
+            );
+        }
+        let (id, bytes) = engine.subscribe_encoded(subscribe, Some(4)).unwrap();
+        assert_eq!(id, 7);
+        assert!(matches!(
+            packets(&bytes).as_slice(),
+            [MqttPacket::Subscribe5(_)]
+        ));
+        let (id, bytes) = engine.unsubscribe_encoded(unsubscribe, Some(4)).unwrap();
+        assert_eq!(id, 8);
+        assert!(matches!(
+            packets(&bytes).as_slice(),
+            [MqttPacket::Unsubscribe5(_)]
+        ));
+    }
+
+    #[test]
+    fn direct_enqueue_only_allows_auth_and_disconnect_before_connack() {
+        use flowsdk::mqtt_serde::mqttv5::{authv5::MqttAuth, disconnectv5::MqttDisconnect};
+
+        let mut engine = MqttEngine::new(auth_options());
+        engine.connect().unwrap();
+        engine.take_outgoing();
+        assert!(matches!(
+            engine.enqueue_packet(MqttPacket::Publish5(MqttPublish::new(
+                0,
+                "test/topic".into(),
+                None,
+                vec![],
+                false,
+                false
+            ))),
+            Err(MqttClientError::InvalidState { .. })
+        ));
+        assert!(engine.take_outgoing().is_empty());
+        engine
+            .enqueue_packet(MqttPacket::Auth(MqttAuth::new(0x18, method_properties())))
+            .unwrap();
+        engine
+            .enqueue_packet(MqttPacket::Disconnect5(MqttDisconnect::new(0, vec![])))
+            .unwrap();
+        assert!(matches!(
+            packets(&engine.take_outgoing()).as_slice(),
+            [MqttPacket::Auth(_), MqttPacket::Disconnect5(_)]
+        ));
+    }
+
+    #[test]
+    fn publish_qos_zero_one_and_two_wait_for_connack() {
+        for challenged in [false, true] {
+            for qos in 0..=2 {
+                let mut client = awaiting_connack(challenged);
+                client
+                    .publish(PublishCommand::simple(
+                        "test/topic",
+                        b"payload".to_vec(),
+                        qos,
+                        false,
+                    ))
+                    .unwrap();
+                assert!(client.take_outgoing().is_empty(), "early PUBLISH QoS {qos}");
+                let events = client.handle_incoming(&connack(false, method_properties()));
+                assert!(client.is_connected(), "{events:#?}");
+                assert!(
+                    matches!(packets(&client.take_outgoing()).as_slice(), [MqttPacket::Publish5(p)]
+                        if p.qos == qos && p.payload == b"payload")
+                );
+            }
+        }
+    }
+}
+
 #[test]
 fn dedicated_connect_properties_are_encoded_and_conflicts_rejected() {
     let mut client = NoIoMqttClient::new(
