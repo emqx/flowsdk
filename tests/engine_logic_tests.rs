@@ -833,6 +833,43 @@ fn test_v5_auth() {
     );
 }
 
+#[cfg(not(feature = "strict-protocol-compliance"))]
+#[test]
+fn connack_auth_method_validation_is_optional() {
+    use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
+
+    for (connect_method, connack_method) in [
+        (Some("test"), None),
+        (Some("test"), Some("changed")),
+        (None, Some("unsolicited")),
+    ] {
+        let properties = |method: Option<&str>| {
+            method
+                .map(|method| vec![Property::AuthenticationMethod(method.into())])
+                .unwrap_or_default()
+        };
+        let mut engine = MqttEngine::new(
+            MqttClientOptions::builder()
+                .mqtt_version(5)
+                .connect_properties(properties(connect_method))
+                .build(),
+        );
+        engine.connect().unwrap();
+        engine.take_outgoing();
+        let connack = MqttPacket::ConnAck5(MqttConnAck5::new(
+            false,
+            0,
+            Some(properties(connack_method)),
+        ));
+        let events = engine.handle_incoming(&connack.to_bytes().unwrap());
+        assert!(engine.is_connected(), "{events:#?}");
+        assert!(
+            matches!(events.as_slice(), [MqttEvent::Connected(result)] if result.reason_code == 0),
+            "{events:#?}"
+        );
+    }
+}
+
 #[test]
 fn test_disconnect_flows() {
     let mut engine = setup_engine_v5();

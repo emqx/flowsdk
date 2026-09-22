@@ -194,21 +194,26 @@ class NativeBindingsTests(unittest.TestCase):
 
     def test_enhanced_authentication_challenge_before_connack(self):
         async def run():
-            from types import SimpleNamespace
+            from unittest.mock import Mock
             events = []
             client = flowsdk.FlowMqttClient("native-auth", on_event=events.append,
                 connect_properties=flowsdk.ConnectProperties(authentication_method="test-method"))
             client.engine.connect()
             client.engine.take_outgoing()
-            client.protocol = SimpleNamespace(closed=False, pump=lambda: None)
-            client.engine.handle_incoming(b"\xf0\x15\x18\x13\x15\x00\x0btest-method\x16\x00\x02\x00\xff")
-            for event in client.engine.take_events(): client._on_event(event)
+            protocol = flowsdk.FlowMqttProtocol(client.engine, flowsdk.TransportType.TCP,
+                asyncio.get_running_loop(), client._on_event)
+            transport = Mock(spec=asyncio.Transport)
+            transport.is_closing.return_value = False
+            protocol.transport = transport
+            client.protocol = protocol
+            protocol.data_received(b"\xf0\x15\x18\x13\x15\x00\x0btest-method\x16\x00\x02\x00\xff")
             self.assertEqual(len(events), 1)
             self.assertTrue(events[0].is_auth_received())
             self.assertEqual(events[0][0].reason_code, 0x18)
             self.assertEqual(events[0][0].properties[1].value, b"\x00\xff")
             await client.auth(properties=[flowsdk.MqttPropertyFfi.AUTHENTICATION_DATA(value=b"response")])
-            outgoing = bytes(client.engine.take_outgoing())
+            self.assertEqual(transport.write.call_count, 1)
+            outgoing = bytes(transport.write.call_args[0][0])
             self.assertEqual(outgoing[0], 0xf0)
             self.assertIn(b"response", outgoing)
             self.assertIn(b"test-method", outgoing)
@@ -218,9 +223,14 @@ class NativeBindingsTests(unittest.TestCase):
             self.assertFalse(client.is_connected)
             with self.assertRaises(flowsdk.MqttErrorFfi.Engine):
                 await client.auth(properties=[flowsdk.MqttPropertyFfi.AUTHENTICATION_METHOD(value="different")])
-            client.engine.handle_incoming(b"\x20\x03\x00\x00\x00")
-            for event in client.engine.take_events(): client._on_event(event)
+            # Successful CONNACK must repeat CONNECT's Authentication Method.
+            protocol.data_received(b"\x20\x11\x00\x00\x0e\x15\x00\x0btest-method")
+            self.assertEqual(len(events), 2)
+            self.assertTrue(events[1].is_connected())
+            self.assertEqual(events[1][0].reason_code, 0)
+            self.assertEqual(events[1][0].properties[0].value, "test-method")
             self.assertTrue(client.is_connected)
+            await client.disconnect()
         asyncio.run(run())
 
     def test_manual_receive_acknowledgements_complete_qos1_and_qos2(self):

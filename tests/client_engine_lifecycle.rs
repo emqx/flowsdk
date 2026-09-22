@@ -827,6 +827,158 @@ mod mqtt5 {
         frame(0x20, &[&[0, 0][..], &auth[3..]].concat())
     }
 
+    mod connack_authentication_method {
+        use super::*;
+
+        // MQTT-4.12.0-5 requires successful CONNACK to repeat CONNECT's method;
+        // MQTT-4.12.0-6 forbids a method when CONNECT did not supply one.
+        // These strict receiver checks do not require transport closure or an
+        // optional DISCONNECT diagnostic.
+        fn connack_with_method(reason_code: u8, method: Option<&str>) -> Vec<u8> {
+            let mut properties = Vec::new();
+            if let Some(method) = method {
+                properties.push(0x15);
+                properties.extend((method.len() as u16).to_be_bytes());
+                properties.extend(method.as_bytes());
+            }
+            let mut body = vec![0, reason_code, properties.len() as u8];
+            body.extend(properties);
+            frame(0x20, &body)
+        }
+
+        fn awaiting_connack(method: Option<&str>, auth_rounds: usize) -> MqttEngine {
+            let mut opts = options(VERSION);
+            opts.connect_properties = method
+                .map(|method| vec![Property::AuthenticationMethod(method.into())])
+                .unwrap_or_default();
+            let expected_properties = opts.connect_properties.clone();
+            let mut engine = MqttEngine::new(opts);
+            engine.connect().unwrap();
+            let packets = drain(&mut engine);
+            assert!(
+                matches!(packets.as_slice(), [MqttPacket::Connect5(connect)]
+                    if connect.properties == expected_properties),
+                "unexpected CONNECT: {packets:#?}"
+            );
+            assert!(engine.take_events().is_empty());
+            assert!(!engine.is_connected());
+
+            for _ in 0..auth_rounds {
+                let challenge = observe(&mut engine, &[&auth(0x18, method)]);
+                assert!(
+                    !challenge.connected
+                        && challenge.packets.is_empty()
+                        && matches!(challenge.events.as_slice(), [MqttEvent::AuthReceived(a)]
+                            if a.reason_code == 0x18 && a.properties == expected_properties),
+                    "invalid AUTH round setup: {challenge:#?}"
+                );
+                engine.auth(0x18, vec![]).unwrap();
+                let packets = drain(&mut engine);
+                assert!(
+                    matches!(packets.as_slice(), [MqttPacket::Auth(a)]
+                        if a.reason_code == 0x18 && a.properties == expected_properties),
+                    "unexpected AUTH response: {packets:#?}"
+                );
+                assert!(engine.take_events().is_empty());
+            }
+            engine
+        }
+
+        fn reject_method(connect_method: Option<&str>, method: Option<&str>, auth_rounds: usize) {
+            let mut engine = awaiting_connack(connect_method, auth_rounds);
+            let observed = observe(&mut engine, &[&connack_with_method(0, method)]);
+            assert!(
+                observed.events.iter().any(|e| matches!(
+                    e,
+                    MqttEvent::Error(MqttClientError::ProtocolViolation { .. })
+                )) && !observed.connected
+                    && !observed.events.iter().any(|event| match event {
+                        MqttEvent::Connected(result) => result.reason_code == 0,
+                        MqttEvent::AuthReceived(result) => result.reason_code == 0,
+                        _ => false,
+                    }),
+                "invalid CONNACK authentication method accepted: {observed:#?}"
+            );
+        }
+
+        cases! {
+            missing_method_is_rejected => reject_method(Some(METHOD), None, 0);
+            missing_method_after_two_auth_rounds_is_rejected => reject_method(Some(METHOD), None, 2);
+            changed_method_is_rejected => reject_method(Some(METHOD), Some("changed-method"), 0);
+            changed_method_after_two_auth_rounds_is_rejected => reject_method(Some(METHOD), Some("changed-method"), 2);
+            unsolicited_method_is_rejected => reject_method(None, Some(METHOD), 0);
+        }
+
+        #[test]
+        fn refused_connack_cannot_include_unsolicited_method() {
+            let mut engine = awaiting_connack(None, 0);
+            let observed = observe(&mut engine, &[&connack_with_method(0x87, Some(METHOD))]);
+            assert!(
+                !observed.connected
+                    && observed.events.iter().any(|e| matches!(
+                        e,
+                        MqttEvent::Error(MqttClientError::ProtocolViolation { .. })
+                    ))
+                    && !observed
+                        .events
+                        .iter()
+                        .any(|e| matches!(e, MqttEvent::Connected(_) | MqttEvent::AuthReceived(_))),
+                "unsolicited CONNACK method was accepted on refusal: {observed:#?}"
+            );
+        }
+
+        #[test]
+        fn invalid_method_cannot_update_assigned_client_id() {
+            let mut engine = awaiting_connack(Some(METHOD), 0);
+            let original_id = engine.options().client_id.clone();
+            // Successful CONNACK with Assigned Client Identifier="new" and no method.
+            let observed = observe(
+                &mut engine,
+                &[&[0x20, 9, 0, 0, 6, 0x12, 0, 3, b'n', b'e', b'w']],
+            );
+            assert!(
+                observed.events.iter().any(|e| matches!(
+                    e,
+                    MqttEvent::Error(MqttClientError::ProtocolViolation { .. })
+                )),
+                "invalid CONNACK method was accepted: {observed:#?}"
+            );
+            assert_eq!(engine.options().client_id, original_id);
+        }
+
+        fn accept_method(method: Option<&str>, auth_rounds: usize) {
+            let mut engine = awaiting_connack(method, auth_rounds);
+            let observed = observe(&mut engine, &[&connack_with_method(0, method)]);
+            assert!(
+                observed.connected
+                    && matches!(observed.events.as_slice(), [MqttEvent::Connected(result)]
+                        if result.reason_code == 0),
+                "valid CONNACK rejected: {observed:#?}"
+            );
+        }
+
+        cases! {
+            matching_method_succeeds => accept_method(Some(METHOD), 0);
+            matching_method_after_two_auth_rounds_succeeds => accept_method(Some(METHOD), 2);
+            no_method_in_connect_or_connack_succeeds => accept_method(None, 0);
+        }
+
+        #[test]
+        fn refused_connack_may_omit_method() {
+            // MQTT-4.12.0-5's requirement to repeat the method applies to success.
+            for auth_rounds in [0, 2] {
+                let mut engine = awaiting_connack(Some(METHOD), auth_rounds);
+                let observed = observe(&mut engine, &[&connack_with_method(0x87, None)]);
+                assert!(
+                    !observed.connected
+                        && matches!(observed.events.as_slice(), [MqttEvent::Connected(result)]
+                            if result.reason_code == 0x87),
+                    "valid CONNACK refusal rejected: {observed:#?}"
+                );
+            }
+        }
+    }
+
     fn authenticated() -> MqttEngine {
         connected_with(auth_options(), &auth_connack())
     }

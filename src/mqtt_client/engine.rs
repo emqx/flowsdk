@@ -1497,6 +1497,37 @@ impl MqttEngine {
                     });
                     return (self.take_events(), responses);
                 }
+                #[cfg(feature = "strict-protocol-compliance")]
+                {
+                    let expected = self
+                        .options
+                        .connect_properties
+                        .iter()
+                        .find_map(|p| match p {
+                            Property::AuthenticationMethod(method) => Some(method),
+                            _ => None,
+                        });
+                    let received = ack
+                        .properties
+                        .as_deref()
+                        .unwrap_or_default()
+                        .iter()
+                        .find_map(|p| match p {
+                            Property::AuthenticationMethod(method) => Some(method),
+                            _ => None,
+                        });
+                    // MQTT-4.12.0-5 requires the original method on success;
+                    // MQTT-4.12.0-6 forbids unsolicited methods on any CONNACK.
+                    // Check before negotiation can change connection/session state.
+                    if (ack.reason_code == 0 && received != expected)
+                        || (expected.is_none() && received.is_some())
+                    {
+                        self.fail_connection(MqttClientError::ProtocolViolation {
+                            message: "CONNACK authentication method does not match CONNECT".into(),
+                        });
+                        return (self.take_events(), responses);
+                    }
+                }
                 self.reliability.connecting = false;
                 self.reliability
                     .deadlines
