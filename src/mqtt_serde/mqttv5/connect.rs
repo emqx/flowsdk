@@ -229,7 +229,9 @@ impl MqttControlPacket for MqttConnect {
         }
 
         let will_flag = (connect_flags & 0x04) != 0;
+        #[cfg(feature = "strict-protocol-compliance")]
         let will_qos = (connect_flags >> 3) & 0x03;
+        #[cfg(feature = "strict-protocol-compliance")]
         let will_retain = (connect_flags & 0x20) != 0;
 
         if !will_flag {
