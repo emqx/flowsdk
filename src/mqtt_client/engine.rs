@@ -24,7 +24,9 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-use crate::mqtt_serde::control_packet::{ControlPacketType, MqttPacket};
+#[cfg(feature = "strict-protocol-compliance")]
+use crate::mqtt_serde::control_packet::ControlPacketType;
+use crate::mqtt_serde::control_packet::MqttPacket;
 use crate::mqtt_serde::mqttv3::{
     connectv3, disconnectv3, pingreqv3, pubrelv3, subscribev3, unsubscribev3,
 };
@@ -1031,6 +1033,7 @@ impl MqttEngine {
         mut command: PublishCommand,
         stream: Option<u64>,
     ) -> Result<(Option<u16>, Vec<u8>), MqttClientError> {
+        #[cfg(feature = "strict-protocol-compliance")]
         self.ensure_outgoing_allowed(ControlPacketType::PUBLISH)?;
         if command.qos > 0 {
             self.require_full_parser()?;
@@ -1154,6 +1157,7 @@ impl MqttEngine {
     /// Be aware that this might fail immediately with `MqttClientError::BufferFull`
     /// if the outgoing buffer is at capacity.
     pub fn subscribe(&mut self, mut command: SubscribeCommand) -> Result<u16, MqttClientError> {
+        #[cfg(feature = "strict-protocol-compliance")]
         self.ensure_outgoing_allowed(ControlPacketType::SUBSCRIBE)?;
         self.require_full_parser()?;
         self.validate_subscribe(&command)?;
@@ -1186,6 +1190,7 @@ impl MqttEngine {
     }
 
     pub fn unsubscribe(&mut self, mut command: UnsubscribeCommand) -> Result<u16, MqttClientError> {
+        #[cfg(feature = "strict-protocol-compliance")]
         self.ensure_outgoing_allowed(ControlPacketType::UNSUBSCRIBE)?;
         self.require_full_parser()?;
         let pid = self.candidate_id(command.packet_id)?;
@@ -1220,6 +1225,7 @@ impl MqttEngine {
         mut command: SubscribeCommand,
         stream: Option<u64>,
     ) -> Result<(u16, Vec<u8>), MqttClientError> {
+        #[cfg(feature = "strict-protocol-compliance")]
         self.ensure_outgoing_allowed(ControlPacketType::SUBSCRIBE)?;
         self.require_full_parser()?;
         self.validate_subscribe(&command)?;
@@ -1261,6 +1267,7 @@ impl MqttEngine {
         mut command: UnsubscribeCommand,
         stream: Option<u64>,
     ) -> Result<(u16, Vec<u8>), MqttClientError> {
+        #[cfg(feature = "strict-protocol-compliance")]
         self.ensure_outgoing_allowed(ControlPacketType::UNSUBSCRIBE)?;
         self.require_full_parser()?;
         let pid = self.candidate_id(command.packet_id)?;
@@ -1816,13 +1823,13 @@ impl MqttEngine {
         Ok(())
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     fn ensure_outgoing_allowed(
         &self,
         packet_type: ControlPacketType,
     ) -> Result<(), MqttClientError> {
-        // MQTT-3.1.2-30 is a mandatory sender rule, independent of strict
-        // receiver validation. Reauthentication starts after CONNACK and does
-        // not restrict normal traffic. Queued PUBLISHes wait in process_queue.
+        // Enforce MQTT-3.1.2-30 in strict mode. Reauthentication permits normal
+        // traffic; queued PUBLISHes wait for CONNACK in process_queue.
         if self.mqtt_version() == 5
             && self.reliability.connecting
             && self
@@ -1844,6 +1851,7 @@ impl MqttEngine {
     }
 
     pub fn enqueue_packet(&mut self, packet: MqttPacket) -> Result<(), MqttClientError> {
+        #[cfg(feature = "strict-protocol-compliance")]
         self.ensure_outgoing_allowed(packet.packet_type())?;
         if self.outgoing_buffer.len() >= self.options.max_outgoing_packet_count {
             return Err(MqttClientError::BufferFull {
