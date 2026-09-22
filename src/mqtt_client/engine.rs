@@ -353,6 +353,25 @@ impl MqttEngine {
         &self.options
     }
 
+    /// Update automatic reconnect policy. Disabling it cancels pending retries.
+    pub fn set_reconnect(&mut self, enabled: bool) {
+        self.options.reconnect = enabled;
+        if !enabled {
+            self.next_reconnect_at = None;
+            self.events.retain(|event| {
+                !matches!(
+                    event,
+                    MqttEvent::ReconnectNeeded | MqttEvent::ReconnectScheduled { .. }
+                )
+            });
+        }
+    }
+
+    #[cfg(feature = "async-client")]
+    pub(crate) fn pending_publish_count(&self) -> usize {
+        self.priority_queue.len()
+    }
+
     pub fn is_connected(&self) -> bool {
         self.is_connected
     }
