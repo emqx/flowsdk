@@ -1,10 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use std::collections::HashMap;
 use std::io;
 #[cfg(feature = "quic")]
 use std::net::SocketAddr;
-use std::pin::Pin;
 use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
@@ -12,7 +10,6 @@ use async_trait::async_trait;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::sync::mpsc;
 use tokio::sync::oneshot;
-use tokio::time::Sleep;
 
 #[cfg(feature = "quic")]
 use super::transport::quic::{QuicConfig, QuicTransport};
@@ -32,6 +29,19 @@ use super::commands::{PublishCommand, SubscribeCommand, UnsubscribeCommand};
 use super::engine::{MqttEngine, MqttEvent, MqttMessage};
 use super::error::MqttClientError;
 use super::opts::MqttClientOptions;
+
+mod worker;
+use worker::TokioClientWorker;
+
+type Response<T> = oneshot::Sender<Result<T, MqttClientError>>;
+
+async fn receive_response<T>(
+    rx: oneshot::Receiver<Result<T, MqttClientError>>,
+) -> Result<T, MqttClientError> {
+    rx.await.map_err(|_| MqttClientError::ChannelClosed {
+        channel: "async client response".into(),
+    })?
+}
 
 /// Events that can occur during MQTT client operation
 #[derive(Debug)]
@@ -74,6 +84,9 @@ pub enum TokioMqttEvent {
 }
 
 /// Trait for handling MQTT events in async context
+///
+/// Callbacks run on the client's worker. Delegate acknowledgement-waiting and
+/// completion-waiting calls to another task so the worker can keep processing I/O.
 #[async_trait]
 pub trait TokioMqttEventHandler: Send + Sync {
     /// Called when connection to broker is established
@@ -84,6 +97,17 @@ pub trait TokioMqttEventHandler: Send + Sync {
     /// Called when disconnected from broker
     async fn on_disconnected(&mut self, reason: Option<u8>) {
         let _ = reason;
+    }
+
+    /// Called for a broker MQTT 5 DISCONNECT before `on_disconnected`.
+    async fn on_disconnect_received(&mut self, reason_code: u8, properties: &[Property]) {
+        let _ = (reason_code, properties);
+    }
+
+    /// Called when an incoming QoS 2 exchange reaches PUBREL.
+    /// With manual acknowledgements, arrange a `pubcomp` call from another task.
+    async fn on_pubrel_received(&mut self, packet_id: u16) {
+        let _ = packet_id;
     }
 
     /// Called when a message is successfully published
@@ -159,30 +183,39 @@ enum TokioClientCommand {
     /// Subscribe to topics and wait for acknowledgment
     SubscribeSync {
         command: SubscribeCommand,
-        response_tx: tokio::sync::oneshot::Sender<SubscribeResult>,
+        response_tx: Response<SubscribeResult>,
     },
     /// Publish a message (fire-and-forget)
     Publish(PublishCommand),
     /// Publish a message and wait for acknowledgment (QoS 1 = PUBACK, QoS 2 = PUBCOMP)
     PublishSync {
         command: PublishCommand,
-        response_tx: tokio::sync::oneshot::Sender<PublishResult>,
+        response_tx: Response<PublishResult>,
     },
     /// Unsubscribe from topics
     Unsubscribe(UnsubscribeCommand),
     /// Unsubscribe from topics and wait for acknowledgment
     UnsubscribeSync {
         command: UnsubscribeCommand,
-        response_tx: tokio::sync::oneshot::Sender<UnsubscribeResult>,
+        response_tx: Response<UnsubscribeResult>,
     },
     /// Send ping to broker
     Ping,
     /// Send ping to broker and wait for response
-    PingSync {
-        response_tx: tokio::sync::oneshot::Sender<PingResult>,
-    },
+    PingSync { response_tx: Response<PingResult> },
     /// Disconnect from broker
-    Disconnect,
+    Disconnect {
+        reason_code: u8,
+        properties: Vec<Property>,
+        response_tx: Option<Response<()>>,
+    },
+    Acknowledge {
+        kind: u8,
+        packet_id: u16,
+        reason_code: u8,
+        properties: Vec<Property>,
+        response_tx: Response<()>,
+    },
     /// Shutdown the client and worker
     Shutdown,
     /// Enable/disable automatic reconnection
@@ -224,14 +257,15 @@ pub struct TokioAsyncClientConfig {
     pub unsubscribe_timeout_ms: Option<u64>,
     /// Timeout for ping operation in milliseconds (None = no timeout)
     pub ping_timeout_ms: Option<u64>,
-    /// Default timeout for operations without specific timeout (milliseconds)
+    /// Bound for transport writes/closes and local completion waits (milliseconds).
+    /// Must be nonzero, including when broker response timeouts are disabled.
     pub default_operation_timeout_ms: u64,
     /// Maximum number of QoS 1 and QoS 2 publications that the client
     /// is willing to process concurrently (MQTT v5 only)
-    /// None = use default (65535), Some(0) is invalid
+    /// None preserves core options (default 65535); Some(0) is invalid.
     pub receive_maximum: Option<u16>,
     /// Maximum number of topic aliases that the client accepts from the server (MQTT v5 only)
-    /// None or Some(0) = topic aliases not supported
+    /// None preserves core CONNECT properties; Some(0) disables aliases.
     /// Valid range: 0-65535
     pub topic_alias_maximum: Option<u16>,
     /// QUIC transport: Enable 0-RTT (early data) for faster reconnections
@@ -465,7 +499,7 @@ impl ConfigBuilder {
         self
     }
 
-    /// Set default timeout for operations without specific timeout (milliseconds)
+    /// Set the nonzero timeout for transport I/O and local completion waits.
     pub fn default_operation_timeout_ms(mut self, timeout_ms: u64) -> Self {
         self.config.default_operation_timeout_ms = timeout_ms;
         self
@@ -501,9 +535,10 @@ impl ConfigBuilder {
 
     // ==================== Convenience Methods ====================
 
-    /// Disable all operation timeouts (operations wait indefinitely)
+    /// Disable wrapper broker-response timeouts and the transport-connect timeout.
     ///
-    /// Useful for development/debugging or networks with unpredictable latency.
+    /// Explicit engine deadlines still apply. Transport writes, closes, and local
+    /// completion waits remain bounded by `default_operation_timeout_ms`.
     pub fn no_timeouts(mut self) -> Self {
         self.config.connect_timeout_ms = None;
         self.config.subscribe_timeout_ms = None;
@@ -832,27 +867,28 @@ pub struct TokioAsyncMqttClient {
     command_tx: mpsc::Sender<TokioClientCommand>,
     /// Client configuration
     _config: TokioAsyncClientConfig,
+    worker: tokio::task::JoinHandle<Result<(), MqttClientError>>,
 }
 
 impl TokioAsyncMqttClient {
     /// Create a new tokio async MQTT client
     pub async fn new(
-        mqtt_options: MqttClientOptions,
+        mut mqtt_options: MqttClientOptions,
         event_handler: Box<dyn TokioMqttEventHandler>,
-        config: TokioAsyncClientConfig,
+        mut config: TokioAsyncClientConfig,
     ) -> io::Result<Self> {
+        worker::resolve_options(&mut mqtt_options, &mut config)?;
         let (command_tx, command_rx) = mpsc::channel(config.command_queue_size);
 
         // Spawn the worker task
         let worker =
             TokioClientWorker::new(mqtt_options, event_handler, command_rx, config.clone());
-        tokio::spawn(async move {
-            worker.run().await;
-        });
+        let worker = tokio::spawn(worker.run());
 
         Ok(TokioAsyncMqttClient {
             command_tx,
             _config: config,
+            worker,
         })
     }
 
@@ -877,20 +913,18 @@ impl TokioAsyncMqttClient {
         operation_name: &str,
     ) -> Result<T, MqttClientError>
     where
-        F: std::future::Future<Output = io::Result<T>>,
+        F: std::future::Future<Output = Result<T, MqttClientError>>,
     {
         if let Some(timeout) = timeout_ms {
             match tokio::time::timeout(Duration::from_millis(timeout), future).await {
-                Ok(result) => result.map_err(|e| MqttClientError::from_io_error(e, operation_name)),
+                Ok(result) => result,
                 Err(_) => Err(MqttClientError::OperationTimeout {
                     operation: operation_name.to_string(),
                     timeout_ms: timeout,
                 }),
             }
         } else {
-            future
-                .await
-                .map_err(|e| MqttClientError::from_io_error(e, operation_name))
+            future.await
         }
     }
 
@@ -975,7 +1009,7 @@ impl TokioAsyncMqttClient {
     /// Publish a message and wait for acknowledgment (QoS 1 = PUBACK, QoS 2 = PUBCOMP)
     ///
     /// This method blocks until the broker acknowledges the message:
-    /// - QoS 0: Returns immediately after sending (no acknowledgment)
+    /// - QoS 0: Returns after engine validation and enqueueing (no acknowledgment)
     /// - QoS 1: Waits for PUBACK from broker
     /// - QoS 2: Waits for PUBCOMP from broker (full QoS 2 flow)
     ///
@@ -1024,7 +1058,7 @@ impl TokioAsyncMqttClient {
     /// Publish with priority and wait for acknowledgment
     ///
     /// This method blocks until the broker acknowledges the message with priority support:
-    /// - QoS 0: Returns immediately after sending
+    /// - QoS 0: Returns after engine validation and enqueueing
     /// - QoS 1: Waits for PUBACK from broker
     /// - QoS 2: Waits for PUBCOMP from broker
     ///
@@ -1079,35 +1113,17 @@ impl TokioAsyncMqttClient {
     }
 
     /// Internal publish implementation without timeout
-    async fn publish_sync_internal(&self, command: PublishCommand) -> io::Result<PublishResult> {
-        // QoS 0 messages have no acknowledgment, send fire-and-forget
-        if command.qos == 0 {
-            self.send_command(TokioClientCommand::Publish(command))
-                .await?;
-            return Ok(PublishResult {
-                packet_id: None,
-                reason_code: Some(0),
-                properties: None,
-                qos: 0,
-            });
-        }
-
-        // For QoS 1/2, use oneshot channel to wait for acknowledgment
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
+    async fn publish_sync_internal(
+        &self,
+        command: PublishCommand,
+    ) -> Result<PublishResult, MqttClientError> {
+        let (tx, rx) = oneshot::channel();
         self.send_command(TokioClientCommand::PublishSync {
             command,
             response_tx: tx,
         })
         .await?;
-
-        // Block until response received or channel closed
-        rx.await.map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Response channel closed before acknowledgment received (connection may be lost)",
-            )
-        })
+        receive_response(rx).await
     }
 
     /// Unsubscribe from topics (non-blocking)
@@ -1130,7 +1146,108 @@ impl TokioAsyncMqttClient {
 
     /// Disconnect from broker (non-blocking)
     pub async fn disconnect(&self) -> io::Result<()> {
-        self.send_command(TokioClientCommand::Disconnect).await
+        self.disconnect_with(0, Vec::new()).await
+    }
+
+    /// Queue a disconnect with MQTT 5 reason code and properties.
+    pub async fn disconnect_with(
+        &self,
+        reason_code: u8,
+        properties: Vec<Property>,
+    ) -> io::Result<()> {
+        self.send_command(TokioClientCommand::Disconnect {
+            reason_code,
+            properties,
+            response_tx: None,
+        })
+        .await
+    }
+
+    /// Flush DISCONNECT, close the transport and wait for local completion.
+    pub async fn disconnect_sync(&self) -> Result<(), MqttClientError> {
+        self.disconnect_with_sync(0, Vec::new()).await
+    }
+
+    /// Wait for disconnect completion, preserving MQTT 5 reason code and properties.
+    pub async fn disconnect_with_sync(
+        &self,
+        reason_code: u8,
+        properties: Vec<Property>,
+    ) -> Result<(), MqttClientError> {
+        let (tx, rx) = oneshot::channel();
+        self.with_timeout(
+            async {
+                self.send_command(TokioClientCommand::Disconnect {
+                    reason_code,
+                    properties,
+                    response_tx: Some(tx),
+                })
+                .await?;
+                receive_response(rx).await
+            },
+            Some(self._config.default_operation_timeout_ms),
+            "disconnect",
+        )
+        .await
+    }
+
+    /// Acknowledge an incoming QoS 1 publication. Call from outside event callbacks.
+    pub async fn puback(
+        &self,
+        packet_id: u16,
+        reason_code: u8,
+        properties: Vec<Property>,
+    ) -> Result<(), MqttClientError> {
+        self.acknowledge(4, packet_id, reason_code, properties)
+            .await
+    }
+
+    /// Accept an incoming QoS 2 publication. Call from outside event callbacks.
+    pub async fn pubrec(
+        &self,
+        packet_id: u16,
+        reason_code: u8,
+        properties: Vec<Property>,
+    ) -> Result<(), MqttClientError> {
+        self.acknowledge(5, packet_id, reason_code, properties)
+            .await
+    }
+
+    /// Complete an incoming QoS 2 exchange after `on_pubrel_received`.
+    pub async fn pubcomp(
+        &self,
+        packet_id: u16,
+        reason_code: u8,
+        properties: Vec<Property>,
+    ) -> Result<(), MqttClientError> {
+        self.acknowledge(7, packet_id, reason_code, properties)
+            .await
+    }
+
+    async fn acknowledge(
+        &self,
+        kind: u8,
+        packet_id: u16,
+        reason_code: u8,
+        properties: Vec<Property>,
+    ) -> Result<(), MqttClientError> {
+        let (tx, rx) = oneshot::channel();
+        self.with_timeout(
+            async {
+                self.send_command(TokioClientCommand::Acknowledge {
+                    kind,
+                    packet_id,
+                    reason_code,
+                    properties,
+                    response_tx: tx,
+                })
+                .await?;
+                receive_response(rx).await
+            },
+            Some(self._config.default_operation_timeout_ms),
+            "acknowledge",
+        )
+        .await
     }
 
     /// Enable or disable automatic reconnection
@@ -1139,9 +1256,14 @@ impl TokioAsyncMqttClient {
             .await
     }
 
-    /// Shutdown the client
+    /// Attempt graceful disconnect and wait for the worker to terminate.
+    /// Transport I/O remains bounded by `default_operation_timeout_ms`.
     pub async fn shutdown(self) -> io::Result<()> {
-        self.send_command(TokioClientCommand::Shutdown).await
+        let _ = self.send_command(TokioClientCommand::Shutdown).await;
+        self.worker
+            .await
+            .map_err(io::Error::other)?
+            .map_err(Into::into)
     }
 
     /// Send a raw MQTT packet to the broker (non-blocking)
@@ -1211,20 +1333,11 @@ impl TokioAsyncMqttClient {
     }
 
     /// Internal connect implementation without timeout
-    async fn connect_sync_internal(&self) -> io::Result<ConnectionResult> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
+    async fn connect_sync_internal(&self) -> Result<ConnectionResult, MqttClientError> {
+        let (tx, rx) = oneshot::channel();
         self.send_command(TokioClientCommand::ConnectSync { response_tx: tx })
             .await?;
-
-        rx.await
-            .map_err(|_| {
-                io::Error::new(
-                    io::ErrorKind::BrokenPipe,
-                    "Response channel closed before CONNACK received (connection may have failed)",
-                )
-            })?
-            .map_err(|e| e.into())
+        receive_response(rx).await
     }
 
     /// Subscribe to topics and wait for SUBACK acknowledgment
@@ -1281,21 +1394,14 @@ impl TokioAsyncMqttClient {
     async fn subscribe_sync_internal(
         &self,
         command: SubscribeCommand,
-    ) -> io::Result<SubscribeResult> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
+    ) -> Result<SubscribeResult, MqttClientError> {
+        let (tx, rx) = oneshot::channel();
         self.send_command(TokioClientCommand::SubscribeSync {
             command,
             response_tx: tx,
         })
         .await?;
-
-        rx.await.map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Response channel closed before SUBACK received (connection may be lost)",
-            )
-        })
+        receive_response(rx).await
     }
 
     /// Unsubscribe from topics and wait for UNSUBACK acknowledgment
@@ -1355,21 +1461,14 @@ impl TokioAsyncMqttClient {
     async fn unsubscribe_sync_internal(
         &self,
         command: UnsubscribeCommand,
-    ) -> io::Result<UnsubscribeResult> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
+    ) -> Result<UnsubscribeResult, MqttClientError> {
+        let (tx, rx) = oneshot::channel();
         self.send_command(TokioClientCommand::UnsubscribeSync {
             command,
             response_tx: tx,
         })
         .await?;
-
-        rx.await.map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Response channel closed before UNSUBACK received (connection may be lost)",
-            )
-        })
+        receive_response(rx).await
     }
 
     /// Send ping and wait for PINGRESP acknowledgment
@@ -1409,18 +1508,11 @@ impl TokioAsyncMqttClient {
     }
 
     /// Internal ping implementation without timeout
-    async fn ping_sync_internal(&self) -> io::Result<PingResult> {
-        let (tx, rx) = tokio::sync::oneshot::channel();
-
+    async fn ping_sync_internal(&self) -> Result<PingResult, MqttClientError> {
+        let (tx, rx) = oneshot::channel();
         self.send_command(TokioClientCommand::PingSync { response_tx: tx })
             .await?;
-
-        rx.await.map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::BrokenPipe,
-                "Response channel closed before PINGRESP received (connection may be lost)",
-            )
-        })
+        receive_response(rx).await
     }
 
     // ==================== Custom Timeout Override Methods ====================
@@ -1645,7 +1737,7 @@ impl TokioAsyncMqttClient {
     /// Publish a message and wait for acknowledgment (QoS 1 = PUBACK, QoS 2 = PUBCOMP)
     ///
     /// This method blocks until the broker acknowledges the message:
-    /// - QoS 0: Returns immediately after sending (no acknowledgment)
+    /// - QoS 0: Returns after engine validation and enqueueing (no acknowledgment)
     /// - QoS 1: Waits for PUBACK from broker
     /// - QoS 2: Waits for PUBCOMP from broker (full QoS 2 flow)
     ///
@@ -1691,764 +1783,6 @@ impl TokioAsyncMqttClient {
                 "Worker task is no longer running",
             )
         })
-    }
-}
-
-/// Worker task that handles MQTT operations using tokio
-struct TokioClientWorker {
-    /// MQTT engine (Sans-I/O)
-    engine: MqttEngine,
-    /// Record whether the engine's is_connected was true in the last loop iteration
-    /// for detecting connection state changes and triggering callbacks.
-    engine_last_connected: bool,
-    /// Event handler for callbacks
-    event_handler: Box<dyn TokioMqttEventHandler>,
-    /// Command receiver from main client
-    command_rx: mpsc::Receiver<TokioClientCommand>,
-    /// Worker configuration
-    config: TokioAsyncClientConfig,
-    /// Transport connection to MQTT broker (TCP or TLS)
-    stream: Option<BoxedTransport>,
-
-    /// Pending synchronous publish operations keyed by packet identifier
-    pending_publishes: HashMap<u16, tokio::sync::oneshot::Sender<PublishResult>>,
-    /// Pending synchronous connect operations (only one at a time)
-    pending_connect:
-        Option<tokio::sync::oneshot::Sender<Result<ConnectionResult, MqttClientError>>>,
-    /// Pending synchronous subscribe operations keyed by packet identifier
-    pending_subscribes_sync: HashMap<u16, tokio::sync::oneshot::Sender<SubscribeResult>>,
-    /// Pending synchronous unsubscribe operations keyed by packet identifier
-    pending_unsubscribes_sync: HashMap<u16, tokio::sync::oneshot::Sender<UnsubscribeResult>>,
-    /// Pending synchronous ping operations (only one at a time)
-    pending_ping: Option<tokio::sync::oneshot::Sender<PingResult>>,
-    /// Keep alive timer (dynamic sleep based on next_tick_at)
-    tick_timer: Option<Pin<Box<Sleep>>>,
-}
-
-impl TokioClientWorker {
-    fn new(
-        options: MqttClientOptions,
-        event_handler: Box<dyn TokioMqttEventHandler>,
-        command_rx: mpsc::Receiver<TokioClientCommand>,
-        config: TokioAsyncClientConfig,
-    ) -> Self {
-        Self {
-            engine: MqttEngine::new(options),
-            engine_last_connected: false,
-            event_handler,
-            command_rx,
-            config,
-            stream: None,
-            pending_publishes: HashMap::new(),
-            pending_connect: None,
-            pending_subscribes_sync: HashMap::new(),
-            pending_unsubscribes_sync: HashMap::new(),
-            pending_ping: None,
-            tick_timer: None,
-        }
-    }
-
-    /// Dispatch events from the MQTT engine to the application
-    async fn dispatch_events(&mut self, events: Vec<MqttEvent>) {
-        for event in events {
-            match event {
-                MqttEvent::AuthReceived(res) => self.event_handler.on_auth_received(&res).await,
-                MqttEvent::Connected(res) => {
-                    if let Some(tx) = self.pending_connect.take() {
-                        let _ = tx.send(Ok(res.clone()));
-                    }
-                    self.event_handler.on_connected(&res).await;
-                    self.engine_last_connected = true;
-                }
-                MqttEvent::Disconnected(reason) => {
-                    self.engine_last_connected = false;
-                    self.event_handler.on_disconnected(reason).await;
-                    self.handle_connection_lost().await;
-                }
-                MqttEvent::DisconnectReceived { reason_code, .. } => {
-                    self.engine_last_connected = false;
-                    self.event_handler.on_disconnected(Some(reason_code)).await;
-                    self.handle_connection_lost().await;
-                }
-                MqttEvent::Published(res) => {
-                    if let Some(pid) = res.packet_id {
-                        if let Some(tx) = self.pending_publishes.remove(&pid) {
-                            let _ = tx.send(res.clone());
-                        }
-                    }
-                    self.event_handler.on_published(&res).await;
-                }
-                MqttEvent::Subscribed(res) => {
-                    if let Some(tx) = self.pending_subscribes_sync.remove(&res.packet_id) {
-                        let _ = tx.send(res.clone());
-                    }
-                    self.event_handler.on_subscribed(&res).await;
-                }
-                MqttEvent::Unsubscribed(res) => {
-                    if let Some(tx) = self.pending_unsubscribes_sync.remove(&res.packet_id) {
-                        let _ = tx.send(res.clone());
-                    }
-                    self.event_handler.on_unsubscribed(&res).await;
-                }
-                MqttEvent::PublishReceived { .. } => {
-                    // Low-level delivery metadata; MessageReceived carries the
-                    // application payload for this client.
-                }
-                MqttEvent::MessageReceived(publish) => {
-                    self.event_handler.on_message_received(&publish).await;
-                }
-                MqttEvent::PubRelReceived { .. } => {
-                    // Low-level manual QoS2 acknowledgement detail; the tokio
-                    // client continues to use the engine's normal auto-ack path.
-                }
-                MqttEvent::PingResponse(res) => {
-                    if let Some(tx) = self.pending_ping.take() {
-                        let _ = tx.send(res.clone());
-                    }
-                    self.event_handler.on_ping_response(&res).await;
-                }
-                MqttEvent::OperationFailed {
-                    operation, error, ..
-                } => {
-                    if operation == super::engine::OperationKind::Connect {
-                        if let Some(tx) = self.pending_connect.take() {
-                            let _ = tx.send(Err(error.clone()));
-                        }
-                        self.handle_connection_lost().await;
-                    }
-                    self.event_handler.on_error(&error).await;
-                }
-                MqttEvent::Error(err) => {
-                    self.event_handler.on_error(&err).await;
-                }
-                MqttEvent::TransportClosed { .. } => {
-                    // QUIC-transport-specific detail; the tokio (TCP/TLS) client
-                    // surfaces loss via Disconnected/ReconnectNeeded instead.
-                }
-                MqttEvent::StreamClosed { .. }
-                | MqttEvent::StreamReset { .. }
-                | MqttEvent::StreamStopped { .. } => {
-                    // QUIC-stream-specific detail; this client does not expose
-                    // the Sans-I/O QUIC multi-stream API.
-                }
-                MqttEvent::ZeroRttStatusChanged { .. } => {
-                    // QUIC-transport-specific detail; this client does not expose
-                    // the Sans-I/O QUIC 0-RTT API.
-                }
-                MqttEvent::ReconnectNeeded => {
-                    // Engine requesting action.
-                    // If we have a stream, it means we timed out -> handle_connection_lost (to clean up)
-                    // (engine already scheduled next attempt in that case)
-                    // If we have NO stream, it means backoff timer expired -> handle_connect (to try again)
-                    if self.stream.is_some() {
-                        self.handle_connection_lost().await;
-                    } else {
-                        // Backoff timer expired, try connecting!
-                        self.handle_connect().await;
-                    }
-                }
-                MqttEvent::ReconnectScheduled { attempt, delay } => {
-                    // Notify user about the scheduled reconnection
-                    self.event_handler.on_reconnect_attempt(attempt).await;
-                    // Optional: log or handle delay if specific logic needed
-                    let _ = delay;
-                }
-            }
-        }
-    }
-
-    /// Take outgoing bytes from engine and write to transport
-    async fn write_to_transport(&mut self, data: &[u8]) -> Result<(), MqttClientError> {
-        if let Some(stream) = &mut self.stream {
-            stream
-                .write_all(data)
-                .await
-                .map_err(|e| MqttClientError::from_io_error(e, "transport write"))
-        } else {
-            Err(MqttClientError::NotConnected)
-        }
-    }
-
-    async fn handle_outgoing(&mut self) -> Result<(), MqttClientError> {
-        let bytes = self.engine.take_outgoing();
-        let result = if bytes.is_empty() {
-            Ok(())
-        } else {
-            self.write_to_transport(&bytes).await
-        };
-        // Draining output can unblock parsing and generate application events.
-        // Deliver those events even if writing their acknowledgements fails.
-        let events = self.engine.take_events();
-        self.dispatch_events(events).await;
-        result
-    }
-
-    /// Update the tick timer (for keep-alive and retransmissions)
-    fn update_tick_timer(&mut self) {
-        if let Some(next_tick) = self.engine.next_tick_at() {
-            let now = Instant::now();
-            let delay = if next_tick > now {
-                next_tick.duration_since(now)
-            } else {
-                Duration::from_millis(10)
-            };
-            self.tick_timer = Some(Box::pin(tokio::time::sleep(delay)));
-        } else {
-            self.tick_timer = None;
-        }
-    }
-
-    /// Main async event loop coordinating command handling and socket I/O.
-    async fn run(mut self) {
-        loop {
-            // Update the tick timer for next protocol operation
-            self.update_tick_timer();
-
-            tokio::select! {
-                // Handle COMMANDS from the client API - highest priority
-                cmd = self.command_rx.recv() => {
-                    match cmd {
-                        Some(command) => {
-                            if !self.handle_command(command).await {
-                                break; // Shutdown requested
-                            }
-                        }
-                        None => break, // Channel closed
-                    }
-                }
-
-                // INGRESS: Read raw bytes from transport
-                read_result = async {
-                    if let Some(stream) = &mut self.stream {
-                        let mut buffer = vec![0u8; 4096];
-                        match stream.read(&mut buffer).await {
-                            Ok(0) => Ok(None),
-                            Ok(n) => {
-                                buffer.truncate(n);
-                                Ok(Some(buffer))
-                            }
-                            Err(e) => Err(e),
-                        }
-                    } else {
-                        std::future::pending::<io::Result<Option<Vec<u8>>>>().await
-                    }
-                } => {
-                    match read_result {
-                        Ok(Some(bytes)) => {
-                            let events = self.engine.handle_incoming(&bytes);
-                            self.dispatch_events(events).await;
-                        }
-                        Ok(None) => {
-                            let mqtt_err = MqttClientError::ConnectionLost {
-                                reason: "Connection closed by server".to_string(),
-                            };
-                            self.event_handler.on_error(&mqtt_err).await;
-                            self.handle_connection_lost().await;
-                        }
-                        Err(e) => {
-                            let mqtt_err = MqttClientError::from_io_error(e, "transport read");
-                            self.event_handler.on_error(&mqtt_err).await;
-                            self.handle_connection_lost().await;
-                        }
-                    }
-                }
-
-                // Tick timer for protocol maintenance (keep-alive, retrans)
-                _ = async {
-                    if let Some(ref mut timer) = self.tick_timer {
-                        timer.as_mut().await;
-                        true
-                    } else {
-                        std::future::pending::<bool>().await
-                    }
-                } => {
-                    let now = Instant::now();
-                    let events = self.engine.handle_tick(now);
-                    self.dispatch_events(events).await;
-                }
-            }
-
-            // Always check for outgoing data after any internal state change
-            if let Err(e) = self.handle_outgoing().await {
-                self.event_handler.on_error(&e).await;
-                self.handle_connection_lost().await;
-            }
-        }
-    }
-
-    /// Handle commands from the client API
-    async fn handle_command(&mut self, command: TokioClientCommand) -> bool {
-        match command {
-            TokioClientCommand::Connect => {
-                self.handle_connect().await;
-            }
-            TokioClientCommand::ConnectSync { response_tx } => {
-                self.handle_connect_sync(response_tx).await;
-            }
-            TokioClientCommand::Subscribe(command) => {
-                self.handle_subscribe(command).await;
-            }
-            TokioClientCommand::SubscribeSync {
-                command,
-                response_tx,
-            } => {
-                self.handle_subscribe_sync(command, response_tx).await;
-            }
-            TokioClientCommand::Publish(command) => {
-                self.handle_publish(command).await;
-            }
-            TokioClientCommand::PublishSync {
-                command,
-                response_tx,
-            } => {
-                self.handle_publish_sync(command, response_tx).await;
-            }
-            TokioClientCommand::Unsubscribe(command) => {
-                self.handle_unsubscribe(command).await;
-            }
-            TokioClientCommand::UnsubscribeSync {
-                command,
-                response_tx,
-            } => {
-                self.handle_unsubscribe_sync(command, response_tx).await;
-            }
-            TokioClientCommand::Ping => {
-                self.handle_ping().await;
-            }
-            TokioClientCommand::PingSync { response_tx } => {
-                self.handle_ping_sync(response_tx).await;
-            }
-            TokioClientCommand::Disconnect => {
-                self.handle_disconnect().await;
-            }
-            TokioClientCommand::Shutdown => {
-                return false; // Exit event loop
-            }
-            TokioClientCommand::SetAutoReconnect { enabled } => {
-                self.config.auto_reconnect = enabled;
-            }
-            TokioClientCommand::Auth {
-                reason_code,
-                properties,
-            } => {
-                self.handle_auth(reason_code, properties).await;
-            }
-            TokioClientCommand::SendPacket(packet) => {
-                let _ = self.engine.enqueue_packet(packet);
-            }
-        }
-        true
-    }
-
-    /// Create transport based on peer address scheme
-    /// Supports:
-    /// - `mqtt://host:port` or `host:port` → TCP transport
-    /// - `mqtts://host:port` → TLS transport (requires `tls` feature)
-    /// - `quic://host:port` → QUIC transport (requires `quic` feature)
-    async fn create_transport(&self, peer: &str) -> Result<BoxedTransport, MqttClientError> {
-        // Parse URL scheme
-        if peer.starts_with("mqtts://") {
-            // Decide which TLS backend to use based on options.tls_backend
-            #[cfg(any(feature = "tls", feature = "rustls-tls"))]
-            {
-                let addr = peer.strip_prefix("mqtts://").unwrap_or(peer);
-                match self.engine.options().tls_backend {
-                    #[cfg(feature = "rustls-tls")]
-                    Some(crate::mqtt_client::opts::TlsBackend::Rustls) => {
-                        let mut rustls_cfg =
-                            crate::mqtt_client::transport::RustlsTlsConfig::builder()
-                                .use_system_roots(true);
-                        if self.config.tls_enable_key_log {
-                            rustls_cfg = rustls_cfg.enable_key_log(true);
-                        }
-                        let transport =
-                            crate::mqtt_client::transport::RustlsTlsTransport::connect_with_config(
-                                addr,
-                                rustls_cfg.build(),
-                            )
-                            .await
-                            .map_err(|e| {
-                                MqttClientError::ConnectionLost {
-                                    reason: format!(
-                                        "Rustls TLS connection failed to {}: {}",
-                                        peer, e
-                                    ),
-                                }
-                            })?;
-                        Ok(Box::new(transport) as BoxedTransport)
-                    }
-                    #[cfg(feature = "tls")]
-                    Some(crate::mqtt_client::opts::TlsBackend::Native) => {
-                        let transport = TlsTransport::connect(addr).await.map_err(|e| {
-                            MqttClientError::ConnectionLost {
-                                reason: format!("TLS connection failed to {}: {}", peer, e),
-                            }
-                        })?;
-                        Ok(Box::new(transport) as BoxedTransport)
-                    }
-                    #[cfg(all(feature = "tls", not(feature = "rustls-tls")))]
-                    Some(crate::mqtt_client::opts::TlsBackend::Rustls) => {
-                        // Rustls backend selected but feature not enabled
-                        Err(MqttClientError::ProtocolViolation {
-                            message:
-                                "Rustls TLS backend selected but 'rustls-tls' feature not enabled"
-                                    .to_string(),
-                        })
-                    }
-                    #[cfg(all(feature = "rustls-tls", not(feature = "tls")))]
-                    Some(crate::mqtt_client::opts::TlsBackend::Native) => {
-                        // Native TLS backend selected but feature not enabled
-                        Err(MqttClientError::ProtocolViolation {
-                            message: "Native TLS backend selected but 'tls' feature not enabled"
-                                .to_string(),
-                        })
-                    }
-                    None => {
-                        // Backward compatibility: default to Native if available
-                        #[cfg(feature = "tls")]
-                        {
-                            let transport = TlsTransport::connect(addr).await.map_err(|e| {
-                                MqttClientError::ConnectionLost {
-                                    reason: format!("TLS connection failed to {}: {}", peer, e),
-                                }
-                            })?;
-                            Ok(Box::new(transport) as BoxedTransport)
-                        }
-                        #[cfg(not(feature = "tls"))]
-                        {
-                            return Err(MqttClientError::ProtocolViolation {
-                                message: format!(
-                                    "TLS backend not selected for mqtts:// URL and native TLS unavailable. Enable rustls-tls or set backend explicitly. Peer: {}",
-                                    peer
-                                ),
-                            });
-                        }
-                    }
-                    #[allow(unreachable_patterns)]
-                    _ => Err(MqttClientError::ProtocolViolation {
-                        message: "Unsupported TLS backend configuration".to_string(),
-                    }),
-                }
-            }
-            #[cfg(not(any(feature = "tls", feature = "rustls-tls")))]
-            {
-                return Err(MqttClientError::ProtocolViolation {
-                    message: format!(
-                        "TLS transport not available. Enable 'tls' or 'rustls-tls' feature to use mqtts:// URLs. Peer: {}",
-                        peer
-                    ),
-                });
-            }
-        } else if peer.starts_with("quic://") {
-            #[cfg(feature = "quic")]
-            {
-                let addr = peer.strip_prefix("quic://").unwrap_or(peer);
-
-                // Build QUIC config from TokioAsyncClientConfig
-                let mut builder = QuicConfig::builder()
-                    .alpn(b"mqtt")
-                    .enable_0rtt(self.config.quic_enable_0rtt);
-
-                // Apply insecure skip verify if configured
-                if self.config.quic_insecure_skip_verify {
-                    builder = builder.insecure_skip_verify(true);
-                }
-
-                // Apply custom root CA if configured
-                if let Some(ref ca_pem) = self.config.quic_custom_root_ca_pem {
-                    builder = builder
-                        .custom_roots_from_pem(ca_pem.as_bytes())
-                        .map_err(|e| MqttClientError::ConnectionLost {
-                            reason: format!("Failed to load custom root CA for QUIC: {}", e),
-                        })?;
-                }
-
-                // Apply client cert and key for mTLS if configured
-                if let (Some(ref cert_pem), Some(ref key_pem)) = (
-                    &self.config.quic_client_cert_pem,
-                    &self.config.quic_client_key_pem,
-                ) {
-                    builder = builder
-                        .client_cert_chain_from_pem(cert_pem.as_bytes())
-                        .map_err(|e| MqttClientError::ConnectionLost {
-                            reason: format!("Failed to load client certificate for QUIC: {}", e),
-                        })?
-                        .client_private_key_from_pem(key_pem.as_bytes())
-                        .map_err(|e| MqttClientError::ConnectionLost {
-                            reason: format!("Failed to load client private key for QUIC: {}", e),
-                        })?;
-                }
-
-                if self.config.quic_datagram_receive_buffer_size > 0 {
-                    builder = builder.datagram_receive_buffer_size(
-                        self.config.quic_datagram_receive_buffer_size,
-                    );
-                }
-
-                if self.config.quic_enable_key_log {
-                    builder = builder.enable_key_log(true);
-                }
-
-                if let Some(local_bind_addr) = self.config.quic_local_bind_addr {
-                    builder = builder.local_bind_addr(local_bind_addr);
-                }
-                let cfg = builder.build();
-
-                let transport = QuicTransport::connect_with_config(addr, cfg)
-                    .await
-                    .map_err(|e| MqttClientError::ConnectionLost {
-                        reason: format!("QUIC connection failed to {}: {}", peer, e),
-                    })?;
-                Ok(Box::new(transport) as BoxedTransport)
-            }
-            #[cfg(not(feature = "quic"))]
-            {
-                Err(MqttClientError::ProtocolViolation {
-                    message: format!(
-                        "QUIC transport not available. Enable the 'quic' feature to use quic:// URLs. Peer: {}",
-                        peer
-                    ),
-                })
-            }
-        } else {
-            // Default to TCP for mqtt:// or plain addresses
-            let addr = peer.strip_prefix("mqtt://").unwrap_or(peer);
-
-            let transport =
-                TcpTransport::connect(addr)
-                    .await
-                    .map_err(|e| MqttClientError::ConnectionLost {
-                        reason: format!("TCP connection failed to {}: {}", peer, e),
-                    })?;
-
-            Ok(Box::new(transport) as BoxedTransport)
-        }
-    }
-
-    /// Handle connecting to broker
-    async fn handle_connect(&mut self) {
-        // Avoid concurrent connect attempts if a socket already exists
-        if self.stream.is_some() {
-            return;
-        }
-
-        let peer = self.engine.options().peer.clone();
-
-        match self.create_transport(&peer).await {
-            Ok(transport) => {
-                if self.config.tcp_nodelay {
-                    if let Err(e) = transport.set_nodelay(true) {
-                        let mqtt_err = MqttClientError::NetworkError {
-                            kind: io::ErrorKind::Other,
-                            message: format!("Failed to set TCP_NODELAY: {}", e),
-                        };
-                        self.event_handler.on_error(&mqtt_err).await;
-                    }
-                }
-
-                // Install the transport before enqueuing bytes so the writer branch can flush
-                self.stream = Some(transport);
-
-                // Initiate MQTT CONNECT packet through engine
-                self.engine.reset_for_new_transport();
-                if let Err(error) = self.engine.connect() {
-                    self.stream = None;
-                    if let Some(tx) = self.pending_connect.take() {
-                        let _ = tx.send(Err(error.clone()));
-                    }
-                    self.event_handler.on_error(&error).await;
-                }
-            }
-            Err(e) => {
-                self.event_handler.on_error(&e).await;
-
-                // If this was a sync connect attempt, notify the waiting caller
-                if let Some(tx) = self.pending_connect.take() {
-                    let _ = tx.send(Err(e.clone()));
-                }
-
-                // If auto-reconnect is enabled, schedule the next attempt
-                if self.config.auto_reconnect {
-                    self.engine.schedule_reconnect(Instant::now());
-                }
-            }
-        }
-    }
-
-    /// Handle subscribe command
-    async fn handle_subscribe(&mut self, command: SubscribeCommand) {
-        if let Err(e) = self.engine.subscribe(command) {
-            self.event_handler.on_error(&e).await;
-        }
-    }
-
-    /// Handle publish command
-    async fn handle_publish(&mut self, command: PublishCommand) {
-        if let Err(e) = self.engine.publish(command) {
-            self.event_handler.on_error(&e).await;
-        }
-    }
-
-    /// Handle synchronous publish command
-    async fn handle_publish_sync(
-        &mut self,
-        command: PublishCommand,
-        response_tx: oneshot::Sender<PublishResult>,
-    ) {
-        let qos = command.qos;
-        match self.engine.publish(command) {
-            Ok(pid) => {
-                if let Some(id) = pid {
-                    self.pending_publishes.insert(id, response_tx);
-                } else {
-                    // QoS 0, complete immediately
-                    let _ = response_tx.send(PublishResult {
-                        packet_id: None,
-                        reason_code: Some(0),
-                        properties: None,
-                        qos: 0,
-                    });
-                }
-            }
-            Err(e) => {
-                let _ = response_tx.send(PublishResult {
-                    packet_id: None,
-                    reason_code: Some(128), // Error
-                    properties: None,
-                    qos,
-                });
-                self.event_handler.on_error(&e).await;
-            }
-        }
-    }
-
-    /// Handle unsubscribe command
-    async fn handle_unsubscribe(&mut self, command: UnsubscribeCommand) {
-        if let Err(e) = self.engine.unsubscribe(command) {
-            self.event_handler.on_error(&e).await;
-        }
-    }
-
-    /// Handle ping command
-    async fn handle_ping(&mut self) {
-        if let Err(error) = self.engine.send_ping() {
-            self.event_handler.on_error(&error).await;
-        }
-    }
-
-    /// Handle AUTH command for enhanced authentication (MQTT v5)
-    async fn handle_auth(&mut self, reason_code: u8, properties: Vec<Property>) {
-        if let Err(error) = self.engine.auth(reason_code, properties) {
-            self.event_handler.on_error(&error).await;
-        }
-    }
-
-    /// Handle synchronous connect command
-    async fn handle_connect_sync(
-        &mut self,
-        response_tx: tokio::sync::oneshot::Sender<Result<ConnectionResult, MqttClientError>>,
-    ) {
-        // Check if already connected or connecting
-        if self.stream.is_some() {
-            let result = ConnectionResult {
-                reason_code: 0,
-                session_present: false,
-                properties: Some(vec![]),
-            };
-            let _ = response_tx.send(Ok(result));
-            return;
-        }
-
-        // Store the response channel for when CONNACK arrives
-        self.pending_connect = Some(response_tx);
-
-        // Initiate connection
-        self.handle_connect().await;
-    }
-
-    /// Handle synchronous subscribe command
-    async fn handle_subscribe_sync(
-        &mut self,
-        command: SubscribeCommand,
-        response_tx: tokio::sync::oneshot::Sender<SubscribeResult>,
-    ) {
-        match self.engine.subscribe(command) {
-            Ok(pid) => {
-                self.pending_subscribes_sync.insert(pid, response_tx);
-            }
-            Err(e) => {
-                let _ = response_tx.send(SubscribeResult {
-                    packet_id: 0,
-                    reason_codes: vec![128],
-                    properties: vec![],
-                });
-                self.event_handler.on_error(&e).await;
-            }
-        }
-    }
-
-    /// Handle synchronous unsubscribe command
-    async fn handle_unsubscribe_sync(
-        &mut self,
-        command: UnsubscribeCommand,
-        response_tx: tokio::sync::oneshot::Sender<UnsubscribeResult>,
-    ) {
-        match self.engine.unsubscribe(command) {
-            Ok(pid) => {
-                self.pending_unsubscribes_sync.insert(pid, response_tx);
-            }
-            Err(e) => {
-                let _ = response_tx.send(UnsubscribeResult {
-                    packet_id: 0,
-                    reason_codes: vec![128],
-                    properties: vec![],
-                });
-                self.event_handler.on_error(&e).await;
-            }
-        }
-    }
-
-    /// Handle synchronous ping command
-    async fn handle_ping_sync(&mut self, response_tx: tokio::sync::oneshot::Sender<PingResult>) {
-        self.pending_ping = Some(response_tx);
-        if let Err(error) = self.engine.send_ping() {
-            self.event_handler.on_error(&error).await;
-        }
-    }
-
-    /// Handle disconnect command
-    async fn handle_disconnect(&mut self) {
-        if let Err(error) = self.engine.disconnect() {
-            self.event_handler.on_error(&error).await;
-        }
-    }
-
-    /// Handle connection lost
-    async fn handle_connection_lost(&mut self) {
-        self.stream = None;
-        self.engine.handle_connection_lost();
-        self.engine_last_connected = false;
-
-        // Clean up any pending synchronous operations that cannot be retried automatically
-        // Connect always fails on connection loss if not already established
-        if let Some(tx) = self.pending_connect.take() {
-            let _ = tx.send(Err(MqttClientError::ConnectionLost {
-                reason: "Connection lost before CONNACK received".to_string(),
-            }));
-        }
-
-        // Ping always fails
-        if let Some(tx) = self.pending_ping.take() {
-            let _ = tx.send(PingResult { success: false });
-        }
-
-        self.event_handler.on_connection_lost().await;
-
-        if self.config.auto_reconnect {
-            // Non-blocking: Simply schedule the next attempt in the engine.
-            // The tick timer (update_tick_timer) will wake us up when it's time.
-            self.engine.schedule_reconnect(Instant::now());
-        }
     }
 }
 

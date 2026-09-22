@@ -108,8 +108,9 @@ impl Transport for TlsTransport {
     }
 
     async fn close(&mut self) -> Result<(), TransportError> {
-        // TLS graceful shutdown happens automatically on drop
-        Ok(())
+        tokio::io::AsyncWriteExt::shutdown(&mut self.stream)
+            .await
+            .map_err(TransportError::from)
     }
 
     fn peer_addr(&self) -> Result<String, TransportError> {

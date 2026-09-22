@@ -412,8 +412,9 @@ mod imp {
         }
 
         async fn close(&mut self) -> Result<(), TransportError> {
-            // Rustls/TCP closes on drop; no explicit shutdown available here
-            Ok(())
+            tokio::io::AsyncWriteExt::shutdown(&mut self.stream)
+                .await
+                .map_err(TransportError::from)
         }
 
         fn peer_addr(&self) -> Result<String, TransportError> {

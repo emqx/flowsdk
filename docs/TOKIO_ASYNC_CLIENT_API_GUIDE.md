@@ -1,11 +1,93 @@
 # TokioAsyncMqttClient API Guide
 
-**Version**: 1.0  
-**Last Updated**: October 10, 2025
+**Version**: 1.1
+**Last Updated**: September 22, 2026
 
 ## Overview
 
-`TokioAsyncMqttClient` is a fully asynchronous, production-ready MQTT v5.0 client built on Tokio. It provides both fire-and-forget async APIs and wait-for-acknowledgment sync APIs with configurable timeouts.
+`TokioAsyncMqttClient` runs the shared MQTT engine on Tokio for MQTT 3.1.1 and
+5.0. All its operations are asynchronous. Methods named `*_sync` await an
+acknowledgement or local completion; they do not block a runtime thread.
+
+### Operation completion and errors
+
+| API | What successful completion means |
+| --- | --- |
+| `connect`, `subscribe`, `publish`, `unsubscribe`, `ping`, `auth`, `send_packet` | The command entered the worker queue; subsequent errors go to `on_error` |
+| `connect_sync` | An actual CONNACK arrived; concurrent callers share its result and calls while connected return its cached metadata |
+| `subscribe_sync`, `unsubscribe_sync`, QoS 1/2 `publish_sync`, `ping_sync` | The corresponding broker response arrived |
+| QoS 0 `publish_sync` | The engine validated and accepted the publication into its output queue |
+| `puback`, `pubrec`, `pubcomp` | The engine validated the receive stage, queued the acknowledgement, and updated its state |
+| `disconnect`, `disconnect_with` | A disconnect command entered the worker queue |
+| `disconnect_sync`, `disconnect_with_sync` | DISCONNECT was written and the local transport closed |
+| `shutdown(self)` | The client attempted graceful disconnect and the worker terminated |
+
+Acknowledgement-waiting methods return local validation, operation-deadline,
+session-loss, and terminal connection errors directly as `MqttClientError`.
+Broker acknowledgement reason codes and properties remain in their result
+objects: inspect `is_success()` when a broker can reject an operation.
+
+An acknowledgement timeout or cancelled waiting future does not release the
+engine's packet ID or cancel an already accepted MQTT exchange. A late valid
+acknowledgement can still complete it and produce a callback. Engine deadlines
+from `MqttClientOptions::operation_timeouts` are honored even if the wrapper's
+corresponding timeout is disabled.
+
+Callbacks execute on the worker. Keep them short and send work to another task
+before awaiting acknowledgement/completion methods or `shutdown`. Awaiting
+those methods inside a callback would wait for the same worker that is running
+the callback.
+
+### Configuration precedence and reconnect
+
+- Async `receive_maximum` configures the incoming limit advertised in CONNECT.
+  Core `receive_maximum` still limits outgoing publications independently.
+- Async `topic_alias_maximum` merges into CONNECT properties. Missing async
+  values preserve core settings; equal values are deduplicated and conflicting
+  explicit settings are rejected.
+- Automatic reconnect is initially enabled only if both configurations enable
+  it. Async retry count and maximum delay configure the engine; the base delay
+  comes from `MqttClientOptions`.
+- `set_auto_reconnect(false)` cancels scheduled retries. It does not cancel
+  operations on an active connection. An intentional disconnect suppresses
+  retries until an explicit new `connect`/`connect_sync` call.
+- `buffer_messages(false)` rejects publications accepted while disconnected.
+  `max_buffer_size` bounds queued offline publications. With priorities enabled,
+  the packet budget is the smaller of `priority_queue_limit` and core
+  `max_outgoing_packet_count`. Full queues reject new publications without
+  evicting accepted exchanges. Disabling priorities gives queued publications
+  equal priority and FIFO ordering.
+- `default_operation_timeout_ms` bounds transport writes, closes, and manual
+  acknowledgement/completion waits. It and `command_queue_size` must be nonzero.
+  `no_timeouts()` disables broker-response waits; transport cleanup stays bounded.
+- Native TLS and rustls use the TLS configuration supplied in `MqttClientOptions`,
+  including custom trust roots and client credentials.
+
+### Manual acknowledgements and disconnect metadata
+
+Set `MqttClientOptions::auto_ack(false)` and use:
+
+```rust
+client.puback(packet_id, 0, vec![]).await?; // incoming QoS 1
+client.pubrec(packet_id, 0, vec![]).await?; // accept incoming QoS 2
+// After on_pubrel_received(packet_id):
+client.pubcomp(packet_id, 0, vec![]).await?;
+```
+
+MQTT 3.1.1 uses reason zero and no properties. Raw PUBACK/PUBREC/PUBCOMP commands
+submitted through `send_packet` use these same state transitions; their errors
+are delivered through `on_error`.
+
+`disconnect_with` and `disconnect_with_sync` accept a reason code and MQTT 5
+properties. A broker DISCONNECT invokes the new default
+`on_disconnect_received(reason_code, properties)` callback, followed by the
+existing `on_disconnected` callback. Local disconnect reports `on_disconnected`
+once after closing the transport; a later shutdown does not repeat it.
+
+This wrapper uses a full MQTT parser and one byte-stream transport, including
+its single-stream QUIC transport. Parser-depth controls and detailed QUIC
+stream/0-RTT events are available through the lower-level engine clients;
+QUIC stream routing and rebinding are available through `TokioQuicMqttClient`.
 
 ### Key Features
 - ✅ Full MQTT v5.0 protocol support
@@ -18,8 +100,8 @@
 - ✅ Message buffering during disconnection
 - ✅ QoS 0, 1, and 2 support
 - ✅ Flow control (Receive Maximum, Topic Alias Maximum)
-- ✅ Thread-safe and clone-friendly
-- ✅ Raw Packet API for protocol compliance testing (feature-gated)
+- ✅ Shareable between tasks through `Arc`
+- ✅ Raw packet commands; malformed-packet testing helpers require `protocol-testing`
 
 ---
 
@@ -250,16 +332,15 @@ client.disconnect().await?;
 
 #### `shutdown()` - Client Shutdown
 ```rust
-pub async fn shutdown(&self) -> io::Result<()>
+pub async fn shutdown(self) -> io::Result<()>
 ```
 
-**Description**: Shuts down client worker task and releases resources.  
+**Description**: Attempts graceful disconnect, closes the transport, and waits for the worker to terminate.
 **Use case**: Final cleanup before dropping client
 
 **Example**:
 ```rust
-client.disconnect().await?;
-tokio::time::sleep(Duration::from_secs(1)).await;
+client.disconnect_sync().await?;
 client.shutdown().await?;
 ```
 
@@ -542,7 +623,7 @@ pub async fn publish_sync(
 **Description**: Publish and wait for acknowledgment.  
 **Timeout**: Configured via `publish_ack_timeout_ms` (default: 10 seconds)  
 **Behavior**:
-- QoS 0: Returns immediately (no ACK)
+- QoS 0: Returns after engine validation and enqueueing (no ACK)
 - QoS 1: Waits for PUBACK
 - QoS 2: Waits for PUBCOMP (full flow)
 
@@ -940,14 +1021,10 @@ loop {
 // 1. Unsubscribe from all topics if desired
 client.unsubscribe_sync(vec!["sensors/#", "alerts/#"]).await?;
 
-// 2. Disconnect gracefully
-client.disconnect().await?;
+// 2. Flush DISCONNECT and close the transport
+client.disconnect_sync().await?;
 
-// 3. Wait for disconnect to complete 
-// @TODO: transport flush 
-tokio::time::sleep(Duration::from_secs(1)).await;
-
-// 4. Shutdown client worker
+// 3. Wait for the client worker to terminate
 client.shutdown().await?;
 ```
 
