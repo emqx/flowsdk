@@ -97,7 +97,6 @@ async fn run_priority_example() -> Result<(), Box<dyn std::error::Error>> {
         .peer("broker.emqx.io:1883")
         .client_id("tokio_priority_example")
         .keep_alive(60)
-        .reconnect(true)
         .auto_ack(true)
         .build();
 

@@ -63,7 +63,6 @@ async fn demo(peer: &str, qos: u8) -> Result<(), Box<dyn Error>> {
         .client_id(id)
         .mqtt_version(5)
         .clean_start(true)
-        .reconnect(false)
         .auto_ack(true) // Worker sends incoming PUBACK / PUBREC / PUBCOMP.
         .build();
     let config = TokioAsyncClientConfig::builder()

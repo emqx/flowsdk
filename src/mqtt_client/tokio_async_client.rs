@@ -232,7 +232,8 @@ enum TokioClientCommand {
 /// Configuration for the tokio async client
 #[derive(Debug, Clone)]
 pub struct TokioAsyncClientConfig {
-    /// Enable automatic reconnection on connection loss
+    /// Enable automatic reconnection after connection failure or loss (default: true).
+    /// Overrides `MqttClientOptions::reconnect` for the Tokio client.
     pub auto_reconnect: bool,
     /// Maximum reconnect delay in milliseconds
     pub max_reconnect_delay_ms: u64,
@@ -407,7 +408,8 @@ impl ConfigBuilder {
 
     // ==================== Reconnection Settings ====================
 
-    /// Enable or disable automatic reconnection on connection loss
+    /// Enable or disable automatic reconnection after connection failure or loss.
+    /// Overrides `MqttClientOptions::reconnect` for the Tokio client.
     pub fn auto_reconnect(mut self, enabled: bool) -> Self {
         self.config.auto_reconnect = enabled;
         self
@@ -872,12 +874,15 @@ pub struct TokioAsyncMqttClient {
 
 impl TokioAsyncMqttClient {
     /// Create a new tokio async MQTT client
+    ///
+    /// Async reconnect settings override the core reconnect flag, retry limit,
+    /// and maximum delay. The base delay comes from `MqttClientOptions`.
     pub async fn new(
         mut mqtt_options: MqttClientOptions,
         event_handler: Box<dyn TokioMqttEventHandler>,
-        mut config: TokioAsyncClientConfig,
+        config: TokioAsyncClientConfig,
     ) -> io::Result<Self> {
-        worker::resolve_options(&mut mqtt_options, &mut config)?;
+        worker::resolve_options(&mut mqtt_options, &config)?;
         let (command_tx, command_rx) = mpsc::channel(config.command_queue_size);
 
         // Spawn the worker task
@@ -893,6 +898,9 @@ impl TokioAsyncMqttClient {
     }
 
     /// Create a new async MQTT client with default configuration
+    ///
+    /// Automatic reconnect is enabled, even if `mqtt_options.reconnect` is false.
+    /// Use [`Self::new`] with `auto_reconnect(false)` to disable it.
     pub async fn with_default_config(
         mqtt_options: MqttClientOptions,
         event_handler: Box<dyn TokioMqttEventHandler>,

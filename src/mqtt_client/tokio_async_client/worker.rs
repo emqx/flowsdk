@@ -221,7 +221,7 @@ fn invalid(field: &str, reason: &str) -> MqttClientError {
 
 pub(super) fn resolve_options(
     options: &mut MqttClientOptions,
-    config: &mut TokioAsyncClientConfig,
+    config: &TokioAsyncClientConfig,
 ) -> Result<(), MqttClientError> {
     if config.command_queue_size == 0 || config.default_operation_timeout_ms == 0 {
         return Err(invalid(
@@ -246,7 +246,6 @@ pub(super) fn resolve_options(
     if let Some(maximum) = config.topic_alias_maximum {
         merge_property(options, Property::TopicAliasMaximum(maximum))?;
     }
-    config.auto_reconnect &= options.reconnect;
     options.reconnect = config.auto_reconnect;
     options.reconnect_max_delay_ms = config.max_reconnect_delay_ms;
     options.max_reconnect_attempts = config.max_reconnect_attempts;
