@@ -169,7 +169,6 @@ async fn run_v3_example() -> Result<(), Box<dyn std::error::Error>> {
         .mqtt_version(3) // ⚠️ IMPORTANT: Use MQTT v3.1.1
         .keep_alive(60)
         .clean_start(true) // Clean session for v3
-        .reconnect(true)
         .auto_ack(true) // Enable auto-ack to test session handling
         .build();
 

@@ -324,18 +324,47 @@ mod tests {
 
     #[tokio::test]
     async fn disabled_async_reconnect_prevents_new_connection() {
-        let mut opts = options().reconnect(true);
-        opts.reconnect_base_delay_ms = 10;
-        let (client, listener, peer, _events, _) = open(opts, config(), true).await;
-        drop(peer);
-        let reconnected = timeout(Duration::from_millis(300), listener.accept())
-            .await
-            .is_ok();
-        client.shutdown().await.unwrap();
-        assert!(
-            !reconnected,
-            "auto_reconnect(false) was overridden by engine reconnect setting"
-        );
+        for core_reconnect in [false, true] {
+            let opts = options()
+                .reconnect(core_reconnect)
+                .reconnect_base_delay_ms(10);
+            let (client, listener, peer, mut events, _) = open(opts, config(), true).await;
+            drop(peer);
+            event_matching(&mut events, |e| matches!(e, Event::Lost)).await;
+            let reconnected = timeout(Duration::from_millis(300), listener.accept())
+                .await
+                .is_ok();
+            client.shutdown().await.unwrap();
+            assert!(
+                !reconnected,
+                "auto_reconnect(false) must prevent retries with core reconnect={core_reconnect}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn enabled_async_reconnect_establishes_new_connection() {
+        for core_reconnect in [false, true] {
+            let opts = options()
+                .reconnect(core_reconnect)
+                .reconnect_base_delay_ms(10);
+            let (client, listener, peer, mut events, _) =
+                open(opts, TokioAsyncClientConfig::default(), true).await;
+            drop(peer);
+            let (mut retry, _) = timeout(Duration::from_secs(2), listener.accept())
+                .await
+                .unwrap_or_else(|_| {
+                    panic!("auto_reconnect(true) must retry with core reconnect={core_reconnect}")
+                })
+                .unwrap();
+            assert!(matches!(
+                read_packet(&mut retry).await,
+                MqttPacket::Connect5(_)
+            ));
+            retry.write_all(&[0x20, 3, 0, 0, 0]).await.unwrap();
+            event_matching(&mut events, |e| matches!(e, Event::Connected)).await;
+            client.shutdown().await.unwrap();
+        }
     }
 
     async fn event_matching(
@@ -474,7 +503,9 @@ mod tests {
     #[tokio::test]
     async fn disconnect_completion_flushes_properties_and_closes_once() {
         let (client, listener, mut peer, mut events, _) = open(
-            options().reconnect(true).session_expiry_interval(60),
+            options()
+                .session_expiry_interval(60)
+                .reconnect_base_delay_ms(10),
             TokioAsyncClientConfig::default(),
             true,
         )
@@ -502,6 +533,7 @@ mod tests {
         assert!(matches!(events.recv().await, Some(Event::Disconnected)));
         client.disconnect_sync().await.unwrap();
         assert!(events.try_recv().is_err());
+        client.set_auto_reconnect(true).await.unwrap();
         assert!(timeout(Duration::from_millis(100), listener.accept())
             .await
             .is_err());
@@ -565,6 +597,22 @@ mod tests {
             .await
             .is_err());
         client.shutdown().await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn shutdown_cancels_scheduled_reconnect() {
+        let opts = options().reconnect_base_delay_ms(200);
+        let (client, listener, peer, mut events, _) =
+            open(opts, TokioAsyncClientConfig::default(), true).await;
+        drop(peer);
+        assert!(matches!(
+            event_matching(&mut events, |e| matches!(e, Event::Reconnect(_))).await,
+            Event::Reconnect(1)
+        ));
+        client.shutdown().await.unwrap();
+        assert!(timeout(Duration::from_millis(350), listener.accept())
+            .await
+            .is_err());
     }
 
     #[tokio::test]

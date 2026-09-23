@@ -45,9 +45,13 @@ the callback.
 - Async `topic_alias_maximum` merges into CONNECT properties. Missing async
   values preserve core settings; equal values are deduplicated and conflicting
   explicit settings are rejected.
-- Automatic reconnect is initially enabled only if both configurations enable
-  it. Async retry count and maximum delay configure the engine; the base delay
-  comes from `MqttClientOptions`.
+- Async `auto_reconnect` controls automatic reconnect after connection failure
+  or loss, overriding `MqttClientOptions::reconnect`. It defaults to `true`,
+  including with `with_default_config`. To disable retries, use
+  `TokioAsyncClientConfig::builder().auto_reconnect(false)`; setting only the
+  core reconnect flag to `false` no longer disables them. Async retry count and
+  maximum delay also configure the engine; the base delay comes from
+  `MqttClientOptions`.
 - `set_auto_reconnect(false)` cancels scheduled retries. It does not cancel
   operations on an active connection. An intentional disconnect suppresses
   retries until an explicit new `connect`/`connect_sync` call.
@@ -1508,5 +1512,3 @@ See `src/mqtt_client/raw_packet/malformed.rs` for complete list.
 
 ---
 
-**Last Updated**: October 10, 2025  
-**Version**: 1.0

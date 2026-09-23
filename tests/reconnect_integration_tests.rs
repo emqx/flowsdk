@@ -18,7 +18,8 @@ use flowsdk::mqtt_client::MqttClientError;
 use std::process::{Child, Command, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tokio::time::sleep;
+use tokio::sync::Notify;
+use tokio::time::{sleep, timeout};
 
 /// Event handler that tracks reconnection attempts
 #[derive(Clone)]
@@ -26,6 +27,7 @@ struct ReconnectTestHandler {
     connected_count: Arc<Mutex<u32>>,
     connection_lost_count: Arc<Mutex<u32>>,
     reconnect_attempts: Arc<Mutex<Vec<u32>>>,
+    reconnect_scheduled: Arc<Notify>,
     disconnected_count: Arc<Mutex<u32>>,
 }
 
@@ -35,6 +37,7 @@ impl ReconnectTestHandler {
             connected_count: Arc::new(Mutex::new(0)),
             connection_lost_count: Arc::new(Mutex::new(0)),
             reconnect_attempts: Arc::new(Mutex::new(Vec::new())),
+            reconnect_scheduled: Arc::new(Notify::new()),
             disconnected_count: Arc::new(Mutex::new(0)),
         }
     }
@@ -49,6 +52,21 @@ impl ReconnectTestHandler {
 
     fn get_reconnect_attempts(&self) -> Vec<u32> {
         self.reconnect_attempts.lock().unwrap().clone()
+    }
+
+    async fn wait_for_reconnect_attempts(&self, count: usize) {
+        timeout(Duration::from_secs(5), async {
+            while self.get_reconnect_attempts().len() < count {
+                self.reconnect_scheduled.notified().await;
+            }
+        })
+        .await
+        .unwrap_or_else(|_| {
+            panic!(
+                "Expected at least {count} scheduled retries, got {:?}",
+                self.get_reconnect_attempts()
+            )
+        });
     }
 
     fn get_disconnected_count(&self) -> u32 {
@@ -80,6 +98,7 @@ impl TokioMqttEventHandler for ReconnectTestHandler {
         let mut attempts = self.reconnect_attempts.lock().unwrap();
         attempts.push(attempt);
         println!("🔄 Reconnect attempt #{}", attempt);
+        self.reconnect_scheduled.notify_one();
     }
 
     async fn on_error(&mut self, error: &MqttClientError) {
@@ -144,6 +163,8 @@ async fn test_auto_reconnect_on_broker_restart() {
     // Configure client with fast reconnect for testing
     let config = TokioAsyncClientConfig::builder()
         .auto_reconnect(true)
+        .max_reconnect_delay_ms(1000) // 1s max delay
+        .max_reconnect_attempts(0) // Unlimited
         .build();
 
     let options = MqttClientOptions::builder()
@@ -152,8 +173,6 @@ async fn test_auto_reconnect_on_broker_restart() {
         .clean_start(true)
         .keep_alive(3) // Short keep-alive for faster timeout detection
         .reconnect_base_delay_ms(300) // 300ms initial delay
-        .reconnect_max_delay_ms(1000) // 1s max delay
-        .max_reconnect_attempts(0) // Unlimited
         .ping_timeout_multiplier(2) // Wait up to 6 seconds for PINGRESP
         .build();
 
@@ -295,14 +314,14 @@ async fn test_auto_reconnect_on_broker_restart() {
 async fn test_reconnect_backoff_timing() {
     let config = TokioAsyncClientConfig::builder()
         .auto_reconnect(true)
+        .max_reconnect_delay_ms(1000) // 1s max
+        .max_reconnect_attempts(3) // Stop after 3 attempts
         .build();
 
     let options = MqttClientOptions::builder()
         .peer("127.0.0.1:19999") // Non-existent port to force connection failure
         .client_id("test-backoff")
         .reconnect_base_delay_ms(200) // 200ms base
-        .reconnect_max_delay_ms(1000) // 1s max
-        .max_reconnect_attempts(3) // Stop after 3 attempts
         .build();
 
     let handler = ReconnectTestHandler::new();
@@ -314,10 +333,12 @@ async fn test_reconnect_backoff_timing() {
 
             // Try to connect - should fail
             let start = std::time::Instant::now();
-            let _ = client.connect_sync().await;
+            assert!(client.connect_sync().await.is_err());
 
-            // Wait for all reconnection attempts
-            sleep(Duration::from_secs(3)).await;
+            handler_clone.wait_for_reconnect_attempts(3).await;
+            // Callbacks report scheduled retries. Let the final retry run and
+            // allow enough time to catch an incorrectly scheduled fourth retry.
+            sleep(Duration::from_secs(2)).await;
 
             let attempts = handler_clone.get_reconnect_attempts();
             let elapsed = start.elapsed();
@@ -327,13 +348,7 @@ async fn test_reconnect_backoff_timing() {
             println!("   Time elapsed: {:?}", elapsed);
             println!("   Expected: 3 attempts with backoff (200ms, 400ms, 800ms)");
 
-            // Should have scheduled 3 attempts before giving up
-            // Note: We may see fewer if connection hasn't failed yet
-            assert!(attempts.len() <= 3, "Should not exceed max attempts");
-
-            if !attempts.is_empty() {
-                assert_eq!(attempts[0], 1, "First attempt should be #1");
-            }
+            assert_eq!(attempts, vec![1, 2, 3], "Should schedule exactly 3 retries");
 
             let _ = client.shutdown().await;
         }
@@ -353,6 +368,7 @@ async fn test_reconnect_disabled() {
     let options = MqttClientOptions::builder()
         .peer("127.0.0.1:19999") // Non-existent port
         .client_id("test-no-reconnect")
+        .reconnect(true) // Async config must still be able to disable retries
         .build();
 
     let handler = ReconnectTestHandler::new();
@@ -363,7 +379,7 @@ async fn test_reconnect_disabled() {
             println!("\n🔵 Testing with auto-reconnect disabled");
 
             // Try to connect - should fail
-            let _ = client.connect_sync().await;
+            assert!(client.connect_sync().await.is_err());
 
             // Wait a moment
             sleep(Duration::from_secs(2)).await;
@@ -393,13 +409,14 @@ async fn test_reconnect_disabled() {
 async fn test_dynamic_reconnect_control() {
     let config = TokioAsyncClientConfig::builder()
         .auto_reconnect(true)
+        .max_reconnect_delay_ms(400)
+        .max_reconnect_attempts(0) // Unlimited
         .build();
 
     let options = MqttClientOptions::builder()
         .peer("127.0.0.1:19999") // Non-existent port
         .client_id("test-dynamic-reconnect")
         .reconnect_base_delay_ms(200)
-        .max_reconnect_attempts(0) // Unlimited
         .build();
 
     let handler = ReconnectTestHandler::new();
@@ -410,79 +427,40 @@ async fn test_dynamic_reconnect_control() {
             println!("\n🔵 Testing dynamic reconnect control");
 
             // Initial state: auto-reconnect enabled
-            let _ = client.connect_sync().await;
-            sleep(Duration::from_millis(500)).await;
-
-            let initial_attempts = handler_clone.get_reconnect_attempts().len();
-            println!("   Initial attempts: {}", initial_attempts);
+            assert!(client.connect_sync().await.is_err());
+            handler_clone.wait_for_reconnect_attempts(1).await;
 
             // Disable auto-reconnect
             client.set_auto_reconnect(false).await.unwrap();
             println!("   ✋ Auto-reconnect disabled");
 
+            // The setter only queues a command. A subsequent completed command
+            // confirms the worker has processed it before we record the count.
+            assert!(matches!(
+                client.ping_sync().await,
+                Err(MqttClientError::NotConnected)
+            ));
+            let at_disable = handler_clone.get_reconnect_attempts().len();
+
+            // Observe for longer than the maximum retry delay.
             sleep(Duration::from_secs(1)).await;
 
             let after_disable = handler_clone.get_reconnect_attempts().len();
             println!("   Attempts after disable: {}", after_disable);
+            assert_eq!(
+                after_disable, at_disable,
+                "Should not schedule retries while reconnect is disabled"
+            );
 
             // Re-enable auto-reconnect
             client.set_auto_reconnect(true).await.unwrap();
             println!("   ✅ Auto-reconnect re-enabled");
 
-            // Wait for multiple backoff cycles to allow reconnection attempts to resume
-            // At this point, backoff delay is 400ms (2^1 * 200ms), next would be 800ms
-            // Wait long enough for at least 2-3 more attempts
-            sleep(Duration::from_millis(3000)).await;
-
-            let final_attempts = handler_clone.get_reconnect_attempts().len();
-            println!("   Final attempts: {}", final_attempts);
-
-            // Verify dynamic control behavior
-            assert!(
-                initial_attempts > 0,
-                "Should have initial reconnection attempts"
-            );
-
-            // After disabling, attempts should have mostly stopped (allow buffer for race conditions)
-            // Note: One or two more attempts might occur if they were already scheduled
-            assert!(
-                after_disable <= initial_attempts + 3,
-                "Reconnection attempts should mostly stop after disabling (initial: {}, after_disable: {})",
-                initial_attempts,
-                after_disable
-            );
-
-            // After re-enabling and waiting, check if attempts resumed
-            // Note: Current implementation doesn't automatically trigger reconnection
-            // when re-enabling auto-reconnect on an already-disconnected client.
-            // The reconnection only resumes if a new connection loss event occurs.
-            // This is a known limitation documented here.
-
-            if final_attempts > after_disable {
-                println!("   ✅ Dynamic reconnect control verified:");
-                println!("      - Started with {} attempts", initial_attempts);
-                println!(
-                    "      - After disable: {} attempts (delta: {})",
-                    after_disable,
-                    after_disable - initial_attempts
-                );
-                println!(
-                    "      - After re-enable: {} attempts (delta: {})",
-                    final_attempts,
-                    final_attempts - after_disable
-                );
-            } else {
-                println!("   ⚠️  Reconnection did not automatically resume after re-enabling.");
-                println!("      This is expected behavior - re-enabling auto-reconnect while");
-                println!("      disconnected doesn't trigger a new reconnect schedule.");
-                println!("      Reconnection will resume on the next connection loss event.");
-                println!("      - Initial attempts: {}", initial_attempts);
-                println!("      - After disable: {}", after_disable);
-                println!("      - After re-enable: {}", final_attempts);
-
-                // Test still passes - we verified disable stopped attempts
-                // The re-enable functionality works but requires a new trigger event
-            }
+            // Re-enabling while disconnected must schedule another retry and
+            // keep retrying after that connection attempt fails.
+            handler_clone
+                .wait_for_reconnect_attempts(after_disable + 2)
+                .await;
 
             let _ = client.shutdown().await;
         }

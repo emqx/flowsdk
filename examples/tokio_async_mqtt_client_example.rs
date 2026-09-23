@@ -152,7 +152,6 @@ async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
         )
         .client_id("tokio_async_example_client")
         .keep_alive(10)
-        .reconnect(true)
         .auto_ack(true) // This example leaves receive acknowledgements to the worker.
         .build();
 
