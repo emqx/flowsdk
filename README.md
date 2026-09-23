@@ -112,6 +112,7 @@ Detailed documentation is available in the [`docs/`](docs/) directory.
 Check the [`examples/`](examples/) directory for runnable code.
 
 *   `mqtt_client_v5`: Traditional synchronous loop style.
+*   `async_pubsub`: Compact MQTT 5 QoS 1/2 publish/subscribe with completed shutdown.
 *   `tokio_async_mqtt_client_example`: Full featured async client.
 *   `tls_client`: Secure connection example.
 *   `tokio_async_mqtt_quic_example`: **QUIC** transport example.
@@ -120,6 +121,11 @@ Check the [`examples/`](examples/) directory for runnable code.
 Run an example:
 ```bash
 cargo run --example tokio_async_mqtt_client_example
+```
+
+For a local MQTT broker (runs QoS 1 and 2; append `1` or `2` to select one):
+```bash
+cargo run --example async_pubsub -- localhost:1883
 ```
 
 ---

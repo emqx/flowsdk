@@ -200,7 +200,10 @@ async fn run_priority_example() -> Result<(), Box<dyn std::error::Error>> {
     println!("   6️⃣  Priority 10  (BACKGROUND)\n");
 
     println!("📡 Connecting to MQTT broker...\n");
-    client.connect().await?;
+    let connected = client.connect_sync().await?;
+    if !connected.is_success() {
+        return Err(format!("CONNECT rejected: {connected:?}").into());
+    }
 
     // Wait for all messages to be sent
     sleep(Duration::from_secs(3)).await;
@@ -276,9 +279,7 @@ async fn run_priority_example() -> Result<(), Box<dyn std::error::Error>> {
     println!("🎯 All messages were sent in correct priority order\n");
 
     println!("👋 Disconnecting...");
-    client.disconnect().await?;
-
-    sleep(Duration::from_secs(1)).await;
+    client.disconnect_sync().await?;
 
     println!("🛑 Shutting down client...");
     client.shutdown().await?;

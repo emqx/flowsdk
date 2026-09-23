@@ -8,8 +8,9 @@
 /// - publish_sync() - Wait for PUBACK/PUBCOMP
 /// - unsubscribe_sync() - Wait for UNSUBACK
 /// - ping_sync() - Wait for PINGRESP
+/// - disconnect_sync() / shutdown() - Close the transport and join the worker
 ///
-/// Run with: cargo run --example tokio_async_mqtt_all_sync_operations
+/// Run with: cargo run --example tokio_async_mqtt_all_sync_operations -- [host:port]
 use flowsdk::mqtt_client::client::{
     ConnectionResult, PublishResult, SubscribeResult, UnsubscribeResult,
 };
@@ -100,7 +101,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Configure MQTT client using builder pattern
     let options = MqttClientOptions::builder()
-        .peer("localhost:1883")
+        .peer(
+            std::env::args()
+                .nth(1)
+                .unwrap_or_else(|| "localhost:1883".into()),
+        )
         .client_id("tokio_all_sync_ops_client")
         .build();
 
@@ -110,6 +115,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Arc::new(TokioAsyncMqttClient::new(options, Box::new(handler), config).await?);
     println!("✅ Client created\n");
 
+    let result = run_operations(&client, &handler_clone).await;
+    // All spawned operations have been joined; release Arc before consuming the client.
+    let client = Arc::try_unwrap(client).map_err(|_| "Client is still shared")?;
+    let shutdown = client.shutdown().await;
+    result?;
+    shutdown?;
+    Ok(())
+}
+
+async fn run_operations(
+    client: &Arc<TokioAsyncMqttClient>,
+    handler: &EventTracker,
+) -> Result<(), Box<dyn std::error::Error>> {
     // ============================================================
     // 1. CONNECT SYNC - Wait for CONNACK
     // ============================================================
@@ -119,6 +137,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match client.connect_sync().await {
         Ok(result) => {
+            if !result.is_success() {
+                return Err(format!("CONNECT rejected: {result:?}").into());
+            }
             println!("✓ Connected successfully!");
             println!("  Reason code: {}", result.reason_code);
             println!("  Session present: {}", result.session_present);
@@ -130,8 +151,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
-
     // ============================================================
     // 2. SUBSCRIBE SYNC - Wait for SUBACK
     // ============================================================
@@ -142,6 +161,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let test_topic = "test/sync/demo/#";
     match client.subscribe_sync(test_topic, 1).await {
         Ok(result) => {
+            if !result.is_success() {
+                return Err(format!("SUBSCRIBE rejected: {result:?}").into());
+            }
             println!("✓ Subscribed to '{}'", test_topic);
             println!("  Packet ID: {}", result.packet_id);
             println!("  Granted QoS: {:?}\n", result.reason_codes);
@@ -150,8 +172,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             eprintln!("✗ Subscribe failed: {}\n", e);
         }
     }
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // ============================================================
     // 3. PUBLISH SYNC - Wait for PUBACK/PUBCOMP
@@ -167,7 +187,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
     {
         Ok(result) => {
-            println!("  ✓ Sent immediately (no ack)");
+            println!("  ✓ Accepted into the output queue (no broker acknowledgement)");
             println!("    Packet ID: {:?}", result.packet_id);
         }
         Err(e) => println!("  ✗ Failed: {}", e),
@@ -180,6 +200,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
     {
         Ok(result) => {
+            if !result.is_success() {
+                return Err(format!("PUBLISH rejected: {result:?}").into());
+            }
             println!("  ✓ PUBACK received!");
             println!("    Packet ID: {:?}", result.packet_id);
             println!("    Reason code: {:?}", result.reason_code);
@@ -195,6 +218,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await
     {
         Ok(result) => {
+            if !result.is_success() {
+                return Err(format!("PUBLISH rejected: {result:?}").into());
+            }
             println!("  ✓ PUBCOMP received!");
             println!("    Packet ID: {:?}", result.packet_id);
             println!("    Reason code: {:?}", result.reason_code);
@@ -202,8 +228,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Err(e) => println!("  ✗ Failed: {}", e),
     }
-
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     // ============================================================
     // 4. PING SYNC - Wait for PINGRESP
@@ -258,6 +282,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .await
         {
             Ok(result) => {
+                if !result.is_success() {
+                    return Err(format!("PUBLISH rejected: {result:?}").into());
+                }
                 println!(
                     "  ✓ Message {} acknowledged (packet_id: {:?})",
                     i, result.packet_id
@@ -269,8 +296,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
-
     // ============================================================
     // 7. PARALLEL OPERATIONS
     // ============================================================
@@ -280,7 +305,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut handles = vec![];
     for i in 1..=3 {
-        let client_clone = client.clone();
+        let client_clone = Arc::clone(client);
         let topic = format!("test/sync/demo/parallel/{}", i);
         let handle = tokio::spawn(async move {
             let payload = format!("Parallel message {}", i);
@@ -291,24 +316,32 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         handles.push((i, handle));
     }
 
+    let mut parallel_error = None;
     for (i, handle) in handles {
         match handle.await {
-            Ok(Ok(result)) => {
+            Ok(Ok(result)) if result.is_success() => {
                 println!(
                     "  ✓ Parallel message {} completed: packet_id={:?}",
                     i, result.packet_id
                 );
             }
+            Ok(Ok(result)) => {
+                parallel_error = Some(format!("Parallel PUBLISH rejected: {result:?}"));
+            }
             Ok(Err(e)) => {
                 println!("  ✗ Parallel message {} failed: {}", i, e);
+                parallel_error = Some(e.to_string());
             }
             Err(e) => {
                 println!("  ✗ Parallel message {} task error: {}", i, e);
+                parallel_error = Some(e.to_string());
             }
         }
     }
 
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    if let Some(error) = parallel_error {
+        return Err(error.into());
+    }
 
     // ============================================================
     // 8. UNSUBSCRIBE SYNC - Wait for UNSUBACK
@@ -319,6 +352,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     match client.unsubscribe_sync(vec![test_topic]).await {
         Ok(result) => {
+            if !result.is_success() {
+                return Err(format!("UNSUBSCRIBE rejected: {result:?}").into());
+            }
             println!("✓ Unsubscribed from '{}'", test_topic);
             println!("  Packet ID: {}", result.packet_id);
             println!("  Reason codes: {:?}\n", result.reason_codes);
@@ -337,26 +373,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Disconnect first
     println!("🔌 Disconnecting...");
-    client.disconnect().await?;
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
+    client.disconnect_sync().await?;
 
     // Try to publish after disconnect (should fail gracefully)
     println!("📤 Attempting publish after disconnect:");
-    match tokio::time::timeout(
-        tokio::time::Duration::from_secs(2),
-        client.publish_sync("test/after/disconnect", b"Should fail", 1, false),
-    )
-    .await
+    match client
+        .publish_sync("test/after/disconnect", b"Should fail", 1, false)
+        .await
     {
-        Ok(Ok(result)) => {
-            println!("  ⚠️  Unexpected success: {:?}", result);
+        Err(MqttClientError::NotConnected) => {
+            println!("  ✓ Returned NotConnected as expected");
         }
-        Ok(Err(e)) => {
-            println!("  ✓ Failed as expected: {}", e);
-        }
-        Err(_) => {
-            println!("  ✓ Timed out as expected");
-        }
+        other => return Err(format!("Expected NotConnected, got {other:?}").into()),
     }
 
     // ============================================================
@@ -366,7 +394,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("│ 📊 EVENT SUMMARY                         │");
     println!("╰─────────────────────────────────────────╯");
 
-    let events = handler_clone.events.lock().await;
+    let events = handler.events.lock().await;
     println!("Total events captured: {}", events.len());
     println!("\nRecent events:");
     for (i, event) in events.iter().rev().take(10).enumerate() {

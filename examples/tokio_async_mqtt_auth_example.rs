@@ -156,7 +156,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // handler_clone.set_client(client.clone());
 
     println!("🔌 Connecting to broker...\n");
-    client.connect().await?;
+    let connected = client.connect_sync().await?;
+    if !connected.is_success() {
+        return Err(format!("CONNECT rejected: {connected:?}").into());
+    }
 
     // Note: In a real scenario, the broker would initiate enhanced authentication
     // by sending an AUTH packet during the connection handshake if:
@@ -171,7 +174,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     ];
 
     match client.auth(0x18, auth_properties).await {
-        Ok(_) => println!("   ✅ AUTH packet sent successfully"),
+        Ok(_) => println!("   AUTH command queued; protocol errors are reported by on_error"),
         Err(e) => eprintln!("   ❌ Failed to send AUTH: {}", e),
     }
 
@@ -180,12 +183,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tokio::time::sleep(tokio::time::Duration::from_secs(10)).await;
 
     println!("\n🛑 Disconnecting...");
-    client.disconnect().await?;
+    client.disconnect_sync().await?;
+    let client = Arc::try_unwrap(client).map_err(|_| "Client is still shared")?;
+    client.shutdown().await?;
 
     println!("✅ Example completed!\n");
-
-    // Wait a bit for clean shutdown
-    tokio::time::sleep(tokio::time::Duration::from_millis(500)).await;
 
     Ok(())
 }
