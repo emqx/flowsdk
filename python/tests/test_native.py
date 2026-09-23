@@ -16,7 +16,7 @@ class NativeBindingsTests(unittest.TestCase):
         for name in flowsdk.__all__:
             with self.subTest(name=name):
                 self.assertTrue(hasattr(flowsdk, name))
-        self.assertEqual(flowsdk.__version__, "0.6.0")
+        self.assertEqual(flowsdk.__version__, "0.6.1")
 
     def test_tcp_packet_and_acknowledgement_round_trip(self):
         engine = flowsdk.MqttEngineFfi("native-test", 5)

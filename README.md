@@ -46,9 +46,9 @@ Add `flowsdk` to your `Cargo.toml`.
 
 ```toml
 [dependencies]
-flowsdk = { version = "0.6.0", features = ["tls"] }
+flowsdk = { version = "0.6.1", features = ["tls"] }
 # For QUIC support:
-# flowsdk = { version = "0.4.2", features = ["quic"] }
+# flowsdk = { version = "0.6.1", features = ["quic"] }
 ```
 
 ### 2. Basic Usage
