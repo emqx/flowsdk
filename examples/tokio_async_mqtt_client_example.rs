@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+//! Run: cargo run --example tokio_async_mqtt_client_example -- [host:port]
 
 use flowsdk::mqtt_client::client::{
     ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
@@ -8,31 +9,19 @@ use flowsdk::mqtt_client::{
     MqttClientError, MqttClientOptions, TokioAsyncClientConfig, TokioAsyncMqttClient,
     TokioMqttEventHandler,
 };
+use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
 use flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish;
-use std::sync::{Arc, Mutex};
-use tokio::time::{sleep, Duration};
+use tokio::time::Duration;
 
 /// Example event handler for the tokio async client
 struct TokioExampleHandler {
     name: String,
-    context: Arc<Mutex<Option<u16>>>,
 }
 
 impl TokioExampleHandler {
-    fn new(name: &str, context: Arc<Mutex<Option<u16>>>) -> Self {
+    fn new(name: &str) -> Self {
         TokioExampleHandler {
             name: name.to_string(),
-            context,
-        }
-    }
-
-    fn update_last_acked_packet_id(&mut self, packet_id: u16) {
-        if let Ok(mut ctx) = self.context.lock() {
-            println!(
-                "[{}] 📦 Updating last acknowledged packet ID to {}",
-                self.name, packet_id
-            );
-            *ctx = Some(packet_id);
         }
     }
 }
@@ -66,9 +55,6 @@ impl TokioMqttEventHandler for TokioExampleHandler {
     }
 
     async fn on_published(&mut self, result: &PublishResult) {
-        if let Some(packet_id) = result.packet_id {
-            self.update_last_acked_packet_id(packet_id);
-        }
         if result.is_success() {
             println!(
                 "[{}] 📤 Message published successfully (QoS: {}, ID: {:?})",
@@ -85,7 +71,6 @@ impl TokioMqttEventHandler for TokioExampleHandler {
     }
 
     async fn on_subscribed(&mut self, result: &SubscribeResult) {
-        self.update_last_acked_packet_id(result.packet_id);
         if result.is_success() {
             println!(
                 "[{}] 📥 Subscribed successfully! ({} subscriptions)",
@@ -101,7 +86,6 @@ impl TokioMqttEventHandler for TokioExampleHandler {
     }
 
     async fn on_unsubscribed(&mut self, result: &UnsubscribeResult) {
-        self.update_last_acked_packet_id(result.packet_id);
         println!(
             "[{}] 📤 Unsubscribe result for packet ID {:?}",
             self.name, result.packet_id
@@ -161,11 +145,15 @@ async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
 
     // Configure MQTT client options using builder pattern
     let mqtt_options = MqttClientOptions::builder()
-        .peer("broker.emqx.io:1883")
+        .peer(
+            std::env::args()
+                .nth(1)
+                .unwrap_or_else(|| "broker.emqx.io:1883".into()),
+        )
         .client_id("tokio_async_example_client")
         .keep_alive(10)
         .reconnect(true)
-        .auto_ack(false)
+        .auto_ack(true) // This example leaves receive acknowledgements to the worker.
         .build();
 
     // Configure tokio async client settings
@@ -179,25 +167,35 @@ async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
         .tcp_nodelay(false)
         .build();
 
-    let context = Arc::new(Mutex::new(None::<u16>));
     // Create event handler
-    let event_handler = Box::new(TokioExampleHandler::new(
-        "TokioAsyncClient",
-        context.clone(),
-    ));
+    let event_handler = Box::new(TokioExampleHandler::new("TokioAsyncClient"));
 
     // Create tokio async MQTT client
     let client = TokioAsyncMqttClient::new(mqtt_options, event_handler, async_config).await?;
 
-    println!("📡 Connecting to MQTT broker...");
-    client.connect().await?;
+    let result = run_session(&client).await;
+    println!("🛑 Shutting down client...");
+    let shutdown = client.shutdown().await;
+    result?;
+    shutdown?;
+    println!("✅ Tokio Async MQTT Client Example completed!");
+    Ok(())
+}
 
-    // Give some time for connection
-    sleep(Duration::from_millis(1000)).await;
+async fn run_session(client: &TokioAsyncMqttClient) -> Result<(), Box<dyn std::error::Error>> {
+    println!("📡 Connecting to MQTT broker...");
+    let connected = client.connect_sync().await?;
+    if !connected.is_success() {
+        return Err(format!("CONNECT rejected: {connected:?}").into());
+    }
 
     println!("📋 Subscribing to topics...");
-    client.subscribe("test/tokio/topic", 1).await?;
-    client.subscribe("tokio/async/+", 2).await?;
+    for (topic, qos) in [("test/tokio/topic", 1), ("tokio/async/+", 2)] {
+        let result = client.subscribe_sync(topic, qos).await?;
+        if !result.is_success() {
+            return Err(format!("SUBSCRIBE rejected: {result:?}").into());
+        }
+    }
 
     println!("📤 Publishing test messages...");
 
@@ -207,7 +205,7 @@ async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
         .payload(b"Hello from Tokio Async Client!")
         .qos(1)
         .build()?;
-    client.publish_with_command(simple_cmd).await?;
+    publish_checked(client, simple_cmd).await?;
 
     // Example 2: Publish with MQTT v5 properties (content type, expiry, user properties)
     let rich_cmd = PublishCommand::builder()
@@ -221,7 +219,7 @@ async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
         .with_user_property("location", "room1")
         .priority(128)
         .build()?;
-    client.publish_with_command(rich_cmd).await?;
+    publish_checked(client, rich_cmd).await?;
 
     // Example 3: QoS 0 publish (fire and forget)
     let qos0_cmd = PublishCommand::builder()
@@ -229,7 +227,7 @@ async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
         .payload(b"Quick QoS 0 message")
         .qos(0)
         .build()?;
-    client.publish_with_command(qos0_cmd).await?;
+    publish_checked(client, qos0_cmd).await?;
 
     // Example 4: Request/Response pattern using response topic and correlation data
     let request_cmd = PublishCommand::builder()
@@ -240,7 +238,7 @@ async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
         .with_correlation_data(b"req-12345")
         .with_user_property("request_id", "12345")
         .build()?;
-    client.publish_with_command(request_cmd).await?;
+    publish_checked(client, request_cmd).await?;
 
     // Example 5: Publish with topic alias (MQTT v5 feature to reduce packet size)
     let alias_cmd = PublishCommand::builder()
@@ -249,58 +247,79 @@ async fn run_example() -> Result<(), Box<dyn std::error::Error>> {
         .qos(1)
         .with_topic_alias(10) // Use alias to avoid sending long topic repeatedly
         .build()?;
-    client.publish_with_command(alias_cmd).await?;
+    let alias_maximum = connected
+        .properties
+        .as_deref()
+        .unwrap_or_default()
+        .iter()
+        .find_map(|p| {
+            if let Property::TopicAliasMaximum(maximum) = p {
+                Some(*maximum)
+            } else {
+                None
+            }
+        })
+        .unwrap_or(0);
+    if alias_maximum >= 10 {
+        publish_checked(client, alias_cmd).await?;
+    } else {
+        println!("Skipping topic alias 10: broker maximum is {alias_maximum}");
+    }
 
     println!("🏓 Sending ping...");
-    client.ping().await?;
+    client.ping_sync().await?;
 
     println!("📤 Unsubscribing from topics...");
-    client.unsubscribe(vec!["test/tokio/topic"]).await?;
-
-    // Wait for the last_acked_packet_id to be exactly 4
-    println!("⏳ Waiting for unsubscribe acknowledgment (packet ID 4)...");
-    let wait_for_ack = async {
-        loop {
-            if let Ok(ctx) = context.lock() {
-                if *ctx == Some(4) {
-                    println!("✅ Received acknowledgment for packet ID 4");
-                    break;
-                } else {
-                    println!("❌ Unsubscribe acknowledgment not received yet {:?}", ctx);
-                }
-            }
-            sleep(Duration::from_millis(100)).await;
-        }
-    };
-
-    match tokio::time::timeout(Duration::from_secs(5), wait_for_ack).await {
-        Ok(_) => println!("✅ Successfully received acknowledgment"),
-        Err(_) => println!("⚠️  Timeout waiting for acknowledgment"),
+    let result = client.unsubscribe_sync(vec!["test/tokio/topic"]).await?;
+    if !result.is_success() {
+        return Err(format!("UNSUBSCRIBE rejected: {result:?}").into());
     }
+    println!(
+        "✅ Unsubscribe acknowledged (packet ID {})",
+        result.packet_id
+    );
 
     // Now testing the keep-alive and auto-reconnect features
     tokio::time::sleep(Duration::from_secs(20)).await;
 
-    client
-        .publish("tokio/async/test", b"Async message with QoS 2", 2, true)
-        .await?;
+    publish_checked(
+        client,
+        PublishCommand::simple(
+            "tokio/async/test",
+            b"Async message with QoS 2".to_vec(),
+            2,
+            true,
+        ),
+    )
+    .await?;
 
     tokio::time::sleep(Duration::from_secs(5)).await;
-    client
-        .publish("tokio/async/test", b"Async message with QoS 2", 2, true)
-        .await?;
+    publish_checked(
+        client,
+        PublishCommand::simple(
+            "tokio/async/test",
+            b"Async message with QoS 2".to_vec(),
+            2,
+            true,
+        ),
+    )
+    .await?;
 
     tokio::time::sleep(Duration::from_secs(20)).await;
 
     println!("👋 Disconnecting...");
-    client.disconnect().await?;
+    client.disconnect_sync().await?;
+    Ok(())
+}
 
-    tokio::time::sleep(Duration::from_secs(20)).await;
-
-    println!("🛑 Shutting down client...");
-    client.shutdown().await?;
-
-    println!("✅ Tokio Async MQTT Client Example completed!");
+async fn publish_checked(
+    client: &TokioAsyncMqttClient,
+    command: PublishCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let result = client.publish_with_command_sync(command).await?;
+    if !result.is_success() {
+        return Err(format!("PUBLISH rejected: {result:?}").into());
+    }
     Ok(())
 }
 

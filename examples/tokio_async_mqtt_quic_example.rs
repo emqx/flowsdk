@@ -188,14 +188,16 @@ async fn run_example(test_mode: bool) -> Result<(), Box<dyn std::error::Error>> 
     let client = TokioAsyncMqttClient::new(mqtt_options, event_handler, async_config).await?;
 
     println!("📡 Initiating QUIC connection...");
-    client.connect().await?;
-
-    sleep(Duration::from_secs(2)).await;
+    let connected = client.connect_sync().await?;
+    if !connected.is_success() {
+        return Err(format!("CONNECT rejected: {connected:?}").into());
+    }
 
     println!("📋 Subscribing to test topic...");
-    client.subscribe("test/quic/topic", 1).await?;
-
-    sleep(Duration::from_secs(1)).await;
+    let subscribed = client.subscribe_sync("test/quic/topic", 1).await?;
+    if !subscribed.is_success() {
+        return Err(format!("SUBSCRIBE rejected: {subscribed:?}").into());
+    }
 
     if test_mode {
         println!("📤 Publishing test messages...");
@@ -243,14 +245,10 @@ async fn run_example(test_mode: bool) -> Result<(), Box<dyn std::error::Error>> 
     }
 
     println!("🏓 Sending ping...");
-    client.ping().await?;
-
-    sleep(Duration::from_secs(1)).await;
+    client.ping_sync().await?;
 
     println!("👋 Disconnecting...");
-    client.disconnect().await?;
-
-    sleep(Duration::from_secs(1)).await;
+    client.disconnect_sync().await?;
 
     println!("🛑 Shutting down client...");
     client.shutdown().await?;

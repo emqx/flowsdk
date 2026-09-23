@@ -215,18 +215,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("🔌 Connecting to broker.emqx.io:8883 via TLS...");
     let client = TokioAsyncMqttClient::new(mqtt_options, handler, async_config).await?;
 
-    client.connect().await?;
-
-    // Wait for connection to establish
-    sleep(Duration::from_secs(2)).await;
+    let connected = client.connect_sync().await?;
+    if !connected.is_success() {
+        return Err(format!("CONNECT rejected: {connected:?}").into());
+    }
 
     // Subscribe to a test topic
     let topic = "flowsdk/tls/test";
     println!("\n📥 Subscribing to topic: {}", topic);
 
-    client.subscribe(topic, 1).await?;
-
-    sleep(Duration::from_secs(1)).await;
+    let subscribed = client.subscribe_sync(topic, 1).await?;
+    if !subscribed.is_success() {
+        return Err(format!("SUBSCRIBE rejected: {subscribed:?}").into());
+    }
 
     // Publish a test message
     println!("\n📤 Publishing test message...");
@@ -240,9 +241,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Send a ping to verify connection is still alive
     println!("\n🏓 Sending PING to broker...");
-    client.ping().await?;
-
-    sleep(Duration::from_secs(1)).await;
+    client.ping_sync().await?;
 
     // Publish a few more messages
     println!("\n📤 Publishing additional messages...");
@@ -263,9 +262,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Disconnect gracefully
     println!("\n👋 Disconnecting from broker...");
-    client.disconnect().await?;
-
-    sleep(Duration::from_secs(1)).await;
+    client.disconnect_sync().await?;
+    client.shutdown().await?;
 
     println!("✅ TLS example completed successfully!\n");
 

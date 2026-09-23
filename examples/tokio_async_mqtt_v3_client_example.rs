@@ -196,30 +196,40 @@ async fn run_v3_example() -> Result<(), Box<dyn std::error::Error>> {
     let client = TokioAsyncMqttClient::new(mqtt_options, event_handler, async_config).await?;
 
     println!("\n📡 Connecting to MQTT broker via v3.1.1...");
-    client.connect().await?;
-
-    // Give some time for connection
-    sleep(Duration::from_millis(1000)).await;
+    let connected = client.connect_sync().await?;
+    if !connected.is_success() {
+        return Err(format!("CONNECT rejected: {connected:?}").into());
+    }
 
     println!("\n📋 Testing MQTT v3.1.1 Subscriptions...");
     println!("{}", "─".repeat(60));
 
     // Test single subscription
-    client.subscribe("test/v3/qos0", 0).await?;
-    sleep(Duration::from_millis(500)).await;
+    let subscribed = client.subscribe_sync("test/v3/qos0", 0).await?;
+    if !subscribed.is_success() {
+        return Err(format!("SUBSCRIBE rejected: {subscribed:?}").into());
+    }
 
-    client.subscribe("test/v3/qos1", 1).await?;
-    sleep(Duration::from_millis(500)).await;
+    let subscribed = client.subscribe_sync("test/v3/qos1", 1).await?;
+    if !subscribed.is_success() {
+        return Err(format!("SUBSCRIBE rejected: {subscribed:?}").into());
+    }
 
-    client.subscribe("test/v3/qos2", 2).await?;
-    sleep(Duration::from_millis(500)).await;
+    let subscribed = client.subscribe_sync("test/v3/qos2", 2).await?;
+    if !subscribed.is_success() {
+        return Err(format!("SUBSCRIBE rejected: {subscribed:?}").into());
+    }
 
     // Test wildcard subscriptions (v3 supports + and #)
-    client.subscribe("test/v3/+/sensor", 1).await?;
-    sleep(Duration::from_millis(500)).await;
+    let subscribed = client.subscribe_sync("test/v3/+/sensor", 1).await?;
+    if !subscribed.is_success() {
+        return Err(format!("SUBSCRIBE rejected: {subscribed:?}").into());
+    }
 
-    client.subscribe("test/v3/#", 1).await?;
-    sleep(Duration::from_millis(1000)).await;
+    let subscribed = client.subscribe_sync("test/v3/#", 1).await?;
+    if !subscribed.is_success() {
+        return Err(format!("SUBSCRIBE rejected: {subscribed:?}").into());
+    }
 
     println!("\n📤 Testing MQTT v3.1.1 Publishing...");
     println!("{}", "─".repeat(60));
@@ -291,22 +301,16 @@ async fn run_v3_example() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("\n🏓 Testing PING...");
     println!("{}", "─".repeat(60));
-    client.ping().await?;
-    sleep(Duration::from_millis(500)).await;
+    client.ping_sync().await?;
 
     println!("\n📤 Testing Unsubscribe...");
     println!("{}", "─".repeat(60));
-    client.unsubscribe(vec!["test/v3/qos0"]).await?;
-    sleep(Duration::from_millis(500)).await;
-
-    client
-        .unsubscribe(vec!["test/v3/+/sensor", "test/v3/#"])
-        .await?;
-    sleep(Duration::from_millis(1000)).await;
-
-    // Wait for the last acknowledgment
-    println!("\n⏳ Waiting for final acknowledgments...");
-    sleep(Duration::from_secs(2)).await;
+    for topics in [vec!["test/v3/qos0"], vec!["test/v3/+/sensor", "test/v3/#"]] {
+        let result = client.unsubscribe_sync(topics).await?;
+        if !result.is_success() {
+            return Err(format!("UNSUBSCRIBE rejected: {result:?}").into());
+        }
+    }
 
     // Test keep-alive mechanism
     println!("\n⏱️  Testing keep-alive (waiting 10 seconds)...");
@@ -321,9 +325,7 @@ async fn run_v3_example() -> Result<(), Box<dyn std::error::Error>> {
     sleep(Duration::from_millis(500)).await;
 
     println!("\n👋 Disconnecting...");
-    client.disconnect().await?;
-
-    sleep(Duration::from_secs(1)).await;
+    client.disconnect_sync().await?;
 
     println!("\n🛑 Shutting down client...");
     client.shutdown().await?;

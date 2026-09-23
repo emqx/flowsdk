@@ -102,6 +102,10 @@ tempfile = "3"
 openssl = { version = "0.10", features = ["vendored"] }
 
 [[example]]
+name = "async_pubsub"
+required-features = ["async-client"]
+
+[[example]]
 name = "no_io_quic_async_client_example"
 required-features = ["quic"]
 
