@@ -2227,6 +2227,9 @@ fn transport_close_details(reason: &ConnectionError) -> (bool, Option<u64>) {
 /// - [`open_data_stream`](Self::open_data_stream) opens a new client-initiated
 ///   bidirectional stream and returns an opaque handle.
 /// - [`publish_on`](Self::publish_on) routes a PUBLISH onto a specific data stream.
+/// - [`subscribe_on_control`](Self::subscribe_on_control) and
+///   [`unsubscribe_on_control`](Self::unsubscribe_on_control) explicitly route
+///   stateful subscription commands onto the control stream.
 /// - Server-initiated bidirectional streams are accepted automatically and their
 ///   inbound packets are fed into the shared protocol state machine.
 ///
@@ -3900,8 +3903,9 @@ impl QuicMqttEngine {
 
     /// Subscribe on the default sub data stream, opening it on first use.
     ///
-    /// SUBSCRIBE traffic is never placed on the session control stream; the SUBACK
-    /// and any messages delivered for the subscription flow on this same stream.
+    /// The SUBACK and any messages delivered for the subscription flow on this
+    /// same stream. Use [`subscribe_on_control`](Self::subscribe_on_control) to
+    /// explicitly target the session control stream instead.
     pub fn subscribe(&mut self, command: SubscribeCommand) -> Result<u16, MqttClientError> {
         self.ensure_command_allowed_before_mqtt_connected()?;
         self.preflight_subscribe(&command)?;
@@ -3912,6 +3916,27 @@ impl QuicMqttEngine {
             .subscribe_encoded(command, Some(u64::from(stream_id)))?;
         self.enqueue_on_stream(stream_id, &bytes)?;
         Ok(pid)
+    }
+
+    /// Queue a SUBSCRIBE on the control stream without opening a data stream.
+    ///
+    /// Allocates or validates the command's packet identifier and registers the
+    /// operation in the shared MQTT inflight state, including its timeout. A
+    /// matching SUBACK produces the normal [`MqttEvent::Subscribed`] event and
+    /// releases the packet identifier. Unlike [`send_packet_on`](Self::send_packet_on),
+    /// this preserves protocol state and outgoing-buffer backpressure.
+    ///
+    /// Uses the same connection requirements as [`subscribe`](Self::subscribe)
+    /// and rejects a control stream whose send side is finishing, finished, or reset.
+    pub fn subscribe_on_control(
+        &mut self,
+        command: SubscribeCommand,
+    ) -> Result<u16, MqttClientError> {
+        self.ensure_command_allowed_before_mqtt_connected()?;
+        if self.control_finishing || self.control_finished {
+            return Err(stream_finished_error());
+        }
+        self.mqtt_engine.subscribe(command)
     }
 
     /// Subscribe onto a specific data stream. The SUBACK and delivered messages
@@ -3931,6 +3956,9 @@ impl QuicMqttEngine {
     }
 
     /// Unsubscribe on the default sub data stream.
+    ///
+    /// Use [`unsubscribe_on_control`](Self::unsubscribe_on_control) to explicitly
+    /// target the session control stream instead.
     pub fn unsubscribe(&mut self, command: UnsubscribeCommand) -> Result<u16, MqttClientError> {
         self.ensure_command_allowed_before_mqtt_connected()?;
         self.preflight_unsubscribe(&command)?;
@@ -3941,6 +3969,27 @@ impl QuicMqttEngine {
             .unsubscribe_encoded(command, Some(u64::from(stream_id)))?;
         self.enqueue_on_stream(stream_id, &bytes)?;
         Ok(pid)
+    }
+
+    /// Queue an UNSUBSCRIBE on the control stream without opening a data stream.
+    ///
+    /// Allocates or validates the command's packet identifier and registers the
+    /// operation in the shared MQTT inflight state, including its timeout. A
+    /// matching UNSUBACK produces the normal [`MqttEvent::Unsubscribed`] event and
+    /// releases the packet identifier. Unlike [`send_packet_on`](Self::send_packet_on),
+    /// this preserves protocol state and outgoing-buffer backpressure.
+    ///
+    /// Uses the same connection requirements as [`unsubscribe`](Self::unsubscribe)
+    /// and rejects a control stream whose send side is finishing, finished, or reset.
+    pub fn unsubscribe_on_control(
+        &mut self,
+        command: UnsubscribeCommand,
+    ) -> Result<u16, MqttClientError> {
+        self.ensure_command_allowed_before_mqtt_connected()?;
+        if self.control_finishing || self.control_finished {
+            return Err(stream_finished_error());
+        }
+        self.mqtt_engine.unsubscribe(command)
     }
 
     /// Unsubscribe onto a specific data stream.
@@ -6601,6 +6650,183 @@ mod tests {
         ));
         let response = &engine.data_streams.get(&stream_id).unwrap().outgoing;
         assert_eq!(response[0] & 0xf0, 0x40);
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn quic_control_subscriptions_track_operations_and_route_acks() {
+        use crate::mqtt_client::opts::OperationTimeouts;
+        use crate::mqtt_serde::parser::ParseOk;
+        use quinn_proto::Side;
+
+        for version in [3, 5] {
+            let mut engine = QuicMqttEngine::new(
+                MqttClientOptions::builder()
+                    .mqtt_version(version)
+                    .operation_timeouts(OperationTimeouts::cloud())
+                    .build(),
+            )
+            .unwrap();
+            establish_connection(&mut engine.mqtt_engine);
+            engine.control_stream = Some(StreamId::new(Side::Client, Dir::Bi, 0));
+
+            // Control and data streams share the packet identifier space.
+            let data = StreamId::new(Side::Client, Dir::Bi, 1);
+            engine
+                .data_streams
+                .insert(data, QuicStream::new(1024, version, 10));
+            let data_pid = engine
+                .subscribe_on(data.into(), SubscribeCommand::single("data/#", 1))
+                .unwrap();
+            let data_bytes = engine.data_streams[&data].outgoing.clone();
+            let sub_pid = engine
+                .subscribe_on_control(SubscribeCommand::single("control/#", 1))
+                .unwrap();
+            let unsub_pid = engine
+                .unsubscribe_on_control(UnsubscribeCommand::from_topics(vec!["old/#".into()]))
+                .unwrap();
+            assert_ne!(sub_pid, data_pid);
+            assert_ne!(unsub_pid, data_pid);
+            assert_ne!(sub_pid, unsub_pid);
+            assert_eq!(engine.data_stream_count(), 1);
+            assert!(engine.default_sub_stream.is_none());
+            assert_eq!(engine.data_streams[&data].outgoing, data_bytes);
+
+            // The normal control flush drains this buffer. No raw injection is used.
+            let outgoing = engine.mqtt_engine.take_outgoing();
+            let ParseOk::Packet(subscribe, used) =
+                MqttPacket::from_bytes_with_version(&outgoing, version).unwrap()
+            else {
+                panic!("expected SUBSCRIBE");
+            };
+            match subscribe {
+                MqttPacket::Subscribe3(p) => assert_eq!(p.message_id, sub_pid),
+                MqttPacket::Subscribe5(p) => assert_eq!(p.packet_id, sub_pid),
+                other => panic!("expected SUBSCRIBE, got {other:?}"),
+            }
+            let ParseOk::Packet(unsubscribe, _) =
+                MqttPacket::from_bytes_with_version(&outgoing[used..], version).unwrap()
+            else {
+                panic!("expected UNSUBSCRIBE");
+            };
+            match unsubscribe {
+                MqttPacket::Unsubscribe3(p) => assert_eq!(p.message_id, unsub_pid),
+                MqttPacket::Unsubscribe5(p) => assert_eq!(p.packet_id, unsub_pid),
+                other => panic!("expected UNSUBSCRIBE, got {other:?}"),
+            }
+            for (operation, pid) in [
+                (OperationKind::Subscribe, sub_pid),
+                (OperationKind::Unsubscribe, unsub_pid),
+            ] {
+                let mqtt = &engine.mqtt_engine;
+                assert_eq!(mqtt.inflight_queue.get(pid).unwrap().stream, None);
+                assert!(mqtt.state.reserved.contains(&pid));
+                assert!(mqtt.state.deadlines.contains_key(&(operation, Some(pid))));
+            }
+
+            // Receive UNSUBACK first to check that each ACK completes only its operation.
+            let [hi, lo] = unsub_pid.to_be_bytes();
+            let unsuback = if version == 5 {
+                vec![0xb0, 4, hi, lo, 0, 0]
+            } else {
+                vec![0xb0, 2, hi, lo]
+            };
+            let events = engine.mqtt_engine.handle_incoming(&unsuback);
+            assert!(
+                matches!(events.as_slice(), [MqttEvent::Unsubscribed(r)] if r.packet_id == unsub_pid)
+            );
+            assert!(engine.mqtt_engine.inflight_queue.contains(sub_pid));
+
+            let [hi, lo] = sub_pid.to_be_bytes();
+            let suback = if version == 5 {
+                vec![0x90, 4, hi, lo, 0, 1]
+            } else {
+                vec![0x90, 3, hi, lo, 1]
+            };
+            let events = engine.mqtt_engine.handle_incoming(&suback);
+            assert!(matches!(events.as_slice(), [MqttEvent::Subscribed(r)]
+                if r.packet_id == sub_pid && r.reason_codes == [1]));
+            for pid in [sub_pid, unsub_pid] {
+                assert!(!engine.mqtt_engine.inflight_queue.contains(pid));
+                assert!(!engine.mqtt_engine.state.reserved.contains(&pid));
+                assert!(!engine
+                    .mqtt_engine
+                    .state
+                    .deadlines
+                    .keys()
+                    .any(|(_, id)| *id == Some(pid)));
+            }
+            assert!(engine.mqtt_engine.inflight_queue.contains(data_pid));
+        }
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn quic_control_subscriptions_preserve_packet_ids_on_backpressure() {
+        let mut engine = mqtt_connected_quic_engine();
+        let mut subscribe = SubscribeCommand::single("control/#", 1);
+        subscribe.packet_id = Some(41);
+        let mut unsubscribe = UnsubscribeCommand::from_topics(vec!["control/#".into()]);
+        unsubscribe.packet_id = Some(42);
+
+        engine.ping().unwrap(); // Fill the one-packet outgoing buffer.
+        assert!(matches!(
+            engine.subscribe_on_control(subscribe.clone()),
+            Err(MqttClientError::BufferFull { .. })
+        ));
+        assert!(matches!(
+            engine.unsubscribe_on_control(unsubscribe.clone()),
+            Err(MqttClientError::BufferFull { .. })
+        ));
+        assert!(engine.mqtt_engine.inflight_queue.is_empty());
+        assert!(engine.mqtt_engine.state.reserved.is_empty());
+        engine.mqtt_engine.take_outgoing();
+
+        assert_eq!(engine.subscribe_on_control(subscribe.clone()).unwrap(), 41);
+        engine.mqtt_engine.take_outgoing();
+        assert!(matches!(
+            engine.subscribe_on_control(subscribe),
+            Err(MqttClientError::InvalidPacketId { packet_id: 41 })
+        ));
+        assert_eq!(
+            engine.unsubscribe_on_control(unsubscribe.clone()).unwrap(),
+            42
+        );
+        engine.mqtt_engine.take_outgoing();
+        assert!(matches!(
+            engine.unsubscribe_on_control(unsubscribe),
+            Err(MqttClientError::InvalidPacketId { packet_id: 42 })
+        ));
+        assert!(engine.mqtt_engine.take_outgoing().is_empty());
+        assert_eq!(engine.data_stream_count(), 0);
+    }
+
+    #[cfg(feature = "quic-proto")]
+    #[test]
+    fn quic_control_subscriptions_reject_disconnected_or_finished_streams() {
+        for state in 0..3 {
+            let mut engine = if state == 0 {
+                QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap()
+            } else {
+                mqtt_connected_quic_engine()
+            };
+            engine.control_finishing = state == 1;
+            engine.control_finished = state == 2;
+            assert!(matches!(
+                engine.subscribe_on_control(SubscribeCommand::single("control/#", 1)),
+                Err(MqttClientError::InvalidState { .. })
+            ));
+            assert!(matches!(
+                engine.unsubscribe_on_control(UnsubscribeCommand::from_topics(vec![
+                    "control/#".into()
+                ])),
+                Err(MqttClientError::InvalidState { .. })
+            ));
+            assert!(engine.mqtt_engine.inflight_queue.is_empty());
+            assert!(engine.mqtt_engine.state.reserved.is_empty());
+            assert!(engine.mqtt_engine.take_outgoing().is_empty());
+            assert_eq!(engine.data_stream_count(), 0);
+        }
     }
 
     #[cfg(feature = "quic-proto")]
