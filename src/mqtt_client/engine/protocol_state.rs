@@ -12,9 +12,11 @@ pub(super) enum ReceiveStage {
 
 pub(super) struct ProtocolState {
     pub reserved: HashSet<u16>,
-    pub received: HashMap<u16, (ReceiveStage, Option<u64>)>,
+    pub received: HashMap<(Option<u64>, u16), ReceiveStage>,
+    // Retain each exchange across reconnects until it binds to a replacement stream.
+    pub received_unbound: HashSet<(Option<u64>, u16)>,
     // Session exchanges can outlive the connection on which PUBLISH used quota.
-    pub received_on_connection: HashSet<u16>,
+    pub received_on_connection: HashSet<(Option<u64>, u16)>,
     pub incoming_quota_used: usize,
     pub incoming_aliases: HashMap<u16, String>,
     pub outgoing_aliases: HashMap<u16, String>,
@@ -47,6 +49,7 @@ impl ProtocolState {
         Self {
             reserved: HashSet::new(),
             received: HashMap::new(),
+            received_unbound: HashSet::new(),
             received_on_connection: HashSet::new(),
             incoming_quota_used: 0,
             incoming_aliases: HashMap::new(),
@@ -83,6 +86,29 @@ fn invalid(field: &str, reason: &str) -> MqttClientError {
 }
 
 impl MqttEngine {
+    fn received_key(&self, key: (Option<u64>, u16)) -> Option<(Option<u64>, u16)> {
+        if self.state.received.contains_key(&key) {
+            Some(key)
+        } else {
+            self.state
+                .received_unbound
+                .iter()
+                .find(|(_, id)| *id == key.1)
+                .copied()
+        }
+    }
+
+    fn bind_received(&mut self, previous: (Option<u64>, u16), key: (Option<u64>, u16)) {
+        // Stream handles belong to a connection. Only exchanges retained
+        // through a transport reset may move to a new stream, after validation.
+        self.state.received_unbound.remove(&previous);
+        if previous != key {
+            if let Some(stage) = self.state.received.remove(&previous) {
+                self.state.received.insert(key, stage);
+            }
+        }
+    }
+
     #[cfg(feature = "rustls-tls")]
     pub(crate) fn defer_events(&mut self, events: Vec<MqttEvent>) {
         self.events.extend(events);
@@ -178,18 +204,18 @@ impl MqttEngine {
                 ReceiveMaximum(v) => self
                     .inflight_queue
                     .update_receive_maximum((*v).min(self.options.receive_maximum)),
-                MaximumPacketSize(v) => self.reliability.maximum_packet_size = Some(*v as usize),
-                ServerKeepAlive(v) => self.reliability.keep_alive = *v,
-                MaximumQoS(v) => self.reliability.maximum_qos = *v,
-                RetainAvailable(v) => self.reliability.retain_available = *v != 0,
-                WildcardSubscriptionAvailable(v) => self.reliability.wildcard_available = *v != 0,
-                SharedSubscriptionAvailable(v) => self.reliability.shared_available = *v != 0,
+                MaximumPacketSize(v) => self.state.maximum_packet_size = Some(*v as usize),
+                ServerKeepAlive(v) => self.state.keep_alive = *v,
+                MaximumQoS(v) => self.state.maximum_qos = *v,
+                RetainAvailable(v) => self.state.retain_available = *v != 0,
+                WildcardSubscriptionAvailable(v) => self.state.wildcard_available = *v != 0,
+                SharedSubscriptionAvailable(v) => self.state.shared_available = *v != 0,
                 SubscriptionIdentifierAvailable(v) => {
-                    self.reliability.subscription_ids_available = *v != 0
+                    self.state.subscription_ids_available = *v != 0
                 }
-                TopicAliasMaximum(v) => self.reliability.outgoing_alias_maximum = *v,
+                TopicAliasMaximum(v) => self.state.outgoing_alias_maximum = *v,
                 AssignedClientIdentifier(v) if !v.is_empty() => self.options.client_id = v.clone(),
-                SessionExpiryInterval(v) => self.reliability.session_expiry = *v,
+                SessionExpiryInterval(v) => self.state.session_expiry = *v,
                 AssignedClientIdentifier(_) => {
                     return Err(invalid("CONNACK", "Assigned client ID is empty"))
                 }
@@ -220,16 +246,13 @@ impl MqttEngine {
                 "The reconnect CONNECT packet exceeds the outgoing byte limit",
             ));
         }
-        self.reliability.control_reserve = reserve;
+        self.state.control_reserve = reserve;
         Ok(())
     }
 
     pub(super) fn candidate_id(&mut self, requested: Option<u16>) -> Result<u16, MqttClientError> {
         if let Some(id) = requested {
-            if id == 0
-                || self.reliability.reserved.contains(&id)
-                || self.inflight_queue.contains(id)
-            {
+            if id == 0 || self.state.reserved.contains(&id) || self.inflight_queue.contains(id) {
                 return Err(MqttClientError::InvalidPacketId { packet_id: id });
             }
             Ok(id)
@@ -247,32 +270,30 @@ impl MqttEngine {
             OperationKind::Unsubscribe => timeouts.unsubscribe,
         };
         if let Some(duration) = duration {
-            self.reliability
+            self.state
                 .deadlines
                 .insert((operation, id), (Instant::now() + duration, duration));
         }
     }
 
     pub(super) fn finish_operation(&mut self, id: u16) {
-        self.reliability.reserved.remove(&id);
-        if self.reliability.reserved.is_empty() {
-            self.reliability.replay_reserve = 0;
+        self.state.reserved.remove(&id);
+        if self.state.reserved.is_empty() {
+            self.state.replay_reserve = 0;
         }
-        self.reliability
-            .deadlines
-            .retain(|(_, pid), _| *pid != Some(id));
+        self.state.deadlines.retain(|(_, pid), _| *pid != Some(id));
     }
 
     pub(super) fn check_deadlines(&mut self, now: Instant) {
         let expired: Vec<_> = self
-            .reliability
+            .state
             .deadlines
             .iter()
             .filter(|(_, (at, _))| now >= *at)
             .map(|(key, (_, duration))| (*key, *duration))
             .collect();
         for ((operation, packet_id), duration) in expired {
-            self.reliability.deadlines.remove(&(operation, packet_id));
+            self.state.deadlines.remove(&(operation, packet_id));
             self.events.push(MqttEvent::OperationFailed {
                 operation,
                 packet_id,
@@ -291,8 +312,7 @@ impl MqttEngine {
         &self,
         command: &mut PublishCommand,
     ) -> Result<Option<(u16, String)>, MqttClientError> {
-        if command.qos > self.reliability.maximum_qos
-            || (command.retain && !self.reliability.retain_available)
+        if command.qos > self.state.maximum_qos || (command.retain && !self.state.retain_available)
         {
             return Err(invalid(
                 "PUBLISH",
@@ -312,7 +332,7 @@ impl MqttEngine {
             .collect();
         let mut registration = None;
         if let Some(&alias) = aliases.first() {
-            if aliases.len() != 1 || alias == 0 || alias > self.reliability.outgoing_alias_maximum {
+            if aliases.len() != 1 || alias == 0 || alias > self.state.outgoing_alias_maximum {
                 return Err(invalid(
                     "Topic Alias",
                     "Alias exceeds negotiated maximum or is duplicated",
@@ -320,7 +340,7 @@ impl MqttEngine {
             }
             if command.topic_name.is_empty() {
                 command.topic_name = self
-                    .reliability
+                    .state
                     .outgoing_aliases
                     .get(&alias)
                     .cloned()
@@ -336,7 +356,7 @@ impl MqttEngine {
         &self,
         command: &SubscribeCommand,
     ) -> Result<(), MqttClientError> {
-        if !self.reliability.subscription_ids_available
+        if !self.state.subscription_ids_available
             && command
                 .properties
                 .iter()
@@ -348,8 +368,8 @@ impl MqttEngine {
             ));
         }
         for s in &command.subscriptions {
-            if (!self.reliability.wildcard_available && s.topic_filter.contains(['+', '#']))
-                || (!self.reliability.shared_available && s.topic_filter.starts_with("$share/"))
+            if (!self.state.wildcard_available && s.topic_filter.contains(['+', '#']))
+                || (!self.state.shared_available && s.topic_filter.starts_with("$share/"))
             {
                 return Err(invalid(
                     "SUBSCRIBE",
@@ -369,7 +389,7 @@ impl MqttEngine {
             MqttPacket::Publish3(p) => (p.qos, p.retain),
             _ => return Ok(()),
         };
-        if qos > self.reliability.maximum_qos || (retain && !self.reliability.retain_available) {
+        if qos > self.state.maximum_qos || (retain && !self.state.retain_available) {
             return Err(invalid(
                 "PUBLISH",
                 "Broker does not support requested QoS or retain",
@@ -429,7 +449,7 @@ impl MqttEngine {
             }
         }
         if self
-            .reliability
+            .state
             .maximum_packet_size
             .is_some_and(|max| bytes.len() > max)
         {
@@ -442,7 +462,7 @@ impl MqttEngine {
     }
 
     pub(super) fn outgoing_bytes(&self) -> usize {
-        self.reliability.queued_bytes + self.outgoing_buffer.iter().map(Vec::len).sum::<usize>()
+        self.state.queued_bytes + self.outgoing_buffer.iter().map(Vec::len).sum::<usize>()
     }
 
     pub(super) fn check_output_capacity(&self, additional: usize) -> Result<(), MqttClientError> {
@@ -458,7 +478,7 @@ impl MqttEngine {
     }
 
     pub(super) fn flush_responses(&mut self) {
-        while let Some(packet) = self.reliability.responses.front().cloned() {
+        while let Some(packet) = self.state.responses.front().cloned() {
             if let Some(capacity) = self.options.max_outgoing_buffer_bytes {
                 if packet.to_bytes().is_ok_and(|bytes| bytes.len() > capacity) {
                     self.fail_connection(MqttClientError::BufferFull {
@@ -470,7 +490,7 @@ impl MqttEngine {
             }
             match self.enqueue_packet(packet) {
                 Ok(()) => {
-                    self.reliability.responses.pop_front();
+                    self.state.responses.pop_front();
                 }
                 Err(MqttClientError::BufferFull { .. }) => break,
                 Err(error) => {
@@ -483,13 +503,13 @@ impl MqttEngine {
 
     pub(super) fn close_input(&mut self) {
         self.is_connected = false;
-        self.reliability.connecting = false;
-        self.reliability.input_closed = true;
-        self.reliability.reauthenticating = false;
-        self.reliability.responses.clear();
-        self.reliability.deadlines.clear();
-        self.reliability.received_on_connection.clear();
-        self.reliability.incoming_quota_used = 0;
+        self.state.connecting = false;
+        self.state.input_closed = true;
+        self.state.reauthenticating = false;
+        self.state.responses.clear();
+        self.state.deadlines.clear();
+        self.state.received_on_connection.clear();
+        self.state.incoming_quota_used = 0;
         self.parser.buffer_mut().clear();
         self.ping_sent_at = None;
     }
@@ -499,13 +519,13 @@ impl MqttEngine {
         packet_type: crate::mqtt_serde::control_packet::ControlPacketType,
     ) -> bool {
         use crate::mqtt_serde::control_packet::ControlPacketType::*;
-        if self.reliability.input_closed {
+        if self.state.input_closed {
             return false;
         }
         let valid = match packet_type {
-            CONNACK => self.reliability.connecting && !self.is_connected,
+            CONNACK => self.state.connecting && !self.is_connected,
             AUTH | DISCONNECT => {
-                self.is_connected || (self.mqtt_version() == 5 && self.reliability.connecting)
+                self.is_connected || (self.mqtt_version() == 5 && self.state.connecting)
             }
             _ => self.is_connected,
         };
@@ -539,18 +559,18 @@ impl MqttEngine {
             })
             .collect();
         if let Some(&alias) = aliases.first() {
-            if aliases.len() != 1 || alias == 0 || alias > self.reliability.incoming_alias_maximum {
+            if aliases.len() != 1 || alias == 0 || alias > self.state.incoming_alias_maximum {
                 return Err(invalid("Topic Alias", "Invalid incoming alias"));
             }
             if publish.topic_name.is_empty() {
                 publish.topic_name = self
-                    .reliability
+                    .state
                     .incoming_aliases
                     .get(&alias)
                     .cloned()
                     .ok_or_else(|| invalid("Topic Alias", "Undefined incoming alias"))?;
             } else {
-                self.reliability
+                self.state
                     .incoming_aliases
                     .insert(alias, publish.topic_name.clone());
             }
@@ -573,32 +593,27 @@ impl MqttEngine {
         if id == 0 {
             return Err(MqttClientError::InvalidPacketId { packet_id: id });
         }
-        if let Some((stage, previous_stream)) = self.reliability.received.get(&id) {
+        let key = (stream, id);
+        let previous = self.received_key(key);
+        if let Some(stage) = previous.and_then(|key| self.state.received.get(&key)) {
             if (qos == 1) != matches!(stage, ReceiveStage::Publish(1)) {
                 return Err(MqttClientError::InvalidPacketId { packet_id: id });
             }
-            if previous_stream.is_some() && *previous_stream != stream {
-                return Err(invalid("PUBLISH", "QoS handshake moved between streams"));
-            }
         }
-        if !self.reliability.received_on_connection.contains(&id) {
-            if self.reliability.incoming_quota_used
-                >= self.reliability.incoming_receive_maximum as usize
-            {
+        if !self.state.received_on_connection.contains(&key) {
+            if self.state.incoming_quota_used >= self.state.incoming_receive_maximum as usize {
                 return Err(MqttClientError::ProtocolViolation {
                     message: "Incoming Receive Maximum exceeded".into(),
                 });
             }
-            self.reliability.received_on_connection.insert(id);
-            self.reliability.incoming_quota_used += 1;
+            self.state.received_on_connection.insert(key);
+            self.state.incoming_quota_used += 1;
         }
-        if let Some((_, previous_stream)) = self.reliability.received.get_mut(&id) {
-            *previous_stream = stream;
+        if let Some(previous) = previous {
+            self.bind_received(previous, key);
             return Ok(false);
         }
-        self.reliability
-            .received
-            .insert(id, (ReceiveStage::Publish(qos), stream));
+        self.state.received.insert(key, ReceiveStage::Publish(qos));
         Ok(true)
     }
 
@@ -613,20 +628,15 @@ impl MqttEngine {
         if id == 0 {
             return Err(MqttClientError::InvalidPacketId { packet_id: id });
         }
-        let valid = self
-            .reliability
-            .received
-            .get(&id)
-            .is_some_and(|(stage, channel)| {
-                *channel == stream
-                    && matches!(
-                        (kind, stage),
-                        (4, ReceiveStage::Publish(1))
-                            | (5, ReceiveStage::Publish(2))
-                            | (5, ReceiveStage::PubRec)
-                            | (7, ReceiveStage::PubRel)
-                    )
-            });
+        let valid = self.state.received.get(&(stream, id)).is_some_and(|stage| {
+            matches!(
+                (kind, stage),
+                (4, ReceiveStage::Publish(1))
+                    | (5, ReceiveStage::Publish(2))
+                    | (5, ReceiveStage::PubRec)
+                    | (7, ReceiveStage::PubRel)
+            )
+        });
         if !valid {
             return Err(MqttClientError::InvalidPacketId { packet_id: id });
         }
@@ -669,18 +679,25 @@ impl MqttEngine {
         })
     }
 
-    pub(super) fn commit_receive_ack(&mut self, id: u16, kind: u8, reason: u8) {
+    pub(super) fn commit_receive_ack(
+        &mut self,
+        id: u16,
+        kind: u8,
+        reason: u8,
+        stream: Option<u64>,
+    ) {
+        let key = (stream, id);
+        self.state.received_unbound.remove(&key);
         if kind == 5 && reason < 0x80 {
-            if let Some((stage, _)) = self.reliability.received.get_mut(&id) {
+            if let Some(stage) = self.state.received.get_mut(&key) {
                 *stage = ReceiveStage::PubRec;
             }
         } else {
-            self.reliability.received.remove(&id);
-            self.reliability.received_on_connection.remove(&id);
+            self.state.received.remove(&key);
+            self.state.received_on_connection.remove(&key);
             // Even PUBCOMP for a resumed PUBREL replenishes the peer's quota,
             // capped at the initial limit (MQTT 5 section 4.9).
-            self.reliability.incoming_quota_used =
-                self.reliability.incoming_quota_used.saturating_sub(1);
+            self.state.incoming_quota_used = self.state.incoming_quota_used.saturating_sub(1);
         }
     }
 
@@ -693,7 +710,7 @@ impl MqttEngine {
     ) -> Result<(), MqttClientError> {
         let packet = self.manual_ack_packet(id, kind, reason, properties, None)?;
         self.enqueue_packet(packet)?;
-        self.commit_receive_ack(id, kind, reason);
+        self.commit_receive_ack(id, kind, reason, None);
         Ok(())
     }
 
@@ -753,16 +770,16 @@ impl MqttEngine {
         let mut responses = Vec::new();
         if let Some(id) = pid.filter(|_| qos > 0) {
             let already_acknowledged = self
-                .reliability
+                .state
                 .received
-                .get(&id)
-                .is_some_and(|(stage, _)| *stage == ReceiveStage::PubRec);
+                .get(&(stream, id))
+                .is_some_and(|stage| *stage == ReceiveStage::PubRec);
             if self.options.auto_ack || already_acknowledged {
                 let kind = if qos == 1 { 4 } else { 5 };
                 match self.manual_ack_packet(id, kind, 0, vec![], stream) {
                     Ok(packet) => {
                         responses.push(packet);
-                        self.commit_receive_ack(id, kind, 0);
+                        self.commit_receive_ack(id, kind, 0, stream);
                     }
                     Err(error) => events.push(MqttEvent::Error(error)),
                 }
@@ -781,19 +798,22 @@ impl MqttEngine {
             return (self.take_events(), vec![]);
         }
         let mut reason = 0;
-        match self.reliability.received.get_mut(&id) {
-            Some((stage, channel))
-                if matches!(stage, ReceiveStage::PubRec | ReceiveStage::PubRel)
-                    && (*channel == stream || channel.is_none()) =>
+        let key = (stream, id);
+        match self.received_key(key) {
+            Some(previous)
+                if matches!(
+                    self.state.received.get(&previous),
+                    Some(ReceiveStage::PubRec | ReceiveStage::PubRel)
+                ) =>
             {
-                *stage = ReceiveStage::PubRel;
-                *channel = stream;
+                self.bind_received(previous, key);
+                self.state.received.insert(key, ReceiveStage::PubRel);
             }
-            None => {
+            None if !self.state.received.keys().any(|(_, pid)| *pid == id) => {
+                // An unknown identifier can be acknowledged, but a known
+                // exchange on another stream must not be advanced here.
                 reason = if self.mqtt_version() == 5 { 0x92 } else { 0 };
-                self.reliability
-                    .received
-                    .insert(id, (ReceiveStage::PubRel, stream));
+                self.state.received.insert(key, ReceiveStage::PubRel);
             }
             _ => {
                 return (
@@ -812,7 +832,7 @@ impl MqttEngine {
             let packet = self
                 .manual_ack_packet(id, 7, reason, vec![], stream)
                 .expect("validated PUBREL state");
-            self.commit_receive_ack(id, 7, reason);
+            self.commit_receive_ack(id, 7, reason, stream);
             vec![packet]
         } else {
             vec![]
