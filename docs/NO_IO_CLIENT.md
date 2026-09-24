@@ -66,6 +66,24 @@ to 0-RTT operations cannot overtake MQTT session establishment.
 Incoming receive quota also resets on each connection, independently of retained
 QoS 2 state. A resumed PUBLISH consumes quota; a resumed PUBREL does not.
 
+The following stream routing applies only to `QuicMqttEngine` (QUIC).
+Its **default subscription data stream** is a bidirectional QUIC stream opened
+automatically on the first call to `subscribe(command)` or `unsubscribe(command)`.
+Both methods reuse that stream for later commands; callers do not need to open or
+select it themselves. To choose a data stream explicitly, use
+`subscribe_on(stream, command)` or `unsubscribe_on(stream, command)`.
+SUBACK and UNSUBACK arrive on the stream used for the corresponding command.
+
+The control stream is a separate QUIC stream carrying CONNECT and MQTT keep-alive
+traffic. Use `subscribe_on_control(command)` and `unsubscribe_on_control(command)`
+to send stateful subscription commands on that stream. These methods are also
+QUIC-only. They allocate or validate packet identifiers, track inflight operations
+and timeouts, and emit the normal
+`Subscribed` and `Unsubscribed` events when matching acknowledgments arrive.
+They preserve outgoing-buffer backpressure and reject writes after the control
+stream starts closing. `send_packet_on` remains a raw packet API without packet-ID
+allocation or inflight tracking.
+
 With `auto_ack(false)`, use `puback(id, reason, properties)`,
 `pubrec(id, reason, properties)` and `pubcomp(id, reason, properties)` after accepting
 or persisting a message. Wait for `PubRelReceived` before PUBCOMP. Failed ACK commands
