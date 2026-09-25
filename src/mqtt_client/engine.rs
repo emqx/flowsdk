@@ -47,6 +47,7 @@ use super::inflight::InflightQueue;
 use super::opts::MqttClientOptions;
 
 mod protocol_state;
+mod session_state;
 use protocol_state::ProtocolState;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]

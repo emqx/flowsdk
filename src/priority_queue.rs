@@ -84,6 +84,13 @@ where
         self.map.values_mut().flat_map(|queue| queue.iter_mut())
     }
 
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&P, &T)> {
+        self.map
+            .iter()
+            .rev()
+            .flat_map(|(priority, queue)| queue.iter().map(move |item| (priority, item)))
+    }
+
     /// Current number of elements in the queue.
     pub fn len(&self) -> usize {
         self.size
