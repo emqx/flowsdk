@@ -81,7 +81,8 @@ See [subscription identifier regressions](../tests/server_subscription_identifie
 
 - [ ] Provide broker-wide retained storage beyond the local `ServerSession` helper.
 - [ ] Implement broker-wide message expiry and shared-subscription routing.
-- [ ] Add durable message/session persistence across process restarts; current client recovery is in memory.
+- [x] Add a client session storage trait and serializable checkpoints for application-driven persistence across process restarts.
+- [ ] Integrate durable session storage/checkpoint commands into the autonomous async clients.
 
 ### MQTT/gRPC proxy hardening
 

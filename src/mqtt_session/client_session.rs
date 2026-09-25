@@ -40,6 +40,14 @@ impl ClientSession {
         self.unacknowledged_pubrels.clear();
     }
 
+    pub(crate) fn packet_id_counter(&self) -> u16 {
+        self.packet_id_counter
+    }
+
+    pub(crate) fn restore_packet_id_counter(&mut self, counter: u16) {
+        self.packet_id_counter = counter;
+    }
+
     pub fn next_packet_id(&mut self) -> u16 {
         // MQTT spec: packet identifier must be non-zero (1-65535)
         // When at MAX or uninitialized (0), wrap to 1

@@ -3,7 +3,9 @@
 `NoIoMqttClient` handles MQTT 3.1.1 (protocol selection 3 or 4) and MQTT 5
 (selection 5). It owns protocol/session state and performs no socket I/O.
 `TlsMqttEngine` adds rustls encryption; `QuicMqttEngine` adds QUIC and stream routing.
-All use the shared MQTT engine. State is in memory, not persisted across process restarts.
+All use the shared MQTT engine. Applications can persist and restore its state
+across process restarts using `ClientSessionStore` checkpoints; see the
+[durable session example](../examples/durable_session.rs).
 
 To build the protocol core without optional runtimes or transports while retaining
 strict packet validation:
