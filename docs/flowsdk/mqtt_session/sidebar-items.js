@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["client_session","server_session"]};
+window.SIDEBAR_ITEMS = {"mod":["client_session","client_store","server_session"]};
