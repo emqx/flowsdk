@@ -375,7 +375,7 @@ opt-in; their TCP/TLS/QUIC setup is documented in [the examples guide](../exampl
 Regenerate Python, Swift, and Kotlin bindings whenever the native FFI changes.
 Existing C layouts and signatures are retained; UniFFI records and events have
 expanded and require matching generated bindings. Python package and native crate
-versions are currently `0.6.1`. Release wheels build their native library inside
+versions are currently `0.6.2`. Release wheels build their native library inside
 the target build environment and run the regression suite against the installed
 wheel before upload.
 
