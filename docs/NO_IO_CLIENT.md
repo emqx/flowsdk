@@ -4,7 +4,9 @@
 (selection 5). It owns protocol/session state and performs no socket I/O.
 `TlsMqttEngine` adds rustls encryption; `QuicMqttEngine` adds QUIC and stream routing.
 All use the shared MQTT engine. Applications can persist and restore its state
-across process restarts using `ClientSessionStore` checkpoints; see the
+across process restarts using `ClientSessionStore` checkpoints with the opt-in
+`durable-session` Cargo feature (disabled by default). Ordinary reconnect and
+in-memory session resumption do not require it; see the
 [durable session example](../examples/durable_session.rs).
 
 To build the protocol core without optional runtimes or transports while retaining

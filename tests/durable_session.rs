@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+#![cfg(feature = "durable-session")]
 
 #[path = "../examples/support/session_store.rs"]
 mod session_store;

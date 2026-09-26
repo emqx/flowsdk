@@ -84,6 +84,7 @@ where
         self.map.values_mut().flat_map(|queue| queue.iter_mut())
     }
 
+    #[cfg(feature = "durable-session")]
     pub(crate) fn iter(&self) -> impl Iterator<Item = (&P, &T)> {
         self.map
             .iter()

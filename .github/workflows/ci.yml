@@ -154,12 +154,31 @@ jobs:
     - name: Build (default, no QUIC)
       run: cargo build
 
-    - name: Check FFI transport feature combinations
+    - name: Test FFI transport feature combinations
       run: |
-        cargo check -p flowsdk_ffi --no-default-features
-        cargo check -p flowsdk_ffi --no-default-features --features uniffi-bindings
-        cargo check -p flowsdk_ffi --no-default-features --features tls,uniffi-bindings
-        cargo check -p flowsdk_ffi --no-default-features --features quic,uniffi-bindings
+        cargo test -p flowsdk_ffi --no-default-features
+        cargo test -p flowsdk_ffi --no-default-features --features json
+        cargo test -p flowsdk_ffi --no-default-features --features uniffi-bindings
+        cargo test -p flowsdk_ffi --no-default-features --features tls,uniffi-bindings
+        cargo test -p flowsdk_ffi --no-default-features --features quic,uniffi-bindings
+        cargo test -p flowsdk_ffi --no-default-features --features quic,json
+        cargo test -p flowsdk_ffi --no-default-features --features durable-session
+        cargo test -p flowsdk_ffi --features durable-session
+        cargo test -p flowsdk_ffi --features json
+
+    - name: Test standalone C API without UniFFI
+      run: |
+        cargo build -p flowsdk_ffi --no-default-features
+        bash scripts/test_c_bindings.sh
+        cargo build -p flowsdk_ffi --no-default-features --features json
+        bash scripts/test_c_bindings.sh --json
+        cargo build -p flowsdk_ffi --no-default-features --features durable-session
+        bash scripts/test_c_bindings.sh --durable-session
+
+    - name: Test OpenSSL FFI backend
+      run: |
+        cargo test -p flowsdk_ffi --no-default-features --features tls,quic-openssl,uniffi-bindings
+        cargo test -p flowsdk_ffi --no-default-features --features tls,quic-openssl,uniffi-bindings,durable-session
 
     # Mode 2: mainstream quinn 0.11 (crates.io) + ring crypto
     - name: Build flowsdk_ffi --features quic (mainstream quinn)
@@ -186,11 +205,12 @@ jobs:
       run: cargo audit
 
   python-bindings:
-    name: Python Bindings (${{ matrix.python }})
+    name: Python Bindings (${{ matrix.python }}, ${{ matrix.session_flags }})
     runs-on: ubuntu-latest
     strategy:
       matrix:
         python: ['3.8', '3.13']
+        session_flags: ['', '--durable-session']
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -204,7 +224,7 @@ jobs:
         python-version: ${{ matrix.python }}
 
     - name: Build and Test Bindings
-      run: ./scripts/build_python_bindings.sh --test
+      run: ./scripts/build_python_bindings.sh --test ${{ matrix.session_flags }}
 
     - name: Test installed Python wheel
       run: |
@@ -214,8 +234,11 @@ jobs:
         PYTHONPATH=/tmp/flowsdk-installed python -W error -m unittest discover -s python/tests -v
 
   kotlin-bindings:
-    name: Kotlin Bindings
+    name: Kotlin Bindings (${{ matrix.session_flags }})
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        session_flags: ['', '--durable-session']
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -251,7 +274,7 @@ jobs:
           ${{ runner.os }}-cargo-kotlin-
 
     - name: Build and Verify Kotlin Bindings
-      run: ./scripts/build_kotlin_bindings.sh
+      run: ./scripts/build_kotlin_bindings.sh ${{ matrix.session_flags }}
 
     - name: Verify Examples Build
       run: |
@@ -260,8 +283,11 @@ jobs:
         ./gradlew :examples:quic_client:build
 
   swift-bindings:
-    name: Swift Bindings
+    name: Swift Bindings (${{ matrix.session_flags }})
     runs-on: macos-latest
+    strategy:
+      matrix:
+        session_flags: ['', '--durable-session']
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
@@ -286,7 +312,7 @@ jobs:
           ${{ runner.os }}-cargo-swift-
 
     - name: Build Rust, Generate Swift Bindings, and Verify swift build
-      run: ./scripts/build_swift_bindings.sh --coverage --test
+      run: ./scripts/build_swift_bindings.sh --coverage --test ${{ matrix.session_flags }}
 
     - name: Export coverage to lcov
       run: |
@@ -311,7 +337,7 @@ jobs:
       uses: actions/upload-artifact@v4
       if: always()
       with:
-        name: swift-coverage-data
+        name: swift-coverage-data${{ matrix.session_flags }}
         path: |
           lcov-swift.info
           target/llvm-cov-target/swift-cov.profdata

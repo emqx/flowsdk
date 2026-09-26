@@ -47,6 +47,8 @@ tokio-rustls = { version = "0.26", optional = true }
 
 [features]
 default = ["strict-protocol-compliance", "tls", "async-client"]
+# Application-owned session checkpoints for persistence across process restarts (opt-in).
+durable-session = []
 # TLS/SSL transport support
 tls = ["dep:tokio-native-tls", "dep:native-tls", "async-client"]
 # QUIC transport support (mainstream quinn + ring crypto)
@@ -100,6 +102,10 @@ tempfile = "3"
 # OpenSSL for certificate fixtures instead of searching for a host installation.
 [target.'cfg(target_env = "musl")'.dev-dependencies]
 openssl = { version = "0.10", features = ["vendored"] }
+
+[[example]]
+name = "durable_session"
+required-features = ["durable-session"]
 
 [[example]]
 name = "no_io_pubsub"

@@ -102,7 +102,7 @@ fn c_tcp_client_round_trips_packets_and_owns_returned_buffers() {
             mqtt_engine_handle_tick(engine, 1);
             assert!(mqtt_engine_next_tick_ms(engine) >= 0);
             mqtt_engine_auth(engine, 0xff);
-            #[cfg(feature = "uniffi-bindings")]
+            #[cfg(feature = "json")]
             assert!(take_string(mqtt_engine_take_events(engine)).contains("Error"));
             mqtt_engine_disconnect(engine);
             let data = mqtt_engine_take_outgoing(engine, &mut len);
@@ -261,7 +261,17 @@ fn c_event_inspection_preserves_metadata_and_returns_owned_copies() {
 #[test]
 fn c_tls_handshake_output_and_configuration_errors_are_visible() {
     unsafe {
-        let engine = mqtt_tls_engine_new(null(), 5, null(), null());
+        // Use a repository fixture rather than depending on the host keychain.
+        let ca = CString::new(concat!(env!("CARGO_MANIFEST_DIR"), "/../ca.pem")).unwrap();
+        let tls = MqttTlsOptionsC {
+            ca_cert_file: ca.as_ptr(),
+            client_cert_file: null(),
+            client_key_file: null(),
+            alpn: null(),
+            insecure_skip_verify: 0,
+            enable_key_log: 0,
+        };
+        let engine = mqtt_tls_engine_new(null(), 5, null(), &tls);
         assert!(!engine.is_null());
         assert_eq!(mqtt_tls_engine_is_connected(engine), 0);
         mqtt_tls_engine_connect(engine);
@@ -282,7 +292,7 @@ fn c_tls_handshake_output_and_configuration_errors_are_visible() {
         assert!((0..mqtt_event_list_len(events)).any(|i| mqtt_event_list_get_tag(events, i) == 8));
         mqtt_event_list_free(events);
         mqtt_tls_engine_disconnect(engine);
-        #[cfg(feature = "uniffi-bindings")]
+        #[cfg(feature = "json")]
         take_string(mqtt_tls_engine_take_events(engine));
         mqtt_tls_engine_free(engine);
         assert!(mqtt_tls_engine_new(null(), 0, null(), null()).is_null());
@@ -347,7 +357,7 @@ fn c_quic_datagram_ownership_addresses_and_errors_are_preserved() {
         assert_eq!(mqtt_quic_engine_subscribe(engine, topic.as_ptr(), 1), -1);
         assert_eq!(mqtt_quic_engine_unsubscribe(engine, topic.as_ptr()), -1);
         mqtt_quic_engine_handle_datagram(engine, b"a".as_ptr(), 1, invalid.as_ptr());
-        #[cfg(feature = "uniffi-bindings")]
+        #[cfg(feature = "json")]
         assert!(take_string(mqtt_quic_engine_take_events(engine)).contains("Error"));
         mqtt_quic_engine_disconnect(engine);
         mqtt_quic_engine_free(engine);
@@ -364,5 +374,86 @@ fn c_quic_datagram_ownership_addresses_and_errors_are_preserved() {
         assert_eq!(mqtt_quic_engine_is_connected(null_mut()), 0);
         assert!(mqtt_quic_engine_take_events_list(null_mut()).is_null());
         assert!(mqtt_quic_engine_take_outgoing_datagrams(null_mut(), null_mut()).is_null());
+    }
+}
+
+#[cfg(feature = "json")]
+#[test]
+fn checked_c_api_errors_ownership_and_operation_metadata() {
+    use super::c_api::*;
+    unsafe {
+        let mut engine = null_mut();
+        let mut error = null_mut();
+        let config = br#"{"version":1,"connect":{"options":{"client_id":"c-checked","clean_start":false}},"runtime":{"peer":"tcp://broker:1883","operation_timeouts":{"connect_ms":0}}}"#;
+        assert_eq!(
+            mqtt_engine_new_v1(config.as_ptr(), config.len(), &mut engine, &mut error),
+            0
+        );
+        assert!(error.is_null());
+        let command = br#"{"command":"connect"}"#;
+        assert_eq!(
+            mqtt_engine_command_v1(
+                engine,
+                command.as_ptr(),
+                command.len(),
+                null_mut(),
+                &mut error
+            ),
+            0
+        );
+        assert_ne!(
+            mqtt_engine_command_v1(
+                engine,
+                command.as_ptr(),
+                command.len(),
+                null_mut(),
+                &mut error
+            ),
+            0
+        );
+        assert!(!take_string(error).is_empty());
+        mqtt_engine_handle_tick(engine, 10);
+        let list = mqtt_engine_take_events_list(engine);
+        assert_eq!(mqtt_event_list_get_tag(list, 0), 19);
+        let mut json = null_mut();
+        assert_eq!(mqtt_event_list_get_json(list, 0, &mut json, &mut error), 0);
+        let event = take_string(json);
+        assert!(
+            event.contains("OperationFailed")
+                && event.contains("Connect")
+                && event.contains("Timeout")
+        );
+        assert!(event.contains("timeout_ms"));
+        assert_eq!(
+            mqtt_event_list_get_json(list, 999, &mut json, &mut error),
+            1
+        );
+        assert!(json.is_null());
+        take_string(error);
+        mqtt_event_list_free(list);
+        for (ptr, len) in [(null(), 10), (null(), 0), (config.as_ptr(), usize::MAX)] {
+            let mut output = std::ptr::dangling_mut();
+            assert_eq!(mqtt_engine_new_v1(ptr, len, &mut output, &mut error), 1);
+            assert!(output.is_null());
+            take_string(error);
+        }
+        #[cfg(feature = "durable-session")]
+        {
+            let mut out = std::ptr::dangling_mut();
+            let mut len = 999;
+            assert_eq!(
+                mqtt_engine_snapshot_session(null(), &mut out, &mut len, &mut error),
+                1
+            );
+            assert!(out.is_null());
+            assert_eq!(len, 0);
+            take_string(error);
+            assert_eq!(
+                mqtt_engine_restore_session_state(engine, b"bad".as_ptr(), 3, &mut error),
+                1
+            );
+            assert!(!take_string(error).contains("bad"));
+        }
+        mqtt_engine_free(engine);
     }
 }

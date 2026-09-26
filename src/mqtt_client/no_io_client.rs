@@ -107,6 +107,7 @@ use crate::mqtt_client::engine::{MqttEngine, MqttEvent};
 use crate::mqtt_client::error::MqttClientError;
 use crate::mqtt_client::opts::MqttClientOptions;
 use crate::mqtt_serde::mqttv5::common::properties::Property;
+#[cfg(feature = "durable-session")]
 use crate::mqtt_session::ClientSessionState;
 use std::time::Instant;
 
@@ -173,12 +174,14 @@ impl NoIoMqttClient {
 
     /// Capture serializable MQTT state for an application-owned session store.
     /// See [`MqttEngine::snapshot_session`] for checkpoint ordering requirements.
+    #[cfg(feature = "durable-session")]
     pub fn snapshot_session(&self) -> Result<ClientSessionState, MqttClientError> {
         self.engine.snapshot_session()
     }
 
     /// Load a checkpoint into a fresh client before calling `connect`.
     /// Requires the same peer/client ID and `clean_start(false)`.
+    #[cfg(feature = "durable-session")]
     pub fn restore_session_state(
         &mut self,
         state: ClientSessionState,
