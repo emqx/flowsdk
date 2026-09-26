@@ -19,6 +19,7 @@ pub mod tokio_quic_client;
 pub mod transport;
 
 // Re-exports
+#[cfg(feature = "durable-session")]
 pub use crate::mqtt_session::{ClientSessionState, ClientSessionStore};
 pub use async_client::{AsyncClientConfig, AsyncMqttClient, MqttEventHandler};
 pub use client::{

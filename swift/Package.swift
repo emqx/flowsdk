@@ -37,6 +37,8 @@ let package = Package(
             ]
         ),
 
+        .executableTarget(name: "FlowSDKTests", dependencies: ["FlowSDK"], path: "Tests/FlowSDKTests"),
+
         // Examples
         .executableTarget(
             name: "TcpClientExample",

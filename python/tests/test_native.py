@@ -204,6 +204,8 @@ class NativeBindingsTests(unittest.TestCase):
                 asyncio.get_running_loop(), client._on_event)
             transport = Mock(spec=asyncio.Transport)
             transport.is_closing.return_value = False
+            transport.get_write_buffer_size.return_value = 0
+            transport.close.side_effect = lambda: asyncio.get_running_loop().call_soon(protocol.connection_lost, None)
             protocol.transport = transport
             client.protocol = protocol
             protocol.data_received(b"\xf0\x15\x18\x13\x15\x00\x0btest-method\x16\x00\x02\x00\xff")

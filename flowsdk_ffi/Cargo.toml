@@ -38,6 +38,10 @@ rustls-pki-types = { version = "1", optional = true }
 
 [features]
 default = ["tls", "quic", "uniffi-bindings"]
+# JSON C commands/events and serialization of FFI records (opt-in).
+json = ["dep:serde", "dep:serde_json"]
+# Checkpoint/restore APIs use JSON for opaque checkpoint bytes (opt-in).
+durable-session = ["flowsdk/durable-session", "json"]
 quic = [
 	"flowsdk/quic-proto",
 	"flowsdk/async-client",
@@ -59,7 +63,7 @@ quic-openssl = [
 ]
 tls = ["flowsdk/rustls-tls", "flowsdk/strict-protocol-compliance", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pemfile", "dep:rustls-pki-types"]
 # UniFFI bindings for Kotlin/Python/Swift language bindings
-uniffi-bindings = ["dep:uniffi", "dep:uniffi_macros", "dep:serde", "dep:serde_json"]
+uniffi-bindings = ["dep:uniffi", "dep:uniffi_macros"]
 
 [dev-dependencies]
 openssl = "0.10"

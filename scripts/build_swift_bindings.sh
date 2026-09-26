@@ -1,23 +1,26 @@
 #!/bin/bash
 set -e
 
-# Default to debug build
+# Persistence is opt-in; generated bindings must match the native library.
 PROFILE="debug"
 CARGO_PROFILE="dev"
 TARGET_DIR="target/debug"
+FEATURES="uniffi-bindings"
+DURABLE_SESSION=false
+TEST=false
 COVERAGE=false
-
-if [[ "$1" == "--release" ]]; then
-    PROFILE="release"
-    CARGO_PROFILE="release"
-    TARGET_DIR="target/release"
+XCFRAMEWORK=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --release) PROFILE="release"; CARGO_PROFILE="release"; TARGET_DIR="target/release" ;;
+        --durable-session) FEATURES="$FEATURES,durable-session"; DURABLE_SESSION=true ;;
+        --test) TEST=true ;;
+        --coverage) COVERAGE=true ;;
+        --xcframework) XCFRAMEWORK=true ;;
+        *) echo "Unknown option: $1" >&2; exit 2 ;;
+    esac
     shift
-fi
-
-if [[ "$1" == "--coverage" ]]; then
-    COVERAGE=true
-    shift
-fi
+done
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
@@ -35,11 +38,11 @@ if [[ "$COVERAGE" == true ]]; then
     export RUSTFLAGS="-C instrument-coverage"
     export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/swift-%p-%m.profraw"
 fi
-cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features quic
+cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features "$FEATURES"
 
 echo "Generating Swift bindings..."
 mkdir -p "$SWIFT_GEN_DIR"
-cargo run -p flowsdk_ffi --features=uniffi/cli,quic --bin uniffi-bindgen generate \
+cargo run -p flowsdk_ffi --features "$FEATURES" --bin uniffi-bindgen generate \
     --library "$TARGET_DIR/libflowsdk_ffi.dylib" \
     --language swift \
     --out-dir "$SWIFT_GEN_DIR"
@@ -60,7 +63,7 @@ echo "Copying library for Swift package..."
 mkdir -p "$SWIFT_LIB_DIR"
 cp "$TARGET_DIR/libflowsdk_ffi.dylib" "$SWIFT_LIB_DIR/"
 
-if [[ "$1" == "--xcframework" ]]; then
+if [[ "$XCFRAMEWORK" == true ]]; then
     echo "Building multi-arch XCFramework..."
 
     # Ensure required targets are installed
@@ -68,19 +71,19 @@ if [[ "$1" == "--xcframework" ]]; then
 
     # Build macOS slices
     echo "  Building aarch64-apple-darwin..."
-    cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features quic --target aarch64-apple-darwin
+    cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features "$FEATURES" --target aarch64-apple-darwin
     echo "  Building x86_64-apple-darwin..."
-    cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features quic --target x86_64-apple-darwin
+    cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features "$FEATURES" --target x86_64-apple-darwin
 
     # Build iOS device
     echo "  Building aarch64-apple-ios..."
-    cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features quic --target aarch64-apple-ios
+    cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features "$FEATURES" --target aarch64-apple-ios
 
     # Build iOS simulator (universal: arm64 sim + x86_64 sim)
     echo "  Building aarch64-apple-ios-sim..."
-    cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features quic --target aarch64-apple-ios-sim
+    cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features "$FEATURES" --target aarch64-apple-ios-sim
     echo "  Building x86_64-apple-ios (simulator)..."
-    cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features quic --target x86_64-apple-ios
+    cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features "$FEATURES" --target x86_64-apple-ios
 
     MACOS_ARM="target/aarch64-apple-darwin/$PROFILE/libflowsdk_ffi.a"
     MACOS_X86="target/x86_64-apple-darwin/$PROFILE/libflowsdk_ffi.a"
@@ -114,9 +117,14 @@ if [[ "$1" == "--xcframework" ]]; then
     echo "  XCFramework created at swift/FlowSDK.xcframework"
 fi
 
-if [[ "$1" == "--test" ]]; then
+if [[ "$TEST" == true ]]; then
     echo "Running Swift build verification..."
-    LIBRARY_PATH="$PWD/$SWIFT_LIB_DIR" swift build --package-path swift
+    SWIFT_FLAGS=()
+    if [[ "$DURABLE_SESSION" == true ]]; then
+        SWIFT_FLAGS=(-Xswiftc -DFLOWSDK_DURABLE_SESSION)
+    fi
+    LIBRARY_PATH="$PWD/$SWIFT_LIB_DIR" swift build --package-path swift "${SWIFT_FLAGS[@]}"
+    LIBRARY_PATH="$PWD/$SWIFT_LIB_DIR" DYLD_LIBRARY_PATH="$PWD/$SWIFT_LIB_DIR" swift run --package-path swift "${SWIFT_FLAGS[@]}" FlowSDKTests
 fi
 
 if [[ "$COVERAGE" == true ]]; then

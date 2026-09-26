@@ -49,6 +49,8 @@ Add `flowsdk` to your `Cargo.toml`.
 flowsdk = { version = "0.6.1", features = ["tls"] }
 # For QUIC support:
 # flowsdk = { version = "0.6.1", features = ["quic"] }
+# Optional disk checkpoint/restore APIs (disabled by default):
+# flowsdk = { version = "0.6.1", features = ["durable-session"] }
 ```
 
 ### 2. Basic Usage

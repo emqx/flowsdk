@@ -4,17 +4,21 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Default to debug build
+# Persistence is opt-in; generated bindings must match the native library.
 PROFILE="debug"
 CARGO_PROFILE="dev"
 TARGET_DIR="target/debug"
-
-if [[ "${1:-}" == "--release" ]]; then
-    PROFILE="release"
-    CARGO_PROFILE="release"
-    TARGET_DIR="target/release"
+FEATURES="uniffi-bindings"
+TEST=false
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --release) PROFILE="release"; CARGO_PROFILE="release"; TARGET_DIR="target/release" ;;
+        --durable-session) FEATURES="$FEATURES,durable-session" ;;
+        --test) TEST=true ;;
+        *) echo "Unknown option: $1" >&2; exit 2 ;;
+    esac
     shift
-fi
+done
 
 # Platforms
 OS="$(uname -s)"
@@ -26,11 +30,11 @@ case "${OS}" in
 esac
 
 echo "Building flowsdk_ffi ($PROFILE)..."
-cargo build -p flowsdk_ffi --profile $CARGO_PROFILE
+cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features "$FEATURES"
 
 echo "Generating Python bindings..."
 # Output direct to python/package/flowsdk
-cargo run -p flowsdk_ffi --features=uniffi/cli --bin uniffi-bindgen generate \
+cargo run -p flowsdk_ffi --features "$FEATURES" --bin uniffi-bindgen generate \
     --library "$TARGET_DIR/$LIB_FILE" \
     --language python \
     --out-dir python/package/flowsdk
@@ -38,7 +42,7 @@ cargo run -p flowsdk_ffi --features=uniffi/cli --bin uniffi-bindgen generate \
 echo "Copying library for Python package..."
 cp "$TARGET_DIR/$LIB_FILE" python/package/flowsdk/
 
-if [[ "${1:-}" == "--test" ]]; then
+if [[ "$TEST" == true ]]; then
     echo "Running Python verification..."
     export PYTHONPATH=$PWD/python/package
     python3 -c "import flowsdk; print('Import successful'); engine = flowsdk.MqttEngineFfi('test', 5); print('Engine created')"

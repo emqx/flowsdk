@@ -55,7 +55,7 @@ from typing import Optional, Dict, Callable, Any, List, Union
 from . import flowsdk_ffi
 from .results import ConnectionResult, PublishResult, SubscribeResult, UnsubscribeResult
 from .properties import property_list
-from .options import Subscription, Will, EngineOptions, QuicZeroRttOptions
+from .options import Subscription, Will, EngineOptions, QuicZeroRttOptions, RuntimeOptions
 from .quic import QuicControls
 
 
@@ -83,6 +83,16 @@ def _parse_socket_address(value):
     return (host, int(port))
 
 
+class OperationFailedError(RuntimeError):
+    """A single MQTT operation failed; its exchange may still await a late ACK."""
+    def __init__(self, event):
+        super().__init__(event.detail)
+        self.operation = event.operation
+        self.packet_id = event.packet_id
+        self.kind = event.kind
+        self.timeout_ms = event.timeout_ms
+
+
 class TransportType(Enum):
     """MQTT transport protocol types."""
     TCP = "tcp"
@@ -91,7 +101,7 @@ class TransportType(Enum):
 
 
 class _ProtocolLifecycle:
-    def close(self, exc: Optional[Exception] = None):
+    def close(self, exc: Optional[Exception] = None, *, abort=False):
         """Stop driving this transport and notify its owner exactly once."""
         if self.closed:
             return
@@ -104,7 +114,10 @@ class _ProtocolLifecycle:
         finally:
             try:
                 if self.transport:
-                    self.transport.close()
+                    if abort and hasattr(self.transport, "abort"):
+                        self.transport.abort()
+                    else:
+                        self.transport.close()
             finally:
                 if self.on_connection_lost_cb:
                     self.on_connection_lost_cb(exc)
@@ -113,7 +126,13 @@ class _ProtocolLifecycle:
         pass
 
     def connection_lost(self, exc: Optional[Exception]):
+        if not self._transport_closed.done():
+            self._transport_closed.set_result(None)
         self.close(exc)
+
+    async def wait_closed(self):
+        if self.transport is not None:
+            await asyncio.shield(self._transport_closed)
 
 
 class FlowMqttProtocol(_ProtocolLifecycle, asyncio.Protocol):
@@ -143,6 +162,15 @@ class FlowMqttProtocol(_ProtocolLifecycle, asyncio.Protocol):
         self.on_connection_lost_cb = on_connection_lost_cb
         self._tick_handle: Optional[asyncio.TimerHandle] = None
         self.closed = False
+        self._transport_closed = loop.create_future()
+        self._write_paused = False
+
+    def pause_writing(self):
+        self._write_paused = True
+
+    def resume_writing(self):
+        self._write_paused = False
+        self.pump()
 
     def connection_made(self, transport: asyncio.Transport):
         """Called when connection is established."""
@@ -154,7 +182,8 @@ class FlowMqttProtocol(_ProtocolLifecycle, asyncio.Protocol):
         # Start the MQTT connection
         if hasattr(self.engine, 'connect'):
             try:
-                self.engine.connect()
+                self.engine.reset_for_new_transport()
+                self.engine.connect_checked()
             except Exception as exc:
                 self.close(exc)
                 return
@@ -233,7 +262,9 @@ class FlowMqttProtocol(_ProtocolLifecycle, asyncio.Protocol):
             return
         # 1. Send outgoing data
         try:
-            if self.transport_type == TransportType.TLS:
+            if self._write_paused:
+                outgoing = b""
+            elif self.transport_type == TransportType.TLS:
                 outgoing = self.engine.take_socket_data()
             else:
                 outgoing = self.engine.take_outgoing()
@@ -277,6 +308,7 @@ class FlowMqttDatagramProtocol(_ProtocolLifecycle, asyncio.DatagramProtocol):
         self.on_connection_lost_cb = on_connection_lost_cb
         self._tick_handle: Optional[asyncio.TimerHandle] = None
         self.closed = False
+        self._transport_closed = loop.create_future()
         self.remote_addr = None
 
     def connection_made(self, transport: asyncio.DatagramTransport):
@@ -433,10 +465,14 @@ class FlowMqttClient:
         *, on_message_full: Optional[Callable] = None, on_event: Optional[Callable] = None,
         connect_properties=None, will: Optional[Will] = None, engine_options: Optional[EngineOptions] = None, auto_reconnect: bool = False,
         quic_zero_rtt: Optional[QuicZeroRttOptions] = None,
+        runtime_options: Optional[RuntimeOptions] = None,
+        session_state: Optional[bytes] = None,
     ):
         if password is not None and not isinstance(password, (str, bytes)):
             raise TypeError("password must be str, bytes, or None")
         self.transport_type = transport
+        if transport == TransportType.QUIC and not hasattr(flowsdk_ffi, "QuicMqttEngineFfi"):
+            raise flowsdk_ffi.MqttErrorFfi.Unsupported(detail="QUIC support is not enabled")
         if quic_zero_rtt is not None and transport != TransportType.QUIC:
             raise ValueError("0-RTT options require QUIC")
         self._zero_rtt_options = quic_zero_rtt.to_ffi() if isinstance(quic_zero_rtt, QuicZeroRttOptions) else quic_zero_rtt
@@ -453,8 +489,20 @@ class FlowMqttClient:
             max_reconnect_attempts=max_reconnect_attempts
         )
 
+        self._retired = False
+        self._runtime_options = (runtime_options.to_ffi() if isinstance(runtime_options, RuntimeOptions)
+                                 else runtime_options)
+        self._session_peer = getattr(self._runtime_options, "peer", None)
+        if session_state is not None:
+            self._require_durable_session()
+        if session_state is not None and not self._session_peer:
+            raise ValueError("Restoration requires runtime_options.peer")
+        if self._runtime_options is not None and self._runtime_options.reconnect:
+            raise ValueError("FlowMqttClient owns reconnect scheduling; use auto_reconnect")
+        if session_state is not None and not self.opts.client_id:
+            self.opts.client_id = flowsdk_ffi.inspect_session_state(session_state).client_id
         extended_options = None
-        if connect_properties is not None or will is not None or isinstance(password, bytes) or engine_options is not None:
+        if connect_properties is not None or will is not None or isinstance(password, bytes) or engine_options is not None or self._runtime_options is not None:
             extended_options = flowsdk_ffi.MqttConnectOptionsFfi(
                 options=self.opts, properties=property_list(connect_properties),
                 will=will.to_ffi() if isinstance(will, Will) else will,
@@ -473,7 +521,19 @@ class FlowMqttClient:
         )
         
         # Create appropriate engine based on transport type
-        if transport == TransportType.TCP:
+        if self._runtime_options is not None:
+            if transport == TransportType.TCP:
+                self.engine = flowsdk_ffi.MqttEngineFfi.new_with_runtime_options(extended_options, self._runtime_options)
+            elif transport == TransportType.TLS:
+                if not server_name:
+                    raise ValueError("server_name (SNI) is required for TLS transport")
+                self.engine = flowsdk_ffi.TlsMqttEngineFfi.new_with_runtime_options(
+                    extended_options, self._runtime_options, self.tls_opts, server_name)
+            elif transport == TransportType.QUIC:
+                self.engine = flowsdk_ffi.QuicMqttEngineFfi.new_with_runtime_options(extended_options, self._runtime_options)
+            else:
+                raise ValueError(f"Unsupported transport type: {transport}")
+        elif transport == TransportType.TCP:
             self.engine = (flowsdk_ffi.MqttEngineFfi.new_with_options(extended_options)
                            if extended_options is not None else flowsdk_ffi.MqttEngineFfi.new_with_opts(self.opts))
         elif transport == TransportType.TLS:
@@ -482,20 +542,22 @@ class FlowMqttClient:
             self.engine = (flowsdk_ffi.TlsMqttEngineFfi.new_with_options(extended_options, self.tls_opts, server_name)
                            if extended_options is not None else flowsdk_ffi.TlsMqttEngineFfi(self.opts, self.tls_opts, server_name))
         elif transport == TransportType.QUIC:
-            if not hasattr(flowsdk_ffi, "QuicMqttEngineFfi"):
-                raise flowsdk_ffi.MqttErrorFfi.Unsupported(detail="QUIC support is not enabled")
             self.engine = (flowsdk_ffi.QuicMqttEngineFfi.new_with_options(extended_options)
                            if extended_options is not None else flowsdk_ffi.QuicMqttEngineFfi(self.opts))
         else:
             raise ValueError(f"Unsupported transport type: {transport}")
         
+        # Exactly one retry scheduler owns this driver.
+        self.engine.set_reconnect(False)
+        if session_state is not None:
+            self.engine.restore_session_state(session_state)
         self.protocol: Optional[Union[FlowMqttProtocol, FlowMqttDatagramProtocol]] = None
         self.on_message = on_message
         self.on_message_full = on_message_full
         self.on_event = on_event
         self.connection_result: Optional[ConnectionResult] = None
         self._disconnecting = False
-        self.auto_reconnect = auto_reconnect
+        self._auto_reconnect = auto_reconnect
         self.reconnect_error: Optional[Exception] = None
         self._reconnect_target = None
         self._reconnect_task: Optional[asyncio.Task] = None
@@ -522,6 +584,19 @@ class FlowMqttClient:
             ConnectionError: If connection fails or is already active
             asyncio.TimeoutError: If connection times out
         """
+        if self._retired:
+            raise ConnectionError("This client was retired for restart; create a new client")
+        if self._disconnecting:
+            raise ConnectionError("Client shutdown is in progress")
+        if self._session_peer is not None:
+            # Keep the configured hostname/IPv6 zone, not a resolved address or
+            # machine-local interface index, in the durable identity.
+            name, separator, zone = host.partition("%")
+            canonical_host = name.lower() + separator + zone
+            authority = f"[{canonical_host}]" if ":" in name else canonical_host
+            target_peer = f"{self.transport_type.value}://{authority}:{port}"
+            if self._session_peer != target_peer:
+                raise ValueError("Connection target does not match runtime_options.peer")
         if self._reconnect_task is not None and self._reconnect_task is not asyncio.current_task():
             raise ConnectionError("Automatic reconnection is already in progress")
         if self.protocol is not None or self._connect_future is not None:
@@ -625,6 +700,7 @@ class FlowMqttClient:
         try:
             while self._reconnect_target is not None:
                 if self.opts.max_reconnect_attempts and attempt >= self.opts.max_reconnect_attempts:
+                    self._fail_pending(self.reconnect_error or ConnectionError("Reconnect attempts exhausted"))
                     return
                 attempt += 1
                 self._call_callback(self.on_event, flowsdk_ffi.MqttEventFfi.RECONNECT_SCHEDULED(
@@ -641,6 +717,8 @@ class FlowMqttClient:
         finally:
             if self._reconnect_task is asyncio.current_task():
                 self._reconnect_task = None
+            if not self.is_connected:
+                self._fail_pending(self.reconnect_error or ConnectionError("Reconnection stopped"))
 
     async def subscribe(
         self, topic: str, qos: int = 0, *, timeout: Optional[float] = 10.0,
@@ -835,11 +913,13 @@ class FlowMqttClient:
                 del pending[pid]
             self._finish_future(fut)
 
-    def _fail_pending(self, error):
+    def _fail_pending(self, error, *, retain_ack=False):
         futures = []
         if self._connect_future is not None:
             futures.append(self._connect_future)
-        for pending in (self._pending_publish, self._pending_subscribe, self._pending_unsubscribe, self._pending_ping):
+        groups = (self._pending_ping,) if retain_ack else (
+            self._pending_publish, self._pending_subscribe, self._pending_unsubscribe, self._pending_ping)
+        for pending in groups:
             futures.extend(pending.values())
             pending.clear()
         for fut in futures:
@@ -848,13 +928,69 @@ class FlowMqttClient:
 
     def _close_connection(self, error):
         protocol, self.protocol = self.protocol, None
-        self._fail_pending(error)
+        retry = bool(self.auto_reconnect and self._reconnect_target is not None
+                     and not self._disconnecting and not self._retired)
+        self._fail_pending(error, retain_ack=retry)
         if protocol is not None:
             protocol.close()
-        if (self.auto_reconnect and self._reconnect_target is not None
-                and not self._disconnecting and self._reconnect_task is None):
+        if retry and self._reconnect_task is None:
             self._reconnect_task = asyncio.create_task(self._run_reconnect())
     
+    @property
+    def auto_reconnect(self) -> bool:
+        return self._auto_reconnect
+
+    @auto_reconnect.setter
+    def auto_reconnect(self, enabled: bool):
+        self.set_auto_reconnect(enabled)
+
+    def set_auto_reconnect(self, enabled: bool):
+        """Change the host retry policy; disabling cancels an outstanding retry."""
+        self._auto_reconnect = enabled
+        if not enabled and self._reconnect_task is not None:
+            task, self._reconnect_task = self._reconnect_task, None
+            # A task canceled before its first turn never enters its finally block.
+            task.cancel()
+            self._fail_pending(ConnectionError("Automatic reconnection disabled"))
+
+    @staticmethod
+    def _require_durable_session():
+        if not hasattr(flowsdk_ffi, "inspect_session_state"):
+            raise flowsdk_ffi.MqttErrorFfi.Unsupported(
+                detail="Durable sessions require a build with the durable-session feature")
+
+    async def checkpoint_for_restart(self) -> bytes:
+        """Retire this client abruptly and return a stable checkpoint.
+
+        This can trigger the Will. Persist the returned bytes before constructing
+        the replacement client. Pending Python futures are failed, not persisted.
+        This is planned restart support, not automatic crash-safe processing.
+        """
+        self._require_durable_session()
+        if not self._session_peer:
+            raise ValueError("Checkpointing requires runtime_options.peer")
+        if self._retired or self._disconnecting:
+            raise ConnectionError("Client is already retiring or retired")
+        # Validate checkpoint eligibility before retiring a healthy connection.
+        self.engine.snapshot_session()
+        self._retired = True
+        self._disconnecting = True
+        self._reconnect_target = None
+        tasks = {task for task in (self._reconnect_task, self._connect_task)
+                 if task is not None and task is not asyncio.current_task()}
+        for task in tasks:
+            task.cancel()
+        protocol, self.protocol = self.protocol, None
+        self._fail_pending(ConnectionError("Client retired for restart"))
+        try:
+            if protocol is not None:
+                protocol.close(abort=True)
+            if tasks:
+                await asyncio.gather(*tasks, return_exceptions=True)
+            return bytes(self.engine.snapshot_session())
+        finally:
+            self._disconnecting = False
+
     def pump(self):
         """
         Force data transmission and process pending events.
@@ -936,17 +1072,25 @@ class FlowMqttClient:
             while not protocol.closed:
                 self.engine.handle_tick(self.engine.elapsed_ms())
                 protocol.pump()
-                if self.engine.disconnect_complete():
-                    return
+                transport = getattr(protocol, "transport", None)
+                buffered = getattr(transport, "get_write_buffer_size", lambda: 0)()
+                if self.engine.disconnect_complete() and not buffered:
+                    protocol.close()
+                    break
                 await asyncio.sleep(0.01)
+            await protocol.wait_closed()
 
         try:
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
             if protocol is not None and not protocol.closed:
-                await asyncio.wait_for(flush(), timeout)
+                # Local shutdown always has a finite bound, even when protocol
+                # ACK waits are disabled by timeout=None.
+                await asyncio.wait_for(flush(), 5.0 if timeout is None else timeout)
         finally:
             self._close_connection(ConnectionError("MQTT client disconnected"))
+            if protocol is not None and protocol.transport is not None and not protocol._transport_closed.done():
+                protocol.transport.abort()
             if self._reconnect_task in tasks:
                 self._reconnect_task = None
             if self._connect_task in tasks:
@@ -1019,6 +1163,19 @@ class FlowMqttClient:
             if fut is not None and not fut.done():
                 fut.set_result(ev.success)
 
+        elif ev.is_operation_failed():
+            error = OperationFailedError(ev)
+            operation = flowsdk_ffi.MqttOperationKindFfi
+            if ev.operation == operation.CONNECT:
+                self._close_connection(error)
+            else:
+                pending = {operation.PUBLISH: self._pending_publish,
+                           operation.SUBSCRIBE: self._pending_subscribe,
+                           operation.UNSUBSCRIBE: self._pending_unsubscribe}[ev.operation]
+                fut = pending.pop(ev.packet_id, None)
+                if fut is not None and not fut.done():
+                    fut.set_exception(error)
+
         elif ev.is_error():
             self._close_connection(ConnectionError(f"MQTT connection error: {ev.message}"))
             logger.error(f"MQTT Error: {ev.message}")
@@ -1033,4 +1190,4 @@ class FlowMqttClient:
             self._close_connection(ConnectionError("MQTT connection lost; reconnect required"))
 
 
-__all__ = ['FlowMqttClient', 'FlowMqttProtocol','TransportType', 'FlowMqttDatagramProtocol']
+__all__ = ['FlowMqttClient', 'FlowMqttProtocol', 'TransportType', 'FlowMqttDatagramProtocol', 'OperationFailedError']
