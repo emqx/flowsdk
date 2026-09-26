@@ -4,7 +4,8 @@ use super::ffi_types::MqttErrorFFI;
 use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
 
 #[derive(Clone, Debug, PartialEq)]
-#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Enum, serde::Serialize))]
+#[cfg_attr(feature = "json", derive(serde::Serialize, serde::Deserialize))]
+#[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Enum))]
 pub enum MqttPropertyFFI {
     PayloadFormatIndicator { value: u8 },
     MessageExpiryInterval { value: u32 },
@@ -368,7 +369,7 @@ impl super::ffi_types::MqttConnectOptionsFFI {
         if password.as_ref().is_some_and(|p| p.len() > 65535) {
             return Err(invalid("Password exceeds 65535 bytes"));
         }
-        let properties = validate(self.properties, version, |p| {
+        let properties = validate(deduplicate_connect(self.properties)?, version, |p| {
             matches!(
                 p,
                 MqttPropertyFFI::SessionExpiryInterval { .. }
@@ -518,6 +519,27 @@ impl super::ffi_types::MqttEngineOptionsFFI {
         }
         Ok(())
     }
+}
+
+fn deduplicate_connect(
+    properties: Vec<MqttPropertyFFI>,
+) -> Result<Vec<MqttPropertyFFI>, MqttErrorFFI> {
+    let mut result = Vec::new();
+    for property in properties {
+        if !matches!(property, MqttPropertyFFI::UserProperty { .. }) {
+            if let Some(previous) = result
+                .iter()
+                .find(|p| std::mem::discriminant(*p) == std::mem::discriminant(&property))
+            {
+                if previous != &property {
+                    return Err(invalid("Conflicting CONNECT property values"));
+                }
+                continue;
+            }
+        }
+        result.push(property);
+    }
+    Ok(result)
 }
 
 #[cfg(test)]

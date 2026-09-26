@@ -382,3 +382,50 @@ wheel before upload.
 ## License
 
 Mozilla Public License 2.0
+
+### Runtime limits and durable sessions
+
+Disk checkpoint/restore is disabled by default. Build bindings with
+`bash scripts/build_python_bindings.sh --durable-session --test` to enable it.
+Without it, `session_state=` and `checkpoint_for_restart()` raise
+`MqttErrorFfi.Unsupported`; the generated native checkpoint APIs are absent.
+Ordinary reconnect and in-memory session resumption work with either build.
+
+`RuntimeOptions` adds protocol `OperationTimeouts`, incoming receive quota and
+incoming/outgoing byte limits. These deadlines are separate from Python's
+`timeout=` argument; `OperationTimeouts.cloud()` selects 30 seconds for CONNECT
+and 10 seconds for publish/subscribe/unsubscribe. Defaults remain disabled.
+`OperationFailedError` identifies the affected operation and packet ID without
+closing unrelated healthy work. A late ACK is still delivered through `on_event`.
+
+For planned restarts, construct `FlowMqttClient` with `clean_start=False`, a
+nonzero MQTT 5 `ConnectProperties(session_expiry_interval=...)`, and
+`RuntimeOptions(peer="tcp://broker.example:1883")`. The peer must match the
+transport and the original hostname/port passed to `connect` (lowercase host,
+bracketed IPv6). Low-level FFI engines allow application-defined peer identities.
+Call `await client.checkpoint_for_restart()` to stop commands, timers and retries,
+retire the transport abruptly, and return stable opaque bytes. This may trigger
+the Will. The old client cannot connect again. Pending Python futures fail; they
+are not serialized. Persist the bytes before constructing a fresh client with
+`session_state=saved_bytes` and the same options. Supply credentials and Will again.
+An empty client ID can be recovered from saved metadata; explicit mismatches fail.
+
+`ClientSessionStore` defines application-owned create/resume/update/delete.
+`SqliteSessionStore` implements transactional commits with SQLite FULL synchronous
+mode and propagates native storage errors. Its methods are synchronous and must
+run outside engine callbacks. Use one writer per key and include account identity
+in keys as needed. `python/examples/durable_session.py` shows the lifecycle.
+A snapshot is not automatic crash persistence: persist-before-send/event ordering
+and a transactional application inbox remain the application's responsibility.
+
+Python owns one opt-in reconnect scheduler (`auto_reconnect=False` by default).
+During an actual retry it keeps ACK waiters and lets the engine replay existing
+exchanges; disabling/exhausting retries fails them. `set_auto_reconnect(False)`
+cancels retries. Offline publishing remains unsupported by the high-level client;
+there is no additional Python replay queue. Canceling an await removes only its
+waiter. `disconnect()` waits for protocol output and the socket close, bounded by
+five seconds by default (also when timeout=None); cancellation aborts the socket.
+
+`client.quic.subscribe_on_control(...)` and `unsubscribe_on_control(...)` expose
+explicit control-stream commands. Default subscriptions still use a data stream.
+Keep generated bindings and their native library from the same build together.

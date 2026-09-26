@@ -259,6 +259,9 @@ class LifecycleTests(ClientTestCase):
             protocol=None, transport=Mock(), timer=None, created=asyncio.Event(),
         )
         state.transport.is_closing.return_value = False
+        state.transport.get_write_buffer_size.return_value = 0
+        state.transport.close.side_effect = lambda: loop.call_soon(state.protocol.connection_lost, None)
+        state.transport.abort.side_effect = lambda: loop.call_soon(state.protocol.connection_lost, None)
         state.transport.get_extra_info.return_value = ("127.0.0.1", 1883)
 
         async def create_endpoint(factory, *args, **kwargs):
@@ -553,6 +556,7 @@ class LifecycleTests(ClientTestCase):
                 kwargs["connack"] = 0x87
             else:
                 self.engine.connect.side_effect = OSError("engine setup failed")
+                self.engine.connect_checked.side_effect = OSError("engine setup failed")
                 expected = OSError  # ConnectionError is also an OSError.
             with self.endpoints(**kwargs) as state:
                 with self.assertRaises(expected):
@@ -560,6 +564,7 @@ class LifecycleTests(ClientTestCase):
                 self.assert_closed(client, state)
                 self.assertIsNone(client._connect_future)
             self.engine.connect.side_effect = None
+            self.engine.connect_checked.side_effect = None
 
         for transport in async_client.TransportType:
             for failure in ("timeout", "setup", "connack", "engine"):
@@ -758,6 +763,77 @@ class LifecycleTests(ClientTestCase):
             with self.subTest(transport=transport):
                 asyncio.run(run(transport))
 
+    def test_retry_exhaustion_finishes_retained_ack_waiters(self):
+        async def run():
+            client = self.make_client()
+            client.auto_reconnect = True
+            client.opts.reconnect_base_delay_ms = 1
+            client.opts.reconnect_max_delay_ms = 1
+            client.opts.max_reconnect_attempts = 2
+            with self.endpoints() as first:
+                await client.connect("localhost", 1883)
+                pending = asyncio.create_task(client.publish("test", b"data", 1, timeout=None))
+                await asyncio.sleep(0)
+                first.protocol.connection_lost(None)
+                self.assertFalse(pending.done())
+                self.assertIn(7, client._pending_publish)
+                retry = client._reconnect_task
+            with self.endpoints(setup_error=OSError("offline")):
+                await asyncio.wait_for(retry, 1)
+            with self.assertRaises(OSError): await pending
+            self.assertEqual(client._pending_publish, {})
+            self.assertIsNone(client._reconnect_task)
+        asyncio.run(run())
+
+    def test_disabling_reconnect_cancels_retained_waiters(self):
+        async def run():
+            client = self.make_client()
+            client.auto_reconnect = True
+            with self.endpoints() as first:
+                await client.connect("localhost", 1883)
+                pending = asyncio.create_task(client.publish("test", b"data", 1, timeout=None))
+                await asyncio.sleep(0)
+                first.protocol.connection_lost(None)
+                retry = client._reconnect_task
+                self.assertFalse(pending.done())
+                client.auto_reconnect = False
+                self.assertIsNone(client._reconnect_task)
+                await asyncio.gather(retry, return_exceptions=True)
+                with self.assertRaises(ConnectionError): await pending
+                self.assertEqual(client._pending_publish, {})
+        asyncio.run(run())
+
+    def test_stream_backpressure_stops_draining_engine_output(self):
+        async def run():
+            client = self.make_client()
+            with self.endpoints() as state:
+                await client.connect("localhost", 1883)
+                state.protocol._tick_handle.cancel()
+                self.engine.take_outgoing.reset_mock()
+                state.protocol.pause_writing()
+                state.protocol.pump()
+                self.engine.take_outgoing.assert_not_called()
+                state.protocol.resume_writing()
+                self.engine.take_outgoing.assert_called_once()
+                await client.disconnect()
+        asyncio.run(run())
+
+    def test_disconnect_waits_for_host_write_buffer(self):
+        async def run():
+            client = self.make_client()
+            with self.endpoints() as state:
+                await client.connect("localhost", 1883)
+                self.engine.disconnect_complete.return_value = True
+                state.transport.get_write_buffer_size.return_value = 100
+                closing = asyncio.create_task(client.disconnect(timeout=1))
+                await asyncio.sleep(0.02)
+                self.assertFalse(closing.done())
+                state.transport.close.assert_not_called()
+                state.transport.get_write_buffer_size.return_value = 0
+                await closing
+                self.assertTrue(state.protocol._transport_closed.done())
+        asyncio.run(run())
+
     def test_disconnect_drives_output_before_closing(self):
         async def run(transport):
             client = self.make_client(transport)
@@ -769,7 +845,7 @@ class LifecycleTests(ClientTestCase):
                 self.engine.handle_tick.side_effect = lambda now: calls.append("tick")
                 state.protocol.pump = lambda: calls.append("pump")
                 self.engine.disconnect_complete.side_effect = [False, True]
-                state.transport.close.side_effect = lambda: calls.append("close")
+                state.transport.close.side_effect = lambda: (calls.append("close"), asyncio.get_running_loop().call_soon(state.protocol.connection_lost, None))
                 await client.disconnect()
                 self.assertEqual(calls, ["disconnect", "tick", "pump", "tick", "pump", "close"])
                 self.assert_closed(client, state)

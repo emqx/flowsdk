@@ -83,7 +83,8 @@ fun main() {
         }
 
         // Tick the engine (drives QUIC timers and MQTT keepalive)
-        val events = engine.handleTick(nowMs(startTime))
+        engine.handleTick(nowMs(startTime))
+        val events = engine.takeEvents()
 
         // Process events
         for (event in events) {
@@ -120,6 +121,7 @@ fun main() {
                 }
                 is MqttEventFfi.Published -> println("✅ Publish ack PID ${event.v1.packetId}")
                 is MqttEventFfi.Disconnected -> println("⚠️ Disconnected. reasonCode=${event.reasonCode}")
+                is MqttEventFfi.OperationFailed -> println("Operation ${event.operation} (${event.packetId}) failed: ${event.detail}")
                 is MqttEventFfi.Error -> println("❌ Error: ${event.message}")
                 else -> Unit  // Ignore other events
             }

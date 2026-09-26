@@ -40,10 +40,12 @@ impl ClientSession {
         self.unacknowledged_pubrels.clear();
     }
 
+    #[cfg(feature = "durable-session")]
     pub(crate) fn packet_id_counter(&self) -> u16 {
         self.packet_id_counter
     }
 
+    #[cfg(feature = "durable-session")]
     pub(crate) fn restore_packet_id_counter(&mut self, counter: u16) {
         self.packet_id_counter = counter;
     }

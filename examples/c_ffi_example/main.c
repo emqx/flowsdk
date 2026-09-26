@@ -14,57 +14,7 @@
 #include <time.h>
 #include <unistd.h>
 
-// FFI declarations
-typedef struct MqttEngineFFI MqttEngineFFI;
-
-typedef struct {
-  const char *client_id;
-  uint8_t mqtt_version;
-  uint8_t clean_start;
-  uint16_t keep_alive;
-  const char *username;
-  const char *password;
-  uint64_t reconnect_base_delay_ms;
-  uint64_t reconnect_max_delay_ms;
-  uint32_t max_reconnect_attempts;
-} MqttOptionsC;
-
-typedef struct MqttEventListFFI MqttEventListFFI;
-
-MqttEngineFFI *mqtt_engine_new(const char *client_id, uint8_t mqtt_version);
-MqttEngineFFI *mqtt_engine_new_with_opts(const MqttOptionsC *opts);
-void mqtt_engine_free(MqttEngineFFI *ptr);
-void mqtt_engine_connect(MqttEngineFFI *ptr);
-void mqtt_engine_handle_incoming(MqttEngineFFI *ptr, const uint8_t *data,
-                                 size_t len);
-void mqtt_engine_handle_tick(MqttEngineFFI *ptr, uint64_t now_ms);
-int64_t mqtt_engine_next_tick_ms(MqttEngineFFI *ptr);
-uint8_t *mqtt_engine_take_outgoing(MqttEngineFFI *ptr, size_t *out_len);
-void mqtt_engine_free_bytes(uint8_t *ptr, size_t len);
-void mqtt_engine_free_string(char *ptr);
-int32_t mqtt_engine_publish(MqttEngineFFI *ptr, const char *topic,
-                            const uint8_t *payload, size_t payload_len,
-                            uint8_t qos);
-int32_t mqtt_engine_subscribe(MqttEngineFFI *ptr, const char *topic_filter,
-                              uint8_t qos);
-int32_t mqtt_engine_unsubscribe(MqttEngineFFI *ptr, const char *topic_filter);
-void mqtt_engine_disconnect(MqttEngineFFI *ptr);
-int mqtt_engine_is_connected(MqttEngineFFI *ptr);
-uint8_t mqtt_engine_get_version(MqttEngineFFI *ptr);
-void mqtt_engine_auth(MqttEngineFFI *ptr, uint8_t reason_code);
-void mqtt_engine_handle_connection_lost(MqttEngineFFI *ptr);
-
-// Native Event API
-MqttEventListFFI *mqtt_engine_take_events_list(MqttEngineFFI *ptr);
-void mqtt_event_list_free(MqttEventListFFI *ptr);
-size_t mqtt_event_list_len(const MqttEventListFFI *ptr);
-uint8_t mqtt_event_list_get_tag(const MqttEventListFFI *ptr, size_t index);
-uint8_t mqtt_event_list_get_connected_rc(const MqttEventListFFI *ptr,
-                                         size_t index);
-char *mqtt_event_list_get_message_topic(const MqttEventListFFI *ptr,
-                                        size_t index);
-uint8_t *mqtt_event_list_get_message_payload(const MqttEventListFFI *ptr,
-                                             size_t index, size_t *out_len);
+#include "../../flowsdk_ffi/include/flowsdk.h"
 
 // Helper to get monotonic time in milliseconds
 uint64_t get_time_ms() {

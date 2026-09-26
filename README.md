@@ -12,7 +12,7 @@
 
 - **Your runtime, your I/O.** The core engine handles MQTT state without opening sockets or running an event loop. Use the Tokio client for managed networking, or drive the same engine from your own I/O and timers.
 - **Clear completion semantics.** Accepting a command, receiving a broker acknowledgement, and finishing shutdown are distinct events. Applications can wait for the result they need and handle rejection, timeout, or connection loss explicitly.
-- **Control under load and failure.** Configurable queue and byte limits, backpressure, deadlines, and reconnect policies let you decide how much work to retain and how to recover. Session recovery is currently in memory.
+- **Control under load and failure.** Configurable queue and byte limits, backpressure, deadlines, and reconnect policies let you decide how much work to retain and how to recover. Session recovery is in memory by default; enable the `durable-session` Cargo feature for checkpoint/restore across process restarts.
 - **Acknowledgements on your terms.** Automatic acknowledgements cover common uses; manual acknowledgements let your application decide when it has accepted an incoming message, including after storing it.
 - **Same Rust core, same protocol behavior across languages.** Native Rust APIs and foreign function interface (FFI) bindings share the MQTT implementation for validation, QoS, acknowledgements, and session recovery. TCP, TLS, and QUIC use that same core, with lower-level QUIC APIs for stream control.
 - **Test protocol behavior without a network.** Feed bytes and advance time to exercise fragmented input, backpressure, deadlines, and recovery without a live broker. The protocol engine is available independently of the networking client.

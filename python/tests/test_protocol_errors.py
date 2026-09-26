@@ -71,7 +71,7 @@ class ProtocolFailureTests(harness.ClientTestCase):
                      harness.async_client.TransportType.TLS):
             with self.subTest(transport=kind):
                 error = OSError("engine cannot connect")
-                with patch.object(self.engine, "connect", side_effect=error):
+                with patch.object(self.engine, "connect_checked", side_effect=error):
                     protocol, transport, lost, _ = self.protocol(kind)
                 self.assertIsNone(protocol._tick_handle)
                 lost.assert_called_once_with(error)

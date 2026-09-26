@@ -66,3 +66,42 @@ class QuicZeroRttOptions:
     def to_ffi(self):
         return flowsdk_ffi.QuicZeroRttOptionsFfi(session_cache_size=self.session_cache_size,
             replay_on_reject=self.replay_on_reject)
+
+
+@dataclass
+class OperationTimeouts:
+    """Protocol deadlines in milliseconds, independent of Python await timeouts."""
+    connect_ms: Optional[int] = None
+    publish_ms: Optional[int] = None
+    subscribe_ms: Optional[int] = None
+    unsubscribe_ms: Optional[int] = None
+
+    @classmethod
+    def cloud(cls):
+        return cls(30_000, 10_000, 10_000, 10_000)
+
+    def to_ffi(self):
+        return flowsdk_ffi.MqttOperationTimeoutsFfi(**vars(self))
+
+
+@dataclass
+class RuntimeOptions:
+    """Additive limits/deadlines and stable broker identity.
+
+    FlowMqttClient persistence uses peer='<transport>://<host>:<port>' (IPv6
+    hosts are bracketed). Low-level engines allow application-defined identities.
+    Python owns reconnect scheduling; use auto_reconnect on FlowMqttClient.
+    """
+    peer: Optional[str] = None
+    operation_timeouts: Optional[OperationTimeouts] = None
+    incoming_receive_maximum: Optional[int] = None
+    max_incoming_packet_size: Optional[int] = None
+    max_incoming_buffer_bytes: Optional[int] = None
+    max_outgoing_buffer_bytes: Optional[int] = None
+    reconnect: Optional[bool] = None
+
+    def to_ffi(self):
+        fields = vars(self).copy()
+        if isinstance(self.operation_timeouts, OperationTimeouts):
+            fields['operation_timeouts'] = self.operation_timeouts.to_ffi()
+        return flowsdk_ffi.MqttRuntimeOptionsFfi(**fields)
