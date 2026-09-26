@@ -5,6 +5,12 @@ use std::os::raw::{c_char, c_int};
 use std::time::{Duration, Instant};
 
 mod advanced;
+pub mod c_api;
+mod runtime;
+#[cfg(feature = "durable-session")]
+mod session;
+#[cfg(feature = "durable-session")]
+pub use session::inspect_session_state;
 #[cfg(test)]
 mod api_tests;
 #[cfg(test)]
@@ -13,6 +19,10 @@ pub mod ffi_types;
 pub mod properties;
 #[cfg(feature = "quic")]
 mod quic;
+#[cfg(test)]
+mod sync_tests;
+#[cfg(test)]
+mod tests;
 #[cfg(any(feature = "tls", feature = "quic"))]
 mod tls_config;
 use ffi_types::*;
@@ -22,6 +32,8 @@ use std::sync::Mutex;
 #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Object))]
 pub struct MqttEngineFFI {
     engine: Mutex<MqttEngine>,
+    #[cfg(feature = "durable-session")]
+    session: session::SessionAccess,
     start_time: Instant,
     events: Mutex<Vec<MqttEventFFI>>,
 }
@@ -64,9 +76,23 @@ impl MqttEngineFFI {
 
     #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
     pub fn new_with_options(opts: MqttConnectOptionsFFI) -> Result<Self, MqttErrorFFI> {
-        let engine = MqttEngine::new(opts.into_core()?);
+        Self::new_with_runtime_options(opts, MqttRuntimeOptionsFFI::default())
+    }
+
+    #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
+    pub fn new_with_runtime_options(
+        opts: MqttConnectOptionsFFI,
+        runtime: MqttRuntimeOptionsFFI,
+    ) -> Result<Self, MqttErrorFFI> {
+        let mut options = opts.into_core()?;
+        #[cfg(feature = "durable-session")]
+        let session = session::SessionAccess::new(runtime.peer.is_some());
+        runtime.apply(&mut options)?;
+        let engine = MqttEngine::new(options);
         Ok(MqttEngineFFI {
             engine: Mutex::new(engine),
+            #[cfg(feature = "durable-session")]
+            session,
             start_time: Instant::now(),
             events: Mutex::new(Vec::new()),
         })
@@ -77,6 +103,8 @@ impl MqttEngineFFI {
     }
 
     pub fn connect(&self) {
+        #[cfg(feature = "durable-session")]
+        self.session.started();
         let mut engine = self.engine.lock().unwrap();
         engine.reset_for_new_transport();
         self.events.lock().unwrap().clear();
@@ -89,6 +117,8 @@ impl MqttEngineFFI {
     }
 
     pub fn handle_incoming(&self, data: Vec<u8>) -> Vec<MqttEventFFI> {
+        #[cfg(feature = "durable-session")]
+        self.session.started();
         let mut engine = self.engine.lock().unwrap();
         let events = engine.handle_incoming(&data);
         let mapped: Vec<_> = map_events(events);
@@ -97,7 +127,18 @@ impl MqttEngineFFI {
     }
 
     pub fn handle_tick(&self, now_ms: u64) -> Vec<MqttEventFFI> {
-        let now = self.start_time + Duration::from_millis(now_ms);
+        #[cfg(feature = "durable-session")]
+        self.session.started();
+        let now = match runtime::instant_at(self.start_time, now_ms) {
+            Ok(now) => now,
+            Err(error) => {
+                let events = vec![MqttEventFFI::Error {
+                    message: error.to_string(),
+                }];
+                self.events.lock().unwrap().extend(events.clone());
+                return events;
+            }
+        };
         let mut engine = self.engine.lock().unwrap();
         let mut events = engine.handle_incoming(&[]);
         events.extend(engine.handle_tick(now));
@@ -366,11 +407,37 @@ fn map_event(event: MqttEvent) -> Option<MqttEventFFI> {
         MqttEvent::PingResponse(res) => Some(MqttEventFFI::PingResponse {
             success: res.success,
         }),
-        MqttEvent::OperationFailed { error: err, .. } | MqttEvent::Error(err) => {
-            Some(MqttEventFFI::Error {
-                message: format!("{:?}", err),
+        MqttEvent::OperationFailed {
+            operation,
+            packet_id,
+            error,
+        } => {
+            use flowsdk::mqtt_client::{engine::OperationKind, error::MqttClientError};
+            let operation = match operation {
+                OperationKind::Connect => MqttOperationKindFFI::Connect,
+                OperationKind::Publish => MqttOperationKindFFI::Publish,
+                OperationKind::Subscribe => MqttOperationKindFFI::Subscribe,
+                OperationKind::Unsubscribe => MqttOperationKindFFI::Unsubscribe,
+            };
+            let (kind, timeout_ms) = match &error {
+                MqttClientError::OperationTimeout { timeout_ms, .. } => {
+                    (MqttFailureKindFFI::Timeout, Some(*timeout_ms))
+                }
+                MqttClientError::SessionExpired => (MqttFailureKindFFI::SessionExpired, None),
+                MqttClientError::OperationCancelled { .. } => (MqttFailureKindFFI::Cancelled, None),
+                _ => (MqttFailureKindFFI::Other, None),
+            };
+            Some(MqttEventFFI::OperationFailed {
+                operation,
+                packet_id,
+                kind,
+                timeout_ms,
+                detail: error.to_string(),
             })
         }
+        MqttEvent::Error(err) => Some(MqttEventFFI::Error {
+            message: format!("{:?}", err),
+        }),
         MqttEvent::TransportClosed {
             reason,
             by_peer,
@@ -416,311 +483,12 @@ fn map_event(event: MqttEvent) -> Option<MqttEventFFI> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use flowsdk::mqtt_client::engine::QuicZeroRttStatus;
-    use flowsdk::mqtt_serde::control_packet::MqttPacket;
-    use flowsdk::mqtt_serde::parser::ParseOk;
-    use std::time::Duration;
-
-    fn authenticated_options(version: u8) -> MqttOptionsFFI {
-        MqttOptionsFFI {
-            client_id: "ffi-auth-test".to_string(),
-            mqtt_version: version,
-            clean_start: true,
-            keep_alive: 30,
-            username: Some("test-user".to_string()),
-            password: Some("test-password".to_string()),
-            reconnect_base_delay_ms: 1000,
-            reconnect_max_delay_ms: 30000,
-            max_reconnect_attempts: 0,
-        }
-    }
-
-    #[test]
-    fn full_message_mapping_keeps_originating_stream() {
-        let message = flowsdk::mqtt_serde::mqttv5::publishv5::MqttPublish::new_with_prop(
-            1,
-            "test".into(),
-            Some(7),
-            vec![],
-            false,
-            false,
-            vec![],
-        );
-        let events = map_events(vec![
-            MqttEvent::PublishReceived {
-                packet_id: Some(7),
-                stream: Some(12),
-            },
-            MqttEvent::MessageReceived(message),
-        ]);
-        assert!(matches!(
-            &events[0],
-            MqttEventFFI::PublishReceived {
-                stream_id: Some(12),
-                ..
-            }
-        ));
-        assert!(
-            matches!(&events[1], MqttEventFFI::MessageReceived(message) if message.stream_id == Some(12))
-        );
-    }
-
-    #[test]
-    fn connect_encodes_ffi_credentials() {
-        for version in [3, 4, 5] {
-            let engine = MqttEngineFFI::new_with_opts(authenticated_options(version)).unwrap();
-            engine.connect();
-            let bytes = engine.take_outgoing();
-            let (username, password) =
-                match MqttPacket::from_bytes_with_version(&bytes, version).unwrap() {
-                    ParseOk::Packet(MqttPacket::Connect3(packet), _) => {
-                        (packet.username, packet.password)
-                    }
-                    ParseOk::Packet(MqttPacket::Connect5(packet), _) => {
-                        (packet.username, packet.password)
-                    }
-                    packet => panic!("Expected CONNECT, got {packet:?}"),
-                };
-            assert_eq!(username.as_deref(), Some("test-user"));
-            assert_eq!(password.as_deref(), Some(b"test-password".as_slice()));
-        }
-    }
-
-    #[test]
-    fn publish_options_reach_the_wire() {
-        for version in [3, 5] {
-            let engine = MqttEngineFFI::new_with_opts(authenticated_options(version)).unwrap();
-            engine.connect();
-            engine.take_outgoing();
-            engine.handle_incoming(if version == 5 {
-                vec![0x20, 3, 0, 0, 0]
-            } else {
-                vec![0x20, 2, 0, 0]
-            });
-            let properties = if version == 5 {
-                vec![
-                    MqttPropertyFFI::UserProperty {
-                        key: "source".into(),
-                        value: "one".into(),
-                    },
-                    MqttPropertyFFI::UserProperty {
-                        key: "source".into(),
-                        value: "two".into(),
-                    },
-                    MqttPropertyFFI::CorrelationData {
-                        value: vec![0, 255],
-                    },
-                ]
-            } else {
-                vec![]
-            };
-            engine
-                .publish_with_options(
-                    "test/topic".into(),
-                    b"data".to_vec(),
-                    MqttPublishOptionsFFI {
-                        retain: true,
-                        properties: properties.clone(),
-                        ..Default::default()
-                    },
-                )
-                .unwrap();
-            let bytes = engine.take_outgoing();
-            match MqttPacket::from_bytes_with_version(&bytes, version).unwrap() {
-                ParseOk::Packet(MqttPacket::Publish5(packet), _) => {
-                    assert!(packet.retain);
-                    assert_eq!(
-                        packet.properties,
-                        properties.into_iter().map(Into::into).collect::<Vec<_>>()
-                    );
-                }
-                ParseOk::Packet(MqttPacket::Publish3(packet), _) => assert!(packet.retain),
-                other => panic!("Expected PUBLISH, got {other:?}"),
-            }
-        }
-    }
-
-    #[cfg(feature = "quic")]
-    #[test]
-    fn quic_constructor_preserves_mqtt_credentials() {
-        for version in [3, 4, 5] {
-            let engine = QuicMqttEngineFFI::new(authenticated_options(version)).unwrap();
-            let inner = engine.engine.lock().unwrap();
-            let options = inner.engine().options();
-            assert_eq!(options.username.as_deref(), Some("test-user"));
-            assert_eq!(
-                options.password.as_deref(),
-                Some(b"test-password".as_slice())
-            );
-        }
-    }
-
-    #[test]
-    fn connect_options_encode_will_properties_and_binary_password() {
-        for version in [3, 5] {
-            let mut opts = authenticated_options(version);
-            opts.password = None;
-            let properties = if version == 5 {
-                vec![
-                    MqttPropertyFFI::SessionExpiryInterval { value: 60 },
-                    MqttPropertyFFI::ReceiveMaximum { value: 10 },
-                ]
-            } else {
-                vec![]
-            };
-            let engine = MqttEngineFFI::new_with_options(MqttConnectOptionsFFI {
-                options: opts,
-                properties: properties.clone(),
-                engine_options: None,
-                binary_password: Some(vec![0, 255]),
-                will: Some(MqttWillFFI {
-                    topic: "status".into(),
-                    payload: vec![1, 255],
-                    qos: 1,
-                    retain: true,
-                    properties: if version == 5 {
-                        vec![MqttPropertyFFI::WillDelayInterval { value: 30 }]
-                    } else {
-                        vec![]
-                    },
-                }),
-            })
-            .unwrap();
-            engine.connect();
-            match MqttPacket::from_bytes_with_version(&engine.take_outgoing(), version).unwrap() {
-                ParseOk::Packet(MqttPacket::Connect5(packet), _) => {
-                    assert_eq!(packet.password, Some(vec![0, 255]));
-                    assert_eq!(
-                        packet.properties,
-                        properties.into_iter().map(Into::into).collect::<Vec<_>>()
-                    );
-                    let will = packet.will.unwrap();
-                    assert_eq!(will.will_message, vec![1, 255]);
-                    assert_eq!(will.properties.will_delay_interval, Some(30));
-                }
-                ParseOk::Packet(MqttPacket::Connect3(packet), _) => {
-                    assert_eq!(packet.password, Some(vec![0, 255]));
-                    assert_eq!(packet.will.unwrap().message, vec![1, 255]);
-                }
-                packet => panic!("Expected CONNECT, got {packet:?}"),
-            }
-        }
-        assert!(MqttEngineFFI::new(None, 0).is_err());
-        let mut options: MqttConnectOptionsFFI = authenticated_options(3).into();
-        options.properties = vec![MqttPropertyFFI::SessionExpiryInterval { value: 60 }];
-        assert!(MqttEngineFFI::new_with_options(options).is_err());
-    }
-
-    #[cfg(all(feature = "tls", feature = "quic"))]
-    #[test]
-    fn invalid_transport_configuration_returns_errors() {
-        let tls_opts = MqttTlsOptionsFFI {
-            insecure_skip_verify: true,
-            ..Default::default()
-        };
-        assert!(TlsMqttEngineFFI::new(
-            authenticated_options(5),
-            tls_opts.clone(),
-            "invalid server name".into(),
-        )
-        .is_err());
-        let quic = QuicMqttEngineFFI::new(authenticated_options(5)).unwrap();
-        assert!(matches!(
-            quic.connect("not an address".into(), "localhost".into(), tls_opts, 0),
-            Err(MqttErrorFFI::InvalidArgument { .. })
-        ));
-    }
-
-    #[test]
-    fn zero_rtt_status_event_is_not_reported_as_ffi_error() {
-        let event = MqttEvent::ZeroRttStatusChanged {
-            status: QuicZeroRttStatus::Attempted,
-        };
-
-        assert!(matches!(
-            map_event(event),
-            Some(MqttEventFFI::ZeroRttStatusChanged {
-                status: QuicZeroRttStatusFFI::Attempted
-            })
-        ));
-    }
-
-    #[test]
-    fn transport_closed_event_is_not_reported_as_ffi_error() {
-        let event = MqttEvent::TransportClosed {
-            reason: "connection closed".to_string(),
-            by_peer: true,
-            error_code: Some(0),
-        };
-
-        assert!(matches!(
-            map_event(event),
-            Some(MqttEventFFI::TransportClosed {
-                by_peer: true,
-                error_code: Some(0),
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn maps_stream_and_reconnect_events() {
-        assert!(matches!(
-            map_event(MqttEvent::StreamClosed {
-                stream_id: 7,
-                reason: "recv_finished".to_string(),
-                by_peer: true,
-            }),
-            Some(MqttEventFFI::StreamClosed {
-                stream_id: 7,
-                by_peer: true,
-                ..
-            })
-        ));
-        assert!(matches!(
-            map_event(MqttEvent::StreamReset {
-                stream_id: 8,
-                error_code: 42,
-            }),
-            Some(MqttEventFFI::StreamReset {
-                stream_id: 8,
-                error_code: 42,
-            })
-        ));
-        assert!(matches!(
-            map_event(MqttEvent::StreamStopped {
-                stream_id: 9,
-                error_code: 43,
-            }),
-            Some(MqttEventFFI::StreamStopped {
-                stream_id: 9,
-                error_code: 43,
-            })
-        ));
-        assert!(matches!(
-            map_event(MqttEvent::ReconnectNeeded),
-            Some(MqttEventFFI::ReconnectNeeded)
-        ));
-        assert!(matches!(
-            map_event(MqttEvent::ReconnectScheduled {
-                attempt: 3,
-                delay: Duration::from_millis(250),
-            }),
-            Some(MqttEventFFI::ReconnectScheduled {
-                attempt: 3,
-                delay_ms: 250,
-            })
-        ));
-    }
-}
-
 #[cfg(feature = "tls")]
 #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Object))]
 pub struct TlsMqttEngineFFI {
     engine: Mutex<TlsMqttEngine>,
+    #[cfg(feature = "durable-session")]
+    session: session::SessionAccess,
     start_time: Instant,
     events: Mutex<Vec<MqttEventFFI>>,
 }
@@ -748,16 +516,39 @@ impl TlsMqttEngineFFI {
         tls_opts: MqttTlsOptionsFFI,
         server_name: String,
     ) -> Result<Self, MqttErrorFFI> {
+        Self::new_with_runtime_options(
+            opts,
+            MqttRuntimeOptionsFFI::default(),
+            tls_opts,
+            server_name,
+        )
+    }
+
+    #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
+    pub fn new_with_runtime_options(
+        opts: MqttConnectOptionsFFI,
+        runtime: MqttRuntimeOptionsFFI,
+        tls_opts: MqttTlsOptionsFFI,
+        server_name: String,
+    ) -> Result<Self, MqttErrorFFI> {
         let config = tls_config::client_config(&tls_opts)?;
-        let engine = TlsMqttEngine::new(opts.into_core()?, &server_name, Arc::new(config))?;
+        let mut options = opts.into_core()?;
+        #[cfg(feature = "durable-session")]
+        let session = session::SessionAccess::new(runtime.peer.is_some());
+        runtime.apply(&mut options)?;
+        let engine = TlsMqttEngine::new(options, &server_name, Arc::new(config))?;
         Ok(TlsMqttEngineFFI {
             engine: Mutex::new(engine),
+            #[cfg(feature = "durable-session")]
+            session,
             start_time: Instant::now(),
             events: Mutex::new(Vec::new()),
         })
     }
 
     pub fn handle_socket_data(&self, data: Vec<u8>) -> Result<(), MqttErrorFFI> {
+        #[cfg(feature = "durable-session")]
+        self.session.started();
         self.engine
             .lock()
             .unwrap()
@@ -766,11 +557,24 @@ impl TlsMqttEngineFFI {
     }
 
     pub fn take_socket_data(&self) -> Vec<u8> {
+        #[cfg(feature = "durable-session")]
+        self.session.started();
         self.engine.lock().unwrap().take_socket_data()
     }
 
     pub fn handle_tick(&self, now_ms: u64) -> Vec<MqttEventFFI> {
-        let now = self.start_time + Duration::from_millis(now_ms);
+        #[cfg(feature = "durable-session")]
+        self.session.started();
+        let now = match runtime::instant_at(self.start_time, now_ms) {
+            Ok(now) => now,
+            Err(error) => {
+                let events = vec![MqttEventFFI::Error {
+                    message: error.to_string(),
+                }];
+                self.events.lock().unwrap().extend(events.clone());
+                return events;
+            }
+        };
         let events = self.engine.lock().unwrap().handle_tick(now);
         let mapped: Vec<_> = map_events(events);
         self.events.lock().unwrap().extend(mapped.iter().cloned());
@@ -785,6 +589,8 @@ impl TlsMqttEngineFFI {
     }
 
     pub fn connect(&self) -> Result<(), MqttErrorFFI> {
+        #[cfg(feature = "durable-session")]
+        self.session.started();
         let mut engine = self.engine.lock().unwrap();
         engine.reset_for_new_transport()?;
         self.events.lock().unwrap().clear();
@@ -1058,6 +864,8 @@ impl rustls::client::danger::ServerCertVerifier for InsecureServerCertVerifier {
 #[cfg_attr(feature = "uniffi-bindings", derive(uniffi::Object))]
 pub struct QuicMqttEngineFFI {
     engine: Mutex<QuicMqttEngine>,
+    #[cfg(feature = "durable-session")]
+    session: session::SessionAccess,
     start_time: Instant,
     events: Mutex<Vec<MqttEventFFI>>,
 }
@@ -1072,9 +880,23 @@ impl QuicMqttEngineFFI {
 
     #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
     pub fn new_with_options(opts: MqttConnectOptionsFFI) -> Result<Self, MqttErrorFFI> {
-        let engine = QuicMqttEngine::new(opts.into_core()?)?;
+        Self::new_with_runtime_options(opts, MqttRuntimeOptionsFFI::default())
+    }
+
+    #[cfg_attr(feature = "uniffi-bindings", uniffi::constructor)]
+    pub fn new_with_runtime_options(
+        opts: MqttConnectOptionsFFI,
+        runtime: MqttRuntimeOptionsFFI,
+    ) -> Result<Self, MqttErrorFFI> {
+        let mut options = opts.into_core()?;
+        #[cfg(feature = "durable-session")]
+        let session = session::SessionAccess::new(runtime.peer.is_some());
+        runtime.apply(&mut options)?;
+        let engine = QuicMqttEngine::new(options)?;
         Ok(QuicMqttEngineFFI {
             engine: Mutex::new(engine),
+            #[cfg(feature = "durable-session")]
+            session,
             start_time: Instant::now(),
             events: Mutex::new(Vec::new()),
         })
@@ -1087,16 +909,22 @@ impl QuicMqttEngineFFI {
         tls_opts: MqttTlsOptionsFFI,
         now_ms: u64,
     ) -> Result<(), MqttErrorFFI> {
+        #[cfg(feature = "durable-session")]
+        self.session.started();
         let addr: SocketAddr = server_addr.parse().map_err(|e: std::net::AddrParseError| {
             MqttErrorFFI::InvalidArgument {
                 detail: e.to_string(),
             }
         })?;
-        let now = self.start_time + Duration::from_millis(now_ms);
+        let now = runtime::instant_at(self.start_time, now_ms)?;
         let config = tls_config::client_config(&tls_opts)?;
-        self.engine
-            .lock()
-            .unwrap()
+        let mut engine = self.engine.lock().unwrap();
+        if !engine.disconnect_complete() {
+            return Err(MqttErrorFFI::Engine {
+                detail: "QUIC transport is already active; close it before connecting".into(),
+            });
+        }
+        engine
             .connect(addr, &server_name, config, now)
             .map_err(Into::into)
     }
@@ -1111,17 +939,21 @@ impl QuicMqttEngineFFI {
         remote_addr: String,
         now_ms: u64,
     ) -> Result<(), MqttErrorFFI> {
+        #[cfg(feature = "durable-session")]
+        self.session.started();
         let addr: SocketAddr = remote_addr.parse().map_err(|e: std::net::AddrParseError| {
             MqttErrorFFI::InvalidArgument {
                 detail: e.to_string(),
             }
         })?;
-        let now = self.start_time + Duration::from_millis(now_ms);
+        let now = runtime::instant_at(self.start_time, now_ms)?;
         self.engine.lock().unwrap().handle_datagram(data, addr, now);
         Ok(())
     }
 
     pub fn take_outgoing_datagrams(&self) -> Vec<MqttDatagramFFI> {
+        #[cfg(feature = "durable-session")]
+        self.session.started();
         let datagrams = self.engine.lock().unwrap().take_outgoing_datagrams();
         datagrams
             .into_iter()
@@ -1133,7 +965,18 @@ impl QuicMqttEngineFFI {
     }
 
     pub fn handle_tick(&self, now_ms: u64) -> Vec<MqttEventFFI> {
-        let now = self.start_time + Duration::from_millis(now_ms);
+        #[cfg(feature = "durable-session")]
+        self.session.started();
+        let now = match runtime::instant_at(self.start_time, now_ms) {
+            Ok(now) => now,
+            Err(error) => {
+                let events = vec![MqttEventFFI::Error {
+                    message: error.to_string(),
+                }];
+                self.events.lock().unwrap().extend(events.clone());
+                return events;
+            }
+        };
         let mut engine = self.engine.lock().unwrap();
         let events = engine.handle_tick(now);
         let mapped: Vec<_> = map_events(events);
@@ -1830,8 +1673,8 @@ pub unsafe extern "C" fn mqtt_tls_engine_is_connected(ptr: *mut TlsMqttEngineFFI
 ///
 /// This function is unsafe because it dereferences a raw pointer to `MqttEngineFFI`
 /// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
+#[cfg(feature = "json")]
 #[no_mangle]
-#[cfg(feature = "uniffi-bindings")]
 pub unsafe extern "C" fn mqtt_engine_take_events(ptr: *mut MqttEngineFFI) -> *mut c_char {
     if let Some(engine) = ptr.as_ref() {
         let events = engine.take_events();
@@ -1846,8 +1689,8 @@ pub unsafe extern "C" fn mqtt_engine_take_events(ptr: *mut MqttEngineFFI) -> *mu
 ///
 /// This function is unsafe because it dereferences a raw pointer to `TlsMqttEngineFFI`
 /// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
+#[cfg(feature = "json")]
 #[no_mangle]
-#[cfg(feature = "uniffi-bindings")]
 pub unsafe extern "C" fn mqtt_tls_engine_take_events(ptr: *mut TlsMqttEngineFFI) -> *mut c_char {
     if let Some(engine) = ptr.as_ref() {
         let events = engine.take_events();
@@ -2086,8 +1929,8 @@ pub unsafe extern "C" fn mqtt_quic_engine_handle_tick(ptr: *mut QuicMqttEngineFF
 ///
 /// This function is unsafe because it dereferences a raw pointer to `QuicMqttEngineFFI`
 /// and returns an allocated `c_char` pointer that must be freed using `mqtt_engine_free_string`.
+#[cfg(feature = "json")]
 #[no_mangle]
-#[cfg(feature = "uniffi-bindings")]
 #[cfg(feature = "quic")]
 pub unsafe extern "C" fn mqtt_quic_engine_take_events(ptr: *mut QuicMqttEngineFFI) -> *mut c_char {
     if let Some(engine) = ptr.as_ref() {
@@ -2303,6 +2146,7 @@ pub unsafe extern "C" fn mqtt_event_list_get_tag(ptr: *const MqttEventListFFI, i
                 MqttEventFFI::PubRelReceived { .. } => 16,
                 MqttEventFFI::TransportClosed { .. } => 17,
                 MqttEventFFI::ZeroRttStatusChanged { .. } => 18,
+                MqttEventFFI::OperationFailed { .. } => 19,
             }
         } else {
             0

@@ -114,6 +114,8 @@ func handleEvent(_ event: MqttEventFfi, engine: MqttEngineFfi, fd: Int32,
         print("✅ Publish ack PID \(r.packetId.map(String.init) ?? "none")")
     case .disconnected(let reasonCode, _):
         print("⚠️ Disconnected. reasonCode=\(String(describing: reasonCode))")
+    case .operationFailed(let operation, let packetId, let kind, let detail, let timeoutMs):
+        print("Operation \(operation) (packet \(String(describing: packetId))) failed: \(kind), \(detail), timeout=\(String(describing: timeoutMs))")
     case .error(let message):
         print("❌ Error: \(message)")
     case .reconnectNeeded:
@@ -155,7 +157,7 @@ print("Engine created.")
 let engineStartMs = UInt64(Date().timeIntervalSince1970 * 1000)
 
 // Trigger MQTT CONNECT packet generation
-engine.connect()
+try engine.connectChecked()
 
 // Open TCP socket
 print("Connecting to TCP broker at \(brokerHost):\(brokerPort)...")

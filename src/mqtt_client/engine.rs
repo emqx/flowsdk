@@ -47,6 +47,7 @@ use super::inflight::InflightQueue;
 use super::opts::MqttClientOptions;
 
 mod protocol_state;
+#[cfg(feature = "durable-session")]
 mod session_state;
 use protocol_state::ProtocolState;
 

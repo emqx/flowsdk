@@ -11,6 +11,8 @@ impl QuicMqttEngineFFI {
         options: QuicZeroRttOptionsFFI,
         now_ms: u64,
     ) -> Result<(), MqttErrorFFI> {
+        #[cfg(feature = "durable-session")]
+        self.session.started();
         if options.session_cache_size == 0 {
             return Err(properties::invalid("Session cache size must be positive"));
         }
@@ -18,9 +20,13 @@ impl QuicMqttEngineFFI {
             .parse()
             .map_err(|e: std::net::AddrParseError| properties::invalid(e.to_string()))?;
         let config = tls_config::client_config(&tls_opts)?;
-        self.engine
-            .lock()
-            .unwrap()
+        let mut engine = self.engine.lock().unwrap();
+        if !engine.disconnect_complete() {
+            return Err(MqttErrorFFI::Engine {
+                detail: "QUIC transport is already active; close it before connecting".into(),
+            });
+        }
+        engine
             .connect_with_zero_rtt(
                 addr,
                 &server_name,
@@ -29,7 +35,7 @@ impl QuicMqttEngineFFI {
                     session_cache_size: options.session_cache_size as usize,
                     replay_on_reject: options.replay_on_reject,
                 },
-                self.start_time + Duration::from_millis(now_ms),
+                runtime::instant_at(self.start_time, now_ms)?,
             )
             .map_err(Into::into)
     }
@@ -43,10 +49,12 @@ impl QuicMqttEngineFFI {
     }
 
     pub fn reconnect(&self, now_ms: u64) -> Result<(), MqttErrorFFI> {
+        #[cfg(feature = "durable-session")]
+        self.session.started();
         self.engine
             .lock()
             .unwrap()
-            .reconnect(self.start_time + Duration::from_millis(now_ms))
+            .reconnect(runtime::instant_at(self.start_time, now_ms)?)
             .map_err(Into::into)
     }
 
@@ -158,5 +166,22 @@ impl QuicMqttEngineFFI {
         engine
             .unsubscribe_on(stream_id, command)
             .map_err(Into::into)
+    }
+    pub fn subscribe_on_control(
+        &self,
+        options: MqttSubscribeOptionsFFI,
+    ) -> Result<u16, MqttErrorFFI> {
+        let mut engine = self.engine.lock().unwrap();
+        let command = options.command(engine.engine().mqtt_version())?;
+        engine.subscribe_on_control(command).map_err(Into::into)
+    }
+
+    pub fn unsubscribe_on_control(
+        &self,
+        options: MqttUnsubscribeOptionsFFI,
+    ) -> Result<u16, MqttErrorFFI> {
+        let mut engine = self.engine.lock().unwrap();
+        let command = options.command(engine.engine().mqtt_version())?;
+        engine.unsubscribe_on_control(command).map_err(Into::into)
     }
 }

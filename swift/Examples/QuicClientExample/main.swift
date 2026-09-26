@@ -191,6 +191,8 @@ while nowMs(since: engineStartMs) < runDurationMs {
             print("✅ Publish ack PID \(r.packetId.map(String.init) ?? "none")")
         case .disconnected(let reasonCode, _):
             print("⚠️ Disconnected. reasonCode=\(String(describing: reasonCode))")
+        case .operationFailed(let operation, let packetId, let kind, let detail, let timeoutMs):
+            print("Operation \(operation) (packet \(String(describing: packetId))) failed: \(kind), \(detail), timeout=\(String(describing: timeoutMs))")
         case .error(let message):
             print("❌ Error: \(message)")
         case .reconnectNeeded:

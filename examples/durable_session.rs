@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 //! Run again with the same directory to resume the MQTT session.
-//! cargo run --example durable_session -- localhost:1883 /tmp/flowsdk-session
+//! cargo run --features durable-session --example durable_session -- localhost:1883 /tmp/flowsdk-session
 //! This local TCP example publishes only; incoming application work would need
 //! a durable inbox committed with the session checkpoint before delivery/ACK.
 

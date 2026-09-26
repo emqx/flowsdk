@@ -46,7 +46,7 @@ fun main() = runBlocking {
     println("Connecting to TCP broker at $BROKER_HOST:$BROKER_PORT...")
 
     // 4. Trigger MQTT connect (produces outgoing CONNECT packet)
-    engine.connect()
+    engine.connectChecked()
     
     // 5. Event loop using coroutines
     val recvBuf = ByteBuffer.allocateDirect(65536)
@@ -83,7 +83,8 @@ fun main() = runBlocking {
                         recvBuf.flip()
                         val data = ByteArray(recvBuf.limit())
                         recvBuf.get(data)
-                        val incomingEvents = engine.handleIncoming(data)
+                        engine.handleIncoming(data)
+                        val incomingEvents = engine.takeEvents()
                         
                         // Process events from handleIncoming immediately
                         for (event in incomingEvents) {
@@ -113,6 +114,7 @@ fun main() = runBlocking {
                                 }
                                 is MqttEventFfi.Published -> println("✓ Publish Ack: PID ${event.v1.packetId}")
                                 is MqttEventFfi.Disconnected -> println("✗ Disconnected. Reason: ${event.reasonCode}")
+                                is MqttEventFfi.OperationFailed -> println("Operation ${event.operation} (${event.packetId}) failed: ${event.detail}")
                                 is MqttEventFfi.Error -> println("✗ Error: ${event.message}")
                                 else -> Unit
                             }
@@ -127,7 +129,8 @@ fun main() = runBlocking {
 
             // Handle tick
             val nowMs = (System.currentTimeMillis() - startTime).toULong()
-            val events = engine.handleTick(nowMs)
+            engine.handleTick(nowMs)
+            val events = engine.takeEvents()
             
             for (event in events) {
                 when (event) {
@@ -159,6 +162,7 @@ fun main() = runBlocking {
                     is MqttEventFfi.Disconnected -> {
                         println("✗ Disconnected. Reason: ${event.reasonCode}")
                     }
+                    is MqttEventFfi.OperationFailed -> println("Operation ${event.operation} (${event.packetId}) failed: ${event.detail}")
                     is MqttEventFfi.Error -> println("✗ Error: ${event.message}")
                     else -> Unit
                 }
