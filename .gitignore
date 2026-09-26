@@ -1,5 +1,6 @@
 /target
 
+.ext_res
 # place MQTT specs
 docs/source
 lcov*.info
