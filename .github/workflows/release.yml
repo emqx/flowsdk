@@ -249,7 +249,8 @@ jobs:
         CC_aarch64_unknown_linux_musl: musl-gcc
       run: |
         cargo build --release --package mqtt-grpc-proxy --target ${{ matrix.target }}
-        cargo build --release --package flowsdk --examples --no-default-features --features quic,rustls-tls --target ${{ matrix.target }}
+        # Packaging includes every example, including those behind feature gates.
+        cargo build --release --package flowsdk --examples --no-default-features --features quic,rustls-tls,durable-session --target ${{ matrix.target }}
         cargo build --release --package mqtt_ring_bench --features quic --target ${{ matrix.target }}
 
     - name: Create release package (Unix)
