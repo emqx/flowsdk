@@ -53,6 +53,7 @@ Both demonstrate QoS 1 and 2 delivery and graceful disconnect. Append `1` or `2`
 - [Sans-I/O guide](docs/NO_IO_CLIENT.md) — integrate the engine with your own networking and event loop.
 - [Python guide](python/package/README.md) — async clients and direct engine access.
 - [Protocol validation](docs/PROTOCOL_COMPLIANCE.md) and [remaining work](docs/TODO.md) — current scope and limitations.
+- [Microbenchmarks](docs/BENCHMARKS.md) 
 - [Contributing](docs/CONTRIBUTING.md) and [testing](docs/TEST.md).
 
 ## License
