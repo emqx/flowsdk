@@ -30,6 +30,10 @@ cargo clean                            # Main library
 cd mqtt_grpc_duality && cargo clean    # gRPC Proxy workspace
 ```
 
+## Microbenchmarks
+
+Run `cargo +stable bench -p flowsdk --bench parser` for parser measurements.
+
 ## Static compile QUIC example
 ```bash
 # Compile

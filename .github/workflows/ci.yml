@@ -407,23 +407,26 @@ jobs:
         token: ${{ secrets.CODECOV_TOKEN }}
         verbose: true
 
-  benchmarks:
-    name: Performance Benchmarks
-    runs-on: ubuntu-latest
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
-    
+  benchmark-smoke:
+    name: Benchmark Smoke (${{ matrix.os }}, ${{ matrix.features }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        features: [default, core]
+        include:
+          - features: default
+            cargo_args: ''
+          - features: core
+            cargo_args: '--no-default-features --features strict-protocol-compliance'
+
     steps:
     - name: Checkout code
       uses: actions/checkout@v4
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8
-
-    - name: Install protoc
-      uses: arduino/setup-protoc@v3
-      with:
-        version: '25.x'
-        repo-token: ${{ secrets.GITHUB_TOKEN }}
+      uses: dtolnay/rust-toolchain@stable
 
     - name: Cache benchmark dependencies
       uses: actions/cache@v4
@@ -431,11 +434,67 @@ jobs:
         path: |
           ~/.cargo/registry
           ~/.cargo/git
-          target
-        key: ${{ runner.os }}-bench-${{ hashFiles('**/Cargo.lock') }}
+          target/release
+        key: ${{ runner.os }}-${{ runner.arch }}-bench-smoke-${{ matrix.features }}-${{ hashFiles('**/Cargo.toml') }}
+
+    - name: Compile benchmarks
+      run: cargo bench -p flowsdk --bench codec --bench parser --bench leveled_parser --bench queues --bench engine ${{ matrix.cargo_args }} --no-run
+
+    - name: Smoke-test benchmarks
+      run: cargo bench -p flowsdk --bench codec --bench parser --bench leveled_parser --bench queues --bench engine ${{ matrix.cargo_args }} -- --test
+
+  benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust
+      uses: dtolnay/rust-toolchain@stable
+
+    - name: Cache benchmark dependencies
+      uses: actions/cache@v4
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target/release
+        key: ${{ runner.os }}-${{ runner.arch }}-bench-${{ hashFiles('**/Cargo.toml') }}
+
+    - name: Compile benchmarks
+      run: cargo bench -p flowsdk --bench codec --bench parser --bench leveled_parser --bench queues --bench engine --no-run
+
+    - name: Record benchmark environment
+      shell: bash
+      run: |
+        mkdir -p target/benchmark-metadata
+        cp Cargo.lock target/benchmark-metadata/Cargo.lock
+        {
+          printf 'commit=%s\nfeatures=default\nprofile=bench\nRUSTFLAGS=%s\n' "$GITHUB_SHA" "${RUSTFLAGS-}"
+          rustc -Vv
+          cargo -V
+          uname -a
+          lscpu
+        } > target/benchmark-metadata/environment.txt
 
     - name: Run benchmarks
-      run: cargo bench --workspace
+      shell: bash
+      run: |
+        cargo bench -p flowsdk --bench codec --bench parser --bench leveled_parser --bench queues --bench engine -- --save-baseline "$GITHUB_SHA" 2>&1 | tee target/benchmark-metadata/run.log
+
+    - name: Upload benchmark reports
+      if: always()
+      uses: actions/upload-artifact@v4
+      with:
+        name: benchmarks-${{ github.sha }}
+        path: |
+          target/criterion/
+          target/benchmark-metadata/
+        retention-days: 30
 
   build-binaries:
     name: Build Release Binaries
