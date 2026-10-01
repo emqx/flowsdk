@@ -90,7 +90,7 @@
 <a href=#90 id=90 data-nosnippet>90</a>
 <a href=#91 id=91 data-nosnippet>91</a><span class="kw">pub fn </span>parse_topic_name(buffer: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="prelude-ty">Result</span>&lt;ParseOk, ParseError&gt; {
 <a href=#92 id=92 data-nosnippet>92</a>    <span class="kw">let </span>(res, consumed) = parse_utf8_string(buffer)<span class="question-mark">?</span>;
-<a href=#93 id=93 data-nosnippet>93</a>    <span class="prelude-val">Ok</span>(ParseOk::TopicName(res.to_string(), consumed))
+<a href=#93 id=93 data-nosnippet>93</a>    <span class="prelude-val">Ok</span>(ParseOk::TopicName(res, consumed))
 <a href=#94 id=94 data-nosnippet>94</a>}
 <a href=#95 id=95 data-nosnippet>95</a>
 <a href=#96 id=96 data-nosnippet>96</a><span class="kw">pub fn </span>parse_packet_id(buffer: <span class="kw-2">&amp;</span>[u8]) -&gt; <span class="prelude-ty">Result</span>&lt;(u16, usize), ParseError&gt; {
