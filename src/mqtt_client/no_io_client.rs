@@ -20,87 +20,27 @@
 //! 2. **Timers**: Calling `handle_tick()` at appropriate intervals
 //! 3. **Event Loop**: Coordinating between network, timers, and protocol
 //!
-//! # Example: Basic Usage
+//! # Portable usage
 //!
-//! ```no_run
-//! use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions, PublishCommand};
-//! use std::time::Instant;
+//! ```
+//! use flowsdk::mqtt_client::{MqttClientOptions, PortableNoIoMqttClient};
+//! use flowsdk::time::Timestamp;
 //!
-//! // Create client
-//! let options = MqttClientOptions::builder()
-//!     .peer("broker.example.com:1883")
-//!     .client_id("my_client")
-//!     .keep_alive(60)
-//!     .build();
-//!
-//! let mut client = NoIoMqttClient::new(options);
-//!
-//! // Initiate connection
-//! client.connect().unwrap();
-//!
-//! // Get bytes to send to network
-//! let outgoing = client.take_outgoing();
-//! // ... write `outgoing` to your socket ...
-//!
-//! // Feed incoming bytes from network
-//! let incoming_bytes = vec![/* bytes from socket */];
-//! let events = client.handle_incoming(&incoming_bytes);
-//!
-//! // Process events
-//! for event in events {
-//!     match event {
-//!         flowsdk::mqtt_client::MqttEvent::Connected(result) => {
-//!             println!("Connected! Session present: {}", result.session_present);
-//!         }
-//!         flowsdk::mqtt_client::MqttEvent::MessageReceived(msg) => {
-//!             println!("Received: {:?}", msg);
-//!         }
-//!         _ => {}
-//!     }
-//! }
-//!
-//! // Publish a message
-//! let cmd = PublishCommand::simple("sensors/temp", b"23.5".to_vec(), 1, false);
-//! client.publish(cmd).unwrap();
-//!
-//! // Get bytes to send
-//! let outgoing = client.take_outgoing();
-//! // ... write to socket ...
+//! let now = Timestamp::try_from_millis(12_345).unwrap();
+//! let mut client = PortableNoIoMqttClient::try_new_at(MqttClientOptions::default(), now).unwrap();
+//! client.connect_at(now).unwrap();
+//! let outgoing = client.take_outgoing_at(now).unwrap();
+//! assert_eq!(outgoing[0], 0x10);
+//! // Send outgoing bytes through an application-owned transport. Feed responses
+//! // through handle_incoming_at(bytes, now) and timers through handle_tick_at(now).
 //! ```
 //!
-//! # Example: Event Loop Integration
-//!
-//! ```no_run
-//! use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-//! use std::time::Instant;
-//!
-//! fn run_event_loop(mut client: NoIoMqttClient) {
-//!     loop {
-//!         // 1. Check if we need to handle protocol timers
-//!         if let Some(next_tick) = client.next_tick_at() {
-//!             let now = Instant::now();
-//!             if now >= next_tick {
-//!                 let events = client.handle_tick(now);
-//!                 // Process events...
-//!             }
-//!         }
-//!
-//!         // 2. Read from socket (pseudo-code)
-//!         // let bytes = socket.read()?;
-//!         // let events = client.handle_incoming(&bytes);
-//!         // Process events...
-//!
-//!         // 3. Write to socket
-//!         let outgoing = client.take_outgoing();
-//!         if !outgoing.is_empty() {
-//!             // socket.write_all(&outgoing)?;
-//!         }
-//!
-//!         // 4. Sleep until next event
-//!         // (network data, timer, or user command)
-//!     }
-//! }
-//! ```
+//! Use one monotonic origin for every operation. Equal timestamps are valid;
+//! backward time and deadline overflow are rejected before changing state.
+//! The application supplies allocation, networking and scheduling. With `std`,
+//! the existing `NoIoMqttClient::new` and host-clock methods are also available.
+
+use alloc::vec::Vec;
 
 use crate::mqtt_client::commands::{PublishCommand, SubscribeCommand, UnsubscribeCommand};
 use crate::mqtt_client::engine::{MqttEngine, MqttEvent};
@@ -109,6 +49,8 @@ use crate::mqtt_client::opts::MqttClientOptions;
 use crate::mqtt_serde::mqttv5::common::properties::Property;
 #[cfg(feature = "durable-session")]
 use crate::mqtt_session::ClientSessionState;
+use crate::time::{DefaultTime, TimePoint, Timestamp};
+#[cfg(feature = "std")]
 use std::time::Instant;
 
 /// A pure Sans-I/O MQTT client.
@@ -116,9 +58,9 @@ use std::time::Instant;
 /// This client handles all MQTT protocol logic without performing any I/O operations.
 /// You are responsible for:
 ///
-/// - Reading bytes from the network and feeding them via [`handle_incoming()`](Self::handle_incoming)
-/// - Writing bytes from [`take_outgoing()`](Self::take_outgoing) to the network
-/// - Calling [`handle_tick()`](Self::handle_tick) at appropriate intervals for keep-alive and retransmissions
+/// - Reading bytes from the network and feeding them via [`handle_incoming_at()`](Self::handle_incoming_at)
+/// - Writing bytes from [`take_outgoing_at()`](Self::take_outgoing_at) to the network
+/// - Calling [`handle_tick_at()`](Self::handle_tick_at) at appropriate intervals for keep-alive and retransmissions
 ///
 /// # Thread Safety
 ///
@@ -127,48 +69,35 @@ use std::time::Instant;
 /// # Example
 ///
 /// ```no_run
-/// use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
+/// use flowsdk::mqtt_client::{PortableNoIoMqttClient as NoIoMqttClient, MqttClientOptions};
 ///
 /// let options = MqttClientOptions::builder()
 ///     .peer("broker.example.com:1883")
 ///     .client_id("my_client")
 ///     .build();
 ///
-/// let mut client = NoIoMqttClient::new(options);
-/// client.connect().unwrap();
+/// let mut client = NoIoMqttClient::new_at(options, flowsdk::time::Timestamp::ZERO);
+/// client.connect_at(flowsdk::time::Timestamp::ZERO).unwrap();
 ///
 /// // Get CONNECT packet bytes
-/// let bytes = client.take_outgoing();
+/// let bytes = client.take_outgoing_at(flowsdk::time::Timestamp::ZERO).unwrap();
 /// // ... send `bytes` to your socket ...
 /// ```
-pub struct NoIoMqttClient {
-    engine: MqttEngine,
+pub struct NoIoMqttClient<T: TimePoint = DefaultTime> {
+    engine: MqttEngine<T>,
 }
 
-impl NoIoMqttClient {
-    /// Create a new Sans-I/O MQTT client with the given options.
-    ///
-    /// # Arguments
-    ///
-    /// * `options` - MQTT client configuration
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-    ///
-    /// let options = MqttClientOptions::builder()
-    ///     .peer("broker.example.com:1883")
-    ///     .client_id("my_client")
-    ///     .keep_alive(60)
-    ///     .clean_start(true)
-    ///     .build();
-    ///
-    /// let client = NoIoMqttClient::new(options);
-    /// ```
-    pub fn new(options: MqttClientOptions) -> Self {
+#[cfg(feature = "std")]
+mod host;
+
+/// No-I/O client with an explicit clock on every platform.
+pub type PortableNoIoMqttClient = NoIoMqttClient<Timestamp>;
+
+impl<T: TimePoint> NoIoMqttClient<T> {
+    /// Construct a client with a caller-supplied monotonic origin.
+    pub fn new_at(options: MqttClientOptions, now: T) -> Self {
         Self {
-            engine: MqttEngine::new(options),
+            engine: MqttEngine::new_at(options, now),
         }
     }
 
@@ -189,132 +118,53 @@ impl NoIoMqttClient {
         self.engine.restore_session_state(state)
     }
 
-    // ========================================================================
-    // I/O Interface
-    // ========================================================================
-
-    /// Process incoming bytes from the network.
-    ///
-    /// Feed raw bytes received from your socket into this method. The client will
-    /// parse MQTT packets and return a list of events.
-    ///
-    /// # Arguments
-    ///
-    /// * `data` - Raw bytes from the network
-    ///
-    /// # Returns
-    ///
-    /// A vector of [`MqttEvent`]s generated from the incoming data.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions, MqttEvent};
-    /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// // Bytes received from socket
-    /// let incoming_bytes = vec![0x20, 0x02, 0x00, 0x00]; // CONNACK
-    ///
-    /// let events = client.handle_incoming(&incoming_bytes);
-    /// for event in events {
-    ///     match event {
-    ///         MqttEvent::Connected(result) => {
-    ///             println!("Connected! Reason code: {}", result.reason_code);
-    ///         }
-    ///         _ => {}
-    ///     }
-    /// }
-    /// ```
-    pub fn handle_incoming(&mut self, data: &[u8]) -> Vec<MqttEvent> {
-        self.engine.handle_incoming(data)
+    /// Check configuration and timestamp before constructing the client.
+    pub fn try_new_at(options: MqttClientOptions, now: T) -> Result<Self, MqttClientError> {
+        Ok(Self {
+            engine: MqttEngine::try_new_at(options, now)?,
+        })
+    }
+    /// Run `handle_incoming` with caller-supplied monotonic time.
+    pub fn handle_incoming_at(
+        &mut self,
+        data: &[u8],
+        now: T,
+    ) -> Result<Vec<MqttEvent>, MqttClientError> {
+        self.engine.handle_incoming_at(data, now)
+    }
+    /// Run `take_outgoing` with caller-supplied monotonic time.
+    pub fn take_outgoing_at(&mut self, now: T) -> Result<Vec<u8>, MqttClientError> {
+        self.engine.take_outgoing_at(now)
+    }
+    /// Run `handle_tick` with caller-supplied monotonic time.
+    pub fn handle_tick_at(&mut self, now: T) -> Result<Vec<MqttEvent>, MqttClientError> {
+        self.engine.handle_tick_at(now)
     }
 
-    /// Take outgoing bytes to be written to the network.
-    ///
-    /// Call this method after any operation that might generate outgoing packets
-    /// (connect, publish, subscribe, etc.) and write the returned bytes to your socket.
-    ///
-    /// # Returns
-    ///
-    /// A vector of bytes to send to the network. Returns an empty vector if there's
-    /// nothing to send.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-    /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// client.connect().unwrap();
-    ///
-    /// let outgoing = client.take_outgoing();
-    /// if !outgoing.is_empty() {
-    ///     // Write to your socket
-    ///     // socket.write_all(&outgoing)?;
-    /// }
-    /// ```
-    pub fn take_outgoing(&mut self) -> Vec<u8> {
-        self.engine.take_outgoing()
-    }
-
-    /// Process protocol timer ticks for keep-alive and retransmissions.
-    ///
-    /// Call this method periodically based on the time returned by [`next_tick_at()`](Self::next_tick_at).
-    /// This handles:
-    ///
-    /// - Keep-alive PING packets
-    /// - Connection timeout detection
-    /// - Opt-in operation deadlines and MQTT 3.1.1 retransmissions
-    ///
-    /// # Arguments
-    ///
-    /// * `now` - Current time
-    ///
-    /// # Returns
-    ///
-    /// A vector of [`MqttEvent`]s generated (e.g., `ReconnectNeeded` when backoff expires).
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-    /// # use std::time::Instant;
-    /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// let now = Instant::now();
-    ///
-    /// if let Some(next_tick) = client.next_tick_at() {
-    ///     if now >= next_tick {
-    ///         let events = client.handle_tick(now);
-    ///         // Process events...
-    ///     }
-    /// }
-    /// ```
-    pub fn handle_tick(&mut self, now: Instant) -> Vec<MqttEvent> {
-        self.engine.handle_tick(now)
-    }
-
-    /// Get the next time when [`handle_tick()`](Self::handle_tick) should be called.
+    /// Get the next time when [`handle_tick_at()`](Self::handle_tick_at) should be called.
     ///
     /// Use this to optimize your event loop by only waking up when necessary.
     /// Returns `None` if no timer is needed, including during disconnection.
     ///
     /// # Returns
     ///
-    /// The next `Instant` when a protocol timer needs to fire, or `None`.
+    /// The next timestamp when a protocol timer needs to fire, or `None`.
     ///
     /// # Example
     ///
     /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-    /// # use std::time::{Instant, Duration};
-    /// # let client = NoIoMqttClient::new(MqttClientOptions::default());
+    /// # use flowsdk::mqtt_client::{PortableNoIoMqttClient as NoIoMqttClient, MqttClientOptions};
+    /// # use flowsdk::time::Timestamp;
+    /// # let client = NoIoMqttClient::new_at(MqttClientOptions::default(), flowsdk::time::Timestamp::ZERO);
     /// if let Some(next_tick) = client.next_tick_at() {
-    ///     let now = Instant::now();
+    ///     let now = Timestamp::ZERO;
     ///     if next_tick > now {
-    ///         let sleep_duration = next_tick - now;
+    ///         let sleep_duration = next_tick.saturating_duration_since(now);
     ///         // Sleep for `sleep_duration` or until network data arrives
     ///     }
     /// }
     /// ```
-    pub fn next_tick_at(&self) -> Option<Instant> {
+    pub fn next_tick_at(&self) -> Option<T> {
         self.engine.next_tick_at()
     }
 
@@ -338,249 +188,106 @@ impl NoIoMqttClient {
     pub fn parse_level(&self) -> crate::mqtt_serde::ParseLevel {
         self.engine.parse_level()
     }
-
-    // ========================================================================
-    // MQTT Operations
-    // ========================================================================
-
-    /// Initiate a connection to the MQTT broker.
-    ///
-    /// This enqueues a CONNECT packet. Call [`take_outgoing()`](Self::take_outgoing)
-    /// to get the bytes to send to the network.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-    /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// client.connect().unwrap();
-    /// let bytes = client.take_outgoing();
-    /// // Send `bytes` to broker...
-    /// ```
-    pub fn connect(&mut self) -> Result<(), MqttClientError> {
-        self.engine.connect()
+    /// Run `connect` with caller-supplied monotonic time.
+    pub fn connect_at(&mut self, now: T) -> Result<(), MqttClientError> {
+        self.engine.connect_at(now)
     }
-
-    /// Publish a message to a topic.
-    ///
-    /// # Arguments
-    ///
-    /// * `command` - Publish command with topic, payload, QoS, etc.
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(Some(packet_id))` for QoS 1/2 messages
-    /// - `Ok(None)` for QoS 0 messages
-    /// - `Err(...)` if not connected or packet ID allocation fails
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions, PublishCommand};
-    /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// let cmd = PublishCommand::builder()
-    ///     .topic("sensors/temperature")
-    ///     .payload(b"23.5")
-    ///     .qos(1)
-    ///     .build()
-    ///     .unwrap();
-    ///
-    /// match client.publish(cmd) {
-    ///     Ok(Some(packet_id)) => println!("Published with ID: {}", packet_id),
-    ///     Ok(None) => println!("Published (QoS 0)"),
-    ///     Err(e) => eprintln!("Publish failed: {}", e),
-    /// }
-    ///
-    /// let bytes = client.take_outgoing();
-    /// // Send `bytes` to broker...
-    /// ```
-    pub fn publish(&mut self, command: PublishCommand) -> Result<Option<u16>, MqttClientError> {
-        self.engine.publish(command)
+    /// Run `publish` with caller-supplied monotonic time.
+    pub fn publish_at(
+        &mut self,
+        command: PublishCommand,
+        now: T,
+    ) -> Result<Option<u16>, MqttClientError> {
+        self.engine.publish_at(command, now)
     }
-
-    /// Subscribe to one or more topics.
-    ///
-    /// # Arguments
-    ///
-    /// * `command` - Subscribe command with topics and QoS levels
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(packet_id)` on success
-    /// - `Err(...)` if not connected or packet ID allocation fails
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions, SubscribeCommand};
-    /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// let cmd = SubscribeCommand::builder()
-    ///     .add_topic("sensors/+/temperature", 1)
-    ///     .add_topic("alerts/#", 2)
-    ///     .build()
-    ///     .unwrap();
-    ///
-    /// match client.subscribe(cmd) {
-    ///     Ok(packet_id) => println!("Subscribe packet ID: {}", packet_id),
-    ///     Err(e) => eprintln!("Subscribe failed: {}", e),
-    /// }
-    ///
-    /// let bytes = client.take_outgoing();
-    /// // Send `bytes` to broker...
-    /// ```
-    pub fn subscribe(&mut self, command: SubscribeCommand) -> Result<u16, MqttClientError> {
-        self.engine.subscribe(command)
+    /// Run `subscribe` with caller-supplied monotonic time.
+    pub fn subscribe_at(
+        &mut self,
+        command: SubscribeCommand,
+        now: T,
+    ) -> Result<u16, MqttClientError> {
+        self.engine.subscribe_at(command, now)
     }
-
-    /// Unsubscribe from one or more topics.
-    ///
-    /// # Arguments
-    ///
-    /// * `command` - Unsubscribe command with topics
-    ///
-    /// # Returns
-    ///
-    /// - `Ok(packet_id)` on success
-    /// - `Err(...)` if not connected or packet ID allocation fails
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions, UnsubscribeCommand};
-    /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// let cmd = UnsubscribeCommand::from_topics(vec!["sensors/+/temperature".to_string()]);
-    ///
-    /// match client.unsubscribe(cmd) {
-    ///     Ok(packet_id) => println!("Unsubscribe packet ID: {}", packet_id),
-    ///     Err(e) => eprintln!("Unsubscribe failed: {}", e),
-    /// }
-    ///
-    /// let bytes = client.take_outgoing();
-    /// // Send `bytes` to broker...
-    /// ```
-    pub fn unsubscribe(&mut self, command: UnsubscribeCommand) -> Result<u16, MqttClientError> {
-        self.engine.unsubscribe(command)
+    /// Run `unsubscribe` with caller-supplied monotonic time.
+    pub fn unsubscribe_at(
+        &mut self,
+        command: UnsubscribeCommand,
+        now: T,
+    ) -> Result<u16, MqttClientError> {
+        self.engine.unsubscribe_at(command, now)
     }
-
-    /// Send a PINGREQ packet to the broker.
-    ///
-    /// Normally you don't need to call this manually as [`handle_tick()`](Self::handle_tick)
-    /// will send pings automatically based on the keep-alive interval.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-    /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// client.ping().unwrap();
-    /// let bytes = client.take_outgoing();
-    /// // Send `bytes` to broker...
-    /// ```
-    pub fn ping(&mut self) -> Result<(), MqttClientError> {
-        self.engine.send_ping()
+    /// Run `ping` with caller-supplied monotonic time.
+    pub fn ping_at(&mut self, now: T) -> Result<(), MqttClientError> {
+        self.engine.try_send_ping_at(now)
     }
-
-    /// Send a DISCONNECT packet to the broker.
-    ///
-    /// This gracefully closes the connection. After calling this, you should
-    /// send the outgoing bytes and close your socket.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-    /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// client.disconnect().unwrap();
-    /// let bytes = client.take_outgoing();
-    /// // Send `bytes` to broker, then close socket
-    /// ```
-    pub fn disconnect(&mut self) -> Result<(), MqttClientError> {
-        self.engine.disconnect()
+    /// Run `disconnect` with caller-supplied monotonic time.
+    pub fn disconnect_at(&mut self, now: T) -> Result<(), MqttClientError> {
+        self.engine.disconnect_at(now)
     }
-
-    /// Send an AUTH packet for enhanced authentication (MQTT v5 only).
-    ///
-    /// Used for multi-step authentication flows like SCRAM, OAuth, etc.
-    ///
-    /// # Arguments
-    ///
-    /// * `reason_code` - Authentication reason code
-    /// * `properties` - Authentication properties
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-    /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// // Send authentication response
-    /// client.auth(0x18, vec![/* auth properties */]).unwrap();
-    /// let bytes = client.take_outgoing();
-    /// // Send `bytes` to broker...
-    /// ```
-    pub fn auth(
+    /// Run `auth` with caller-supplied monotonic time.
+    pub fn auth_at(
         &mut self,
         reason_code: u8,
         properties: Vec<Property>,
+        now: T,
     ) -> Result<(), MqttClientError> {
-        self.engine.auth(reason_code, properties)
+        self.engine.auth_at(reason_code, properties, now)
     }
-
-    /// Discard old transport bytes and aliases while retaining eligible session state.
-    /// Call before CONNECT on a fresh transport.
-    pub fn reset_for_new_transport(&mut self) {
-        self.engine.reset_for_new_transport();
+    /// Run `reset_for_new_transport` with caller-supplied monotonic time.
+    pub fn reset_for_new_transport_at(&mut self, now: T) -> Result<(), MqttClientError> {
+        self.engine.reset_for_new_transport_at(now)
     }
-
-    /// Schedule a backoff deadline unless one is already pending.
-    pub fn schedule_reconnect(&mut self, now: Instant) {
-        self.engine.schedule_reconnect(now);
+    /// Run `schedule_reconnect` with caller-supplied monotonic time.
+    pub fn schedule_reconnect_at(&mut self, now: T) -> Result<(), MqttClientError> {
+        self.engine.schedule_reconnect_at(now)
     }
 
     /// Whether wire bytes or protocol responses are waiting to be drained.
     pub fn has_pending_output(&self) -> bool {
         self.engine.has_pending_output()
     }
-
-    /// Queue DISCONNECT with MQTT 5 reason/properties; errors leave state unchanged.
-    pub fn disconnect_with(
+    /// Run `disconnect_with` with caller-supplied monotonic time.
+    pub fn disconnect_with_at(
         &mut self,
         reason_code: u8,
         properties: Vec<Property>,
+        now: T,
     ) -> Result<(), MqttClientError> {
-        self.engine.try_disconnect_with(reason_code, properties)
+        self.engine
+            .try_disconnect_with_at(reason_code, properties, now)
     }
-
-    /// Acknowledge a received QoS 1 message when automatic acknowledgments are disabled.
-    /// On failure, receive state remains available for retry.
-    pub fn puback(
+    /// Run `puback` with caller-supplied monotonic time.
+    pub fn puback_at(
         &mut self,
         packet_id: u16,
         reason_code: u8,
         properties: Vec<Property>,
+        now: T,
     ) -> Result<(), MqttClientError> {
-        self.engine.puback(packet_id, reason_code, properties)
+        self.engine
+            .puback_at(packet_id, reason_code, properties, now)
     }
-
-    /// Accept a received QoS 2 message. Use reason zero and no properties for MQTT 3.
-    /// On failure, receive state remains available for retry.
-    pub fn pubrec(
+    /// Run `pubrec` with caller-supplied monotonic time.
+    pub fn pubrec_at(
         &mut self,
         packet_id: u16,
         reason_code: u8,
         properties: Vec<Property>,
+        now: T,
     ) -> Result<(), MqttClientError> {
-        self.engine.pubrec(packet_id, reason_code, properties)
+        self.engine
+            .pubrec_at(packet_id, reason_code, properties, now)
     }
-
-    /// Complete a QoS 2 exchange after receiving `PubRelReceived`.
-    /// On failure, receive state remains available for retry.
-    pub fn pubcomp(
+    /// Run `pubcomp` with caller-supplied monotonic time.
+    pub fn pubcomp_at(
         &mut self,
         packet_id: u16,
         reason_code: u8,
         properties: Vec<Property>,
+        now: T,
     ) -> Result<(), MqttClientError> {
-        self.engine.pubcomp(packet_id, reason_code, properties)
+        self.engine
+            .pubcomp_at(packet_id, reason_code, properties, now)
     }
 
     // ========================================================================
@@ -594,8 +301,8 @@ impl NoIoMqttClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-    /// # let client = NoIoMqttClient::new(MqttClientOptions::default());
+    /// # use flowsdk::mqtt_client::{PortableNoIoMqttClient as NoIoMqttClient, MqttClientOptions};
+    /// # let client = NoIoMqttClient::new_at(MqttClientOptions::default(), flowsdk::time::Timestamp::ZERO);
     /// if client.is_connected() {
     ///     println!("Client is connected");
     /// }
@@ -615,8 +322,8 @@ impl NoIoMqttClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-    /// # let client = NoIoMqttClient::new(MqttClientOptions::default());
+    /// # use flowsdk::mqtt_client::{PortableNoIoMqttClient as NoIoMqttClient, MqttClientOptions};
+    /// # let client = NoIoMqttClient::new_at(MqttClientOptions::default(), flowsdk::time::Timestamp::ZERO);
     /// match client.mqtt_version() {
     ///     5 => println!("Using MQTT v5.0"),
     ///     4 => println!("Using MQTT v3.1.1"),
@@ -633,8 +340,8 @@ impl NoIoMqttClient {
     /// # Example
     ///
     /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-    /// # let client = NoIoMqttClient::new(MqttClientOptions::default());
+    /// # use flowsdk::mqtt_client::{PortableNoIoMqttClient as NoIoMqttClient, MqttClientOptions};
+    /// # let client = NoIoMqttClient::new_at(MqttClientOptions::default(), flowsdk::time::Timestamp::ZERO);
     /// let options = client.options();
     /// println!("Client ID: {}", options.client_id);
     /// println!("Keep alive: {}", options.keep_alive);
@@ -642,31 +349,9 @@ impl NoIoMqttClient {
     pub fn options(&self) -> &MqttClientOptions {
         self.engine.options()
     }
-
-    // ========================================================================
-    // Connection Management
-    // ========================================================================
-
-    /// Handle connection lost state.
-    ///
-    /// Call this when your socket disconnects or encounters an error.
-    /// Discards transport bytes and retains eligible MQTT session state. When
-    /// reconnection is enabled, schedules one retry using exponential backoff.
-    ///
-    /// # Example
-    ///
-    /// ```no_run
-    /// # use flowsdk::mqtt_client::{NoIoMqttClient, MqttClientOptions};
-    /// # let mut client = NoIoMqttClient::new(MqttClientOptions::default());
-    /// // Socket error detected
-    /// client.handle_connection_lost();
-    ///
-    /// // Later, reconnect
-    /// // ... create new socket ...
-    /// client.connect().unwrap();
-    /// ```
-    pub fn handle_connection_lost(&mut self) {
-        self.engine.handle_connection_lost();
+    /// Run `handle_connection_lost` with caller-supplied monotonic time.
+    pub fn handle_connection_lost_at(&mut self, now: T) -> Result<(), MqttClientError> {
+        self.engine.handle_connection_lost_at(now)
     }
 }
 
@@ -674,7 +359,7 @@ impl NoIoMqttClient {
 // Tests
 // ============================================================================
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::*;
 

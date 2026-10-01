@@ -609,43 +609,28 @@ fn test_incoming_publish_qos1() {
 
 #[test]
 fn test_reconnect_backoff_multi() {
+    use flowsdk::{mqtt_client::PortableMqttEngine, time::Timestamp};
     let options = MqttClientOptions::builder()
         .reconnect_base_delay_ms(100)
         .reconnect_max_delay_ms(500)
         .max_reconnect_attempts(3)
         .build();
-    let mut engine = MqttEngine::new(options);
-    let now = Instant::now();
-
-    // 1. First attempt: 100ms
-    engine.schedule_reconnect(now);
-    if let MqttEvent::ReconnectScheduled { attempt, delay } = engine.take_events().remove(0) {
-        assert_eq!(attempt, 1);
-        assert_eq!(delay, Duration::from_millis(100));
+    let mut now = Timestamp::try_from_millis(50_000).unwrap();
+    let mut engine = PortableMqttEngine::try_new_at(options, now).unwrap();
+    for (attempt, delay_ms) in [(1, 100), (2, 200), (3, 400)] {
+        engine.schedule_reconnect_at(now).unwrap();
+        let events = engine.take_events();
+        assert!(
+            matches!(events.as_slice(), [MqttEvent::ReconnectScheduled { attempt: got, delay }]
+            if *got == attempt && *delay == Duration::from_millis(delay_ms))
+        );
+        now = now.checked_add(Duration::from_millis(delay_ms)).unwrap();
+        assert!(matches!(
+            engine.handle_tick_at(now).unwrap().as_slice(),
+            [MqttEvent::ReconnectNeeded]
+        ));
     }
-
-    engine.handle_tick(now + Duration::from_millis(100));
-
-    // 2. Second attempt: 200ms
-    engine.schedule_reconnect(now);
-    if let MqttEvent::ReconnectScheduled { attempt, delay } = engine.take_events().remove(0) {
-        assert_eq!(attempt, 2);
-        assert_eq!(delay, Duration::from_millis(200));
-    }
-
-    engine.handle_tick(now + Duration::from_millis(200));
-
-    // 3. Third attempt: 400ms
-    engine.schedule_reconnect(now);
-    if let MqttEvent::ReconnectScheduled { attempt, delay } = engine.take_events().remove(0) {
-        assert_eq!(attempt, 3);
-        assert_eq!(delay, Duration::from_millis(400));
-    }
-
-    engine.handle_tick(now + Duration::from_millis(400));
-
-    // 4. Fourth attempt: should give up (max=3)
-    engine.schedule_reconnect(now);
+    engine.schedule_reconnect_at(now).unwrap();
     assert!(engine.take_events().is_empty());
     assert_eq!(engine.next_tick_at(), None);
 }

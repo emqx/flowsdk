@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
 use crate::mqtt_serde::mqttv5::common::properties::{parse_properties_hdr, Property};
 use crate::mqtt_serde::parser::{parse_binary_data, parse_utf8_string, ParseError};
 use serde::{Deserialize, Serialize};

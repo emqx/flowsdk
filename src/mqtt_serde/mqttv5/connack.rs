@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
+#[cfg(feature = "strict-protocol-compliance")]
+use alloc::string::ToString;
+use alloc::vec::Vec;
+
 use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
 use crate::mqtt_serde::mqttv5::common::properties::{
     encode_properities_hdr, parse_properties_hdr, Property,

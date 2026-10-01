@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::string::ToString;
+
 use crate::mqtt_serde::control_packet::MqttPacket;
 use crate::mqtt_serde::parser::leveled::{
     packet_frame_len, parse_headers_only, parse_raw_body, parse_type_only, LeveledParseOk,
@@ -200,11 +202,13 @@ impl MqttParser {
     }
 }
 
+#[cfg(feature = "std")]
 pub struct MqttStream<T> {
     parser: MqttParser,
     stream: T,
 }
 
+#[cfg(feature = "std")]
 impl<T> MqttStream<T>
 where
     T: std::io::Read,
@@ -228,6 +232,7 @@ where
     }
 }
 
+#[cfg(feature = "std")]
 impl<T> Iterator for MqttStream<T>
 where
     T: std::io::Read,

@@ -1,5 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
+
 use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
 use crate::mqtt_serde::encode_utf8_string;
 use crate::mqtt_serde::mqttv5::common::properties::{

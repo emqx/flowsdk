@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::string::String;
+use alloc::vec::Vec;
+
+use crate::collections::{Map as HashMap, Set as HashSet};
 use crate::mqtt_serde::control_packet::MqttPacket;
 use crate::mqtt_serde::mqttv5::common::properties::Property;
 use crate::mqtt_serde::mqttv5::puback::MqttPubAck;
@@ -9,7 +13,7 @@ use crate::mqtt_serde::mqttv5::pubrec::MqttPubRec;
 use crate::mqtt_serde::mqttv5::pubrel::MqttPubRel;
 use crate::mqtt_serde::mqttv5::subscribe::{MqttSubscribe, TopicSubscription};
 use crate::mqtt_serde::mqttv5::unsubscribe::MqttUnsubscribe;
-use std::collections::{HashMap, HashSet, VecDeque};
+use alloc::collections::VecDeque;
 
 struct Subscription {
     options: TopicSubscription,

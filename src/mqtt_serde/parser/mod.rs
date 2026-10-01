@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+
 use super::control_packet::MqttPacket;
 use crate::mqtt_serde::base_data::{BinaryData, TwoByteInteger, Utf8String, VariableByteInteger};
-use std::error::Error;
-use std::fmt;
+use core::error::Error;
+use core::fmt;
+#[cfg(feature = "std")]
 use std::io::Error as IoError;
 
 pub type ParserResult = Result<ParseOk, ParseError>;
@@ -14,12 +19,13 @@ pub const FIXED_HDR_LEN: usize = 1;
 #[derive(Debug)]
 pub enum ParseError {
     More(usize, String), // not enough data for processing, hint for how many more bytes are needed
+    #[cfg(feature = "std")]
     IoError(IoError),
     ParseError(String),
     IncompleteProperty,
     // following two are for UTF-8 parsing errors
-    Utf8Error(std::str::Utf8Error),
-    FromUtf8Error(std::string::FromUtf8Error),
+    Utf8Error(core::str::Utf8Error),
+    FromUtf8Error(alloc::string::FromUtf8Error),
     StringTooLong,
     BufferTooShort,
     BufferEmpty,
@@ -35,6 +41,7 @@ impl fmt::Display for ParseError {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
             ParseError::More(hint, msg) => write!(f, "More data needed ({} bytes): {}", hint, msg),
+            #[cfg(feature = "std")]
             ParseError::IoError(e) => write!(f, "IO Error: {}", e),
             ParseError::ParseError(msg) => write!(f, "Parse Error: {}", msg),
             ParseError::IncompleteProperty => write!(f, "Incomplete Property"),
@@ -56,6 +63,7 @@ impl fmt::Display for ParseError {
 impl Error for ParseError {
     fn source(&self) -> Option<&(dyn Error + 'static)> {
         match self {
+            #[cfg(feature = "std")]
             ParseError::IoError(e) => Some(e),
             ParseError::Utf8Error(e) => Some(e),
             ParseError::FromUtf8Error(e) => Some(e),

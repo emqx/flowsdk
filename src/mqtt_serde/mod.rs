@@ -1,5 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::string::String;
+#[cfg(feature = "strict-protocol-compliance")]
+use alloc::string::ToString;
+use alloc::vec::Vec;
+
 pub mod base_data;
 pub mod control_packet;
 pub mod mqttv3;
@@ -12,6 +17,7 @@ use crate::mqtt_serde::base_data::{BinaryData, TwoByteInteger, Utf8String};
 use crate::mqtt_serde::parser::ParseError;
 //re export
 pub use crate::mqtt_serde::parser::leveled::ParseLevel;
+#[cfg(feature = "std")]
 pub use crate::mqtt_serde::parser::stream::MqttStream;
 
 // MQTT 5.0 Spec, 1.5.4

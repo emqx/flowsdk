@@ -1,7 +1,12 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::format;
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+
 use super::*;
-use std::collections::{HashMap, HashSet};
+use crate::collections::{Map as HashMap, Set as HashSet};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub(super) enum ReceiveStage {
@@ -10,7 +15,7 @@ pub(super) enum ReceiveStage {
     PubRel,
 }
 
-pub(super) struct ProtocolState {
+pub(super) struct ProtocolState<T: TimePoint> {
     pub reserved: HashSet<u16>,
     pub received: HashMap<(Option<u64>, u16), ReceiveStage>,
     // Retain each exchange across reconnects until it binds to a replacement stream.
@@ -41,10 +46,10 @@ pub(super) struct ProtocolState {
     pub control_reserve: usize,
     pub replay_reserve: usize,
     pub responses: VecDeque<MqttPacket>,
-    pub deadlines: HashMap<(OperationKind, Option<u16>), (Instant, Duration)>,
+    pub deadlines: HashMap<(OperationKind, Option<u16>), (T, Duration)>,
 }
 
-impl ProtocolState {
+impl<T: TimePoint> ProtocolState<T> {
     pub fn new(keep_alive: u16) -> Self {
         Self {
             reserved: HashSet::new(),
@@ -85,7 +90,7 @@ fn invalid(field: &str, reason: &str) -> MqttClientError {
     }
 }
 
-impl MqttEngine {
+impl<T: TimePoint> MqttEngine<T> {
     fn received_key(&self, key: (Option<u64>, u16)) -> Option<(Option<u64>, u16)> {
         if self.state.received.contains_key(&key) {
             Some(key)
@@ -158,7 +163,7 @@ impl MqttEngine {
             if !matches!(property, UserProperty(_, _)) {
                 if let Some(existing) = merged
                     .iter()
-                    .find(|p| std::mem::discriminant(*p) == std::mem::discriminant(&property))
+                    .find(|p| core::mem::discriminant(*p) == core::mem::discriminant(&property))
                 {
                     if existing != &property {
                         return Err(invalid("CONNECT", "Conflicting singleton property values"));
@@ -181,9 +186,12 @@ impl MqttEngine {
 
     pub(super) fn negotiate(&mut self, properties: &[Property]) -> Result<(), MqttClientError> {
         use Property::*;
-        let mut seen = HashSet::new();
-        for p in properties {
-            if !matches!(p, UserProperty(_, _)) && !seen.insert(std::mem::discriminant(p)) {
+        for (index, p) in properties.iter().enumerate() {
+            if !matches!(p, UserProperty(_, _))
+                && properties[..index]
+                    .iter()
+                    .any(|previous| core::mem::discriminant(previous) == core::mem::discriminant(p))
+            {
                 return Err(invalid("CONNACK", "Duplicate singleton property"));
             }
             match p {
@@ -270,9 +278,10 @@ impl MqttEngine {
             OperationKind::Unsubscribe => timeouts.unsubscribe,
         };
         if let Some(duration) = duration {
-            self.state
-                .deadlines
-                .insert((operation, id), (Instant::now() + duration, duration));
+            self.state.deadlines.insert(
+                (operation, id),
+                (self.deadline_from(self.now, duration), duration),
+            );
         }
     }
 
@@ -284,7 +293,7 @@ impl MqttEngine {
         self.state.deadlines.retain(|(_, pid), _| *pid != Some(id));
     }
 
-    pub(super) fn check_deadlines(&mut self, now: Instant) {
+    pub(super) fn check_deadlines(&mut self, now: T) {
         let expired: Vec<_> = self
             .state
             .deadlines
@@ -488,7 +497,7 @@ impl MqttEngine {
                     break;
                 }
             }
-            match self.enqueue_packet(packet) {
+            match self.enqueue_packet_inner(packet) {
                 Ok(()) => {
                     self.state.responses.pop_front();
                 }
@@ -538,7 +547,7 @@ impl MqttEngine {
     }
 
     pub(super) fn fail_connection(&mut self, error: MqttClientError) {
-        self.connection_lost_at(Instant::now());
+        self.connection_lost_at(self.now);
         self.events.push(MqttEvent::Error(error));
         self.events.push(MqttEvent::Disconnected(None));
     }
@@ -709,12 +718,12 @@ impl MqttEngine {
         properties: Vec<Property>,
     ) -> Result<(), MqttClientError> {
         let packet = self.manual_ack_packet(id, kind, reason, properties, None)?;
-        self.enqueue_packet(packet)?;
+        self.enqueue_packet_inner(packet)?;
         self.commit_receive_ack(id, kind, reason, None);
         Ok(())
     }
 
-    pub fn puback(
+    pub(super) fn puback_inner(
         &mut self,
         id: u16,
         reason: u8,
@@ -722,7 +731,7 @@ impl MqttEngine {
     ) -> Result<(), MqttClientError> {
         self.manual_ack(id, 4, reason, properties)
     }
-    pub fn pubrec(
+    pub(super) fn pubrec_inner(
         &mut self,
         id: u16,
         reason: u8,
@@ -730,7 +739,7 @@ impl MqttEngine {
     ) -> Result<(), MqttClientError> {
         self.manual_ack(id, 5, reason, properties)
     }
-    pub fn pubcomp(
+    pub(super) fn pubcomp_inner(
         &mut self,
         id: u16,
         reason: u8,
@@ -740,7 +749,7 @@ impl MqttEngine {
     }
 }
 
-impl MqttEngine {
+impl<T: TimePoint> MqttEngine<T> {
     pub(super) fn receive_message(
         &mut self,
         mut publish: MqttPublish,
@@ -923,10 +932,13 @@ impl MqttEngine {
             {
                 break;
             }
-            match self.enqueue_packet(packet.clone()) {
+            match self.enqueue_packet_inner(packet.clone()) {
                 Ok(()) => {
                     self.session_replay.pop_front();
-                    if let Err(error) = self.inflight_queue.push(id, packet.clone(), qos) {
+                    if let Err(error) =
+                        self.inflight_queue
+                            .push_at(id, packet.clone(), qos, self.now)
+                    {
                         self.fail_operation(id, &packet, error);
                     } else {
                         self.start_deadline(OperationKind::Publish, Some(id));

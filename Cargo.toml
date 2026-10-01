@@ -2,6 +2,7 @@
 name = "flowsdk"
 version = "0.6.2"
 edition = "2021"
+rust-version = "1.85"
 description = "Safety-first, realistic, behavior-predictable messaging SDK for MQTT and more."
 license = "MPL-2.0"
 repository = "https://github.com/emqx/flowsdk"
@@ -10,24 +11,23 @@ keywords = ["mqtt", "async", "tokio", "network", "mqtt_over_quic"]
 categories = ["network-programming", "asynchronous"]
 
 [workspace]
+resolver = "2"
 members = [".", "mqtt_grpc_duality", "flowsdk_ffi", "mqtt_ring_bench"]
-exclude = ["fuzz", "release-small"]
+exclude = ["fuzz", "release-small", "tests/no_std"]
 
 [dependencies]
 tonic = { version = "0.14.1", optional = true }
 prost = { version = "0.14", optional = true }
-tokio = { version = "1.0", features = ["sync", "time", "io-util"] }
+tokio = { version = "1.0", optional = true, features = ["sync", "time", "io-util"] }
 tonic-prost = { version = "0.14.1", optional = true }
-serde = { version = "1.0.218", features = ["derive"] }
-hex = "0.4"
-bytes = { version = "1", features = ["serde"] }
+serde = { version = "1.0.218", default-features = false, features = ["derive"] }
+hex = { version = "0.4", default-features = false }
+bytes = { version = "1.12.1", default-features = false, features = ["serde"] }
 tokio-stream = { version = "0.1", optional = true }
 arbitrary = { version = "1", optional = true, features = ["derive"] }
-serde_json = "1.0"
-slab = "0.4.11"
-async-trait = "0.1"
-thiserror = "1.0"
-ctrlc = "3.4"
+serde_json = { version = "1.0", optional = true }
+async-trait = { version = "0.1", optional = true }
+thiserror = { version = "1.0", optional = true }
 
 # TLS support (optional)
 tokio-native-tls = { version = "0.3", optional = true }
@@ -46,7 +46,11 @@ rustls-pki-types = { version = "1", optional = true }
 tokio-rustls = { version = "0.26", optional = true }
 
 [features]
-default = ["strict-protocol-compliance", "tls", "async-client"]
+default = ["std", "strict-protocol-compliance", "tls", "async-client"]
+alloc = ["serde/alloc", "hex/alloc"]
+std = ["alloc", "serde/std", "bytes/std", "hex/std", "dep:serde_json"]
+# The application selects and supplies a compatible critical-section provider.
+portable-atomics = ["bytes/extra-platforms"]
 # Application-owned session checkpoints for persistence across process restarts (opt-in).
 durable-session = []
 # TLS/SSL transport support
@@ -60,7 +64,7 @@ quic = ["quic-proto", "dep:quinn", "async-client"]
 # NOTE: do not enable quic and quic-openssl at the same time.
 quic-openssl = ["quic", "quic-proto-openssl", "dep:quinn-openssl"]
 # Sans-I/O QUIC protocol engine — ring crypto (no tokio runtime required)
-quic-proto = ["dep:quinn-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
+quic-proto = ["std", "dep:quinn-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
 # Sans-I/O QUIC protocol engine — OpenSSL crypto (for release-small builds)
 quic-proto-openssl = ["quic-proto", "dep:quinn-proto-openssl", "dep:rustls-openssl"]
 # Rustls-based TLS over TCP (mqtts://) transport support
@@ -73,17 +77,21 @@ rustls-tls = [
 ]
 # Tokio-based async MQTT client (adds the high-throughput multi-threaded runtime)
 async-client = [
+	"std",
+	"dep:tokio",
+	"dep:async-trait",
+	"dep:thiserror",
 	"tokio/macros",
 	"tokio/rt-multi-thread",
 	"tokio/net",
 	"dep:tokio-stream",
 ]
 # gRPC support (only needed for mqtt_grpc_duality proxy)
-grpc = ["dep:tonic", "dep:prost", "dep:tonic-prost"]
+grpc = ["std", "dep:tonic", "dep:prost", "dep:tonic-prost"]
 strict-protocol-compliance = []
 # ⚠️ DANGEROUS: Enable raw packet API for protocol compliance testing
 # DO NOT enable in production builds
-protocol-testing = []
+protocol-testing = ["async-client"]
 
 [profile.release-small]
 inherits = "release"
@@ -94,6 +102,8 @@ strip = true
 panic = "abort"
 [dev-dependencies]
 criterion = { version = "0.8", features = ["html_reports"] }
+ctrlc = "3.4"
+serde_json = "1.0"
 futures = "0.3"
 clap = { version = "4.5", features = ["derive"] }
 openssl = "0.10"
@@ -126,10 +136,11 @@ harness = false
 
 [[example]]
 name = "durable_session"
-required-features = ["durable-session"]
+required-features = ["std", "durable-session"]
 
 [[example]]
 name = "no_io_pubsub"
+required-features = ["std"]
 
 [[example]]
 name = "async_pubsub"
@@ -158,3 +169,87 @@ required-features = ["quic"]
 [[example]]
 name = "no_io_tls_client_example"
 required-features = ["rustls-tls"]
+
+[[example]]
+name = "no_io_mqtt_client_example"
+required-features = ["std"]
+
+[[example]]
+name = "tokio_async_mqtt_tls_example"
+required-features = ["async-client"]
+
+[[example]]
+name = "mqtt_client_v3_example"
+required-features = ["std"]
+
+[[example]]
+name = "tokio_async_mqtt_client_example"
+required-features = ["async-client"]
+
+[[example]]
+name = "tokio_async_mqtt_all_sync_operations"
+required-features = ["async-client"]
+
+[[example]]
+name = "tokio_async_mqtt_auth_example"
+required-features = ["async-client"]
+
+[[example]]
+name = "tokio_async_mqtt_priority_example"
+required-features = ["async-client"]
+
+[[example]]
+name = "mqtt_client_builder_example"
+required-features = ["async-client"]
+
+[[example]]
+name = "no_io_mqtt_v3_connect_only_example"
+required-features = ["std"]
+
+[[example]]
+name = "tokio_async_mqtt_v3_client_example"
+required-features = ["async-client"]
+
+[[example]]
+name = "mqtt_client_v5_example"
+required-features = ["std"]
+
+[[test]]
+name = "blocking_client_workflows"
+required-features = ["std"]
+
+[[test]]
+name = "client_engine_lifecycle"
+required-features = ["std"]
+
+[[test]]
+name = "codec_validation"
+required-features = ["std"]
+
+[[test]]
+name = "engine_logic_tests"
+required-features = ["std"]
+
+[[test]]
+name = "no_io_reliability"
+required-features = ["std"]
+
+[[test]]
+name = "time_api_compatibility"
+required-features = ["std"]
+
+[[test]]
+name = "reconnect_integration_tests"
+required-features = ["async-client"]
+
+[[test]]
+name = "timeout_tests"
+required-features = ["async-client"]
+
+[[test]]
+name = "transport_integration_tests"
+required-features = ["async-client"]
+
+[[test]]
+name = "durable_session"
+required-features = ["std", "durable-session"]

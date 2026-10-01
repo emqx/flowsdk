@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 
+#[cfg(feature = "std")]
 pub mod async_client;
+#[cfg(feature = "std")]
 pub mod client;
 pub mod commands;
 pub mod engine;
@@ -16,25 +18,26 @@ pub mod tls_engine;
 pub mod tokio_async_client;
 #[cfg(feature = "quic")]
 pub mod tokio_quic_client;
+#[cfg(feature = "async-client")]
 pub mod transport;
+pub mod types;
 
 // Re-exports
 #[cfg(feature = "durable-session")]
 pub use crate::mqtt_session::{ClientSessionState, ClientSessionStore};
+#[cfg(feature = "std")]
 pub use async_client::{AsyncClientConfig, AsyncMqttClient, MqttEventHandler};
-pub use client::{
-    AuthResult, ConnectionResult, MqttClient, PingResult, PublishResult, SubscribeResult,
-    Subscription, UnsubscribeResult,
-};
+#[cfg(feature = "std")]
+pub use client::MqttClient;
 pub use commands::{
     PublishBuilderError, PublishCommand, PublishCommandBuilder, SubscribeBuilderError,
     SubscribeCommand, SubscribeCommandBuilder, UnsubscribeCommand,
 };
-pub use engine::{MqttEngine, MqttEvent, MqttMessage, OperationKind};
+pub use engine::{MqttEngine, MqttEvent, MqttMessage, OperationKind, PortableMqttEngine};
 #[cfg(feature = "quic-proto")]
 pub use engine::{QuicMqttEngine, QuicZeroRttConfig, QuicZeroRttStatus};
 pub use error::{MqttClientError, MqttClientResult};
-pub use no_io_client::NoIoMqttClient;
+pub use no_io_client::{NoIoMqttClient, PortableNoIoMqttClient};
 pub use opts::{MqttClientOptions, MqttClientOptionsBuilder, OperationTimeouts};
 #[cfg(feature = "rustls-tls")]
 pub use tls_engine::TlsMqttEngine;
@@ -44,3 +47,7 @@ pub use tokio_async_client::{
 };
 #[cfg(feature = "quic")]
 pub use tokio_quic_client::TokioQuicMqttClient;
+pub use types::{
+    AuthResult, ConnectionResult, PingResult, PublishResult, SubscribeResult, Subscription,
+    UnsubscribeResult,
+};

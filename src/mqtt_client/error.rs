@@ -5,8 +5,14 @@
 //! This module provides a comprehensive error type system that distinguishes between
 //! recoverable and unrecoverable errors, enabling intelligent error handling and retry logic.
 
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+
 use crate::mqtt_serde::parser::ParseError;
-use std::fmt;
+use core::fmt;
+#[cfg(feature = "std")]
 use std::io;
 
 /// Comprehensive error type for MQTT client operations
@@ -23,6 +29,7 @@ pub enum MqttClientError {
     ConnectionLost { reason: String },
 
     /// Network I/O error occurred
+    #[cfg(feature = "std")]
     NetworkError {
         #[serde(skip)]
         kind: io::ErrorKind,
@@ -124,10 +131,13 @@ impl MqttClientError {
     /// Recoverable errors are typically transient network issues, timeouts,
     /// or session-related problems that can be resolved by retrying or reconnecting.
     pub fn is_recoverable(&self) -> bool {
+        #[cfg(feature = "std")]
+        if matches!(self, Self::NetworkError { .. }) {
+            return true;
+        }
         matches!(
             self,
             Self::ConnectionLost { .. }
-                | Self::NetworkError { .. }
                 | Self::OperationTimeout { .. }
                 | Self::SessionExpired
                 | Self::NotConnected
@@ -143,6 +153,7 @@ impl MqttClientError {
     pub fn should_reconnect(&self) -> bool {
         match self {
             Self::ConnectionLost { .. } => true,
+            #[cfg(feature = "std")]
             Self::NetworkError { kind, .. } => matches!(
                 kind,
                 io::ErrorKind::ConnectionReset
@@ -198,6 +209,7 @@ impl MqttClientError {
             Self::ConnectionLost { reason } => {
                 format!("Connection to broker lost: {}", reason)
             }
+            #[cfg(feature = "std")]
             Self::NetworkError { kind, message } => {
                 format!("Network error ({:?}): {}", kind, message)
             }
@@ -330,6 +342,7 @@ impl MqttClientError {
     /// # Arguments
     /// * `error` - The IO error to convert
     /// * `context` - Contextual information about where the error occurred
+    #[cfg(feature = "std")]
     pub fn from_io_error(error: io::Error, context: &str) -> Self {
         Self::NetworkError {
             kind: error.kind(),
@@ -360,9 +373,10 @@ impl fmt::Display for MqttClientError {
     }
 }
 
-impl std::error::Error for MqttClientError {}
+impl core::error::Error for MqttClientError {}
 
 // Conversion from io::Error (without context)
+#[cfg(feature = "std")]
 impl From<io::Error> for MqttClientError {
     fn from(error: io::Error) -> Self {
         Self::NetworkError {
@@ -373,6 +387,7 @@ impl From<io::Error> for MqttClientError {
 }
 
 // Conversion to io::Error for backward compatibility
+#[cfg(feature = "std")]
 impl From<MqttClientError> for io::Error {
     fn from(error: MqttClientError) -> Self {
         match error {
