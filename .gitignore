@@ -5,6 +5,8 @@
 docs/source
 lcov*.info
 Cargo.lock
+!tests/no_std/Cargo.lock
+/tests/no_std/target/
 
 *.profraw
 *.profdata

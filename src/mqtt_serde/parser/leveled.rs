@@ -8,6 +8,10 @@
 //! - Level 2 (`RawBody`): Parse fixed header only, keep remaining bytes raw
 //! - Level 3 (`TypeOnly`): Parse packet type and flags only, discard body
 
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+
 use bytes::Bytes;
 
 use crate::mqtt_serde::control_packet::{ControlPacketType, MqttPacket};

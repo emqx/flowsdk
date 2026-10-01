@@ -1,5 +1,15 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::format;
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec;
+use alloc::vec::Vec;
+
+use crate::collections::Map as HashMap;
+use crate::time::{DefaultTime, TimePoint, Timestamp};
+use alloc::collections::VecDeque;
+use core::time::Duration;
 #[cfg(feature = "quic-proto")]
 use quinn_proto::{
     ClientConfig, Connection, ConnectionError, ConnectionHandle, Dir, Endpoint, EndpointConfig,
@@ -14,8 +24,8 @@ use rustls::{
     pki_types::ServerName,
     NamedGroup,
 };
-use std::collections::{HashMap, VecDeque};
-use std::time::{Duration, Instant};
+#[cfg(feature = "std")]
+use std::time::Instant;
 #[cfg(feature = "quic-proto")]
 use std::{
     fmt,
@@ -38,20 +48,26 @@ use crate::mqtt_serde::parser::stream::MqttParser;
 use crate::mqtt_session::ClientSession;
 use crate::priority_queue::PriorityQueue;
 
-use super::client::{
-    ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
-};
 use super::commands::{PublishCommand, SubscribeCommand, UnsubscribeCommand};
 use super::error::MqttClientError;
 use super::inflight::InflightQueue;
 use super::opts::MqttClientOptions;
+use super::types::{
+    ConnectionResult, PingResult, PublishResult, SubscribeResult, UnsubscribeResult,
+};
 
+mod explicit;
+#[cfg(feature = "std")]
+mod host;
 mod protocol_state;
 #[cfg(feature = "durable-session")]
 mod session_state;
+
+/// Engine whose clock is always supplied by the caller, including on hosts.
+pub type PortableMqttEngine = MqttEngine<Timestamp>;
 use protocol_state::ProtocolState;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
 pub enum OperationKind {
     Connect,
     Publish,
@@ -84,7 +100,7 @@ impl Default for QuicZeroRttConfig {
     }
 }
 
-/// Current QUIC 0-RTT state for [`QuicMqttEngine`].
+/// Current QUIC 0-RTT state for `QuicMqttEngine` (with `quic-proto`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize)]
 pub enum QuicZeroRttStatus {
     /// 0-RTT is not enabled for this engine/connection.
@@ -111,7 +127,7 @@ pub enum MqttEvent {
         error: MqttClientError,
     },
     Connected(ConnectionResult),
-    AuthReceived(super::client::AuthResult),
+    AuthReceived(super::types::AuthResult),
     Disconnected(Option<u8>),
     /// A broker MQTT 5 DISCONNECT, including its properties.
     DisconnectReceived {
@@ -216,17 +232,19 @@ pub enum MqttEvent {
 /// The engine enforces strict buffer limits to prevent memory exhaustion:
 /// - `outgoing_buffer`: Limits queued packets waiting to be sent. Returns `MqttClientError::BufferFull` if exceeded.
 /// - `events`: Limits pending events. Pauses parsing (back-pressure) if limit reached.
-pub struct MqttEngine {
-    state: ProtocolState,
+pub struct MqttEngine<T: TimePoint = DefaultTime> {
+    // Set once at each public explicit-time boundary; nested transitions reuse it.
+    now: T,
+    state: ProtocolState<T>,
     options: MqttClientOptions,
     session: Option<ClientSession>,
     priority_queue: PriorityQueue<u8, MqttPacket>,
     is_connected: bool,
-    last_packet_sent: Instant,
-    last_packet_received: Instant,
+    last_packet_sent: T,
+    last_packet_received: T,
     /// Timestamp of the outstanding PINGREQ, if any. A connection timeout is
     /// only valid after this request has not received a PINGRESP in time.
-    ping_sent_at: Option<Instant>,
+    ping_sent_at: Option<T>,
 
     // Buffers and Parsers
     parser: MqttParser,
@@ -240,7 +258,7 @@ pub struct MqttEngine {
     stream_retransmissions: VecDeque<(u64, Vec<u8>)>,
 
     // Pending operations tracking (state only)
-    inflight_queue: InflightQueue,
+    inflight_queue: InflightQueue<T>,
     previous_inflight: Vec<(u16, MqttPacket)>,
     transport_manages_session: bool,
     session_replay: VecDeque<(u16, MqttPacket)>,
@@ -250,7 +268,7 @@ pub struct MqttEngine {
 
     // Reconnection state
     reconnect_attempts: u32,
-    next_reconnect_at: Option<Instant>,
+    next_reconnect_at: Option<T>,
 
     // Configurable timeouts (cached from options for efficiency)
     reconnect_base_delay: Duration,
@@ -258,12 +276,12 @@ pub struct MqttEngine {
     max_reconnect_attempts: u32,
 }
 
-impl MqttEngine {
+impl<T: TimePoint> MqttEngine<T> {
     /// Create a new `MqttEngine` with the given configuration options.
     ///
     /// The engine requires strict configuration for buffer limits and timeouts.
     /// Default buffer size for the internal parser is 16KB.
-    pub fn new(options: MqttClientOptions) -> Self {
+    pub fn new_at(options: MqttClientOptions, now: T) -> Self {
         let mqtt_version = options.mqtt_version;
         // Default buffer size 16KB
         let parser = MqttParser::new(options.parser_buffer_size, mqtt_version);
@@ -275,6 +293,7 @@ impl MqttEngine {
         let max_reconnect_attempts = options.max_reconnect_attempts;
 
         Self {
+            now,
             state: ProtocolState::new(options.keep_alive),
             inflight_queue: InflightQueue::new(
                 options.receive_maximum,
@@ -288,8 +307,8 @@ impl MqttEngine {
             configured_subscriptions_pending: false,
             priority_queue: PriorityQueue::new(options.max_outgoing_packet_count),
             is_connected: false,
-            last_packet_sent: Instant::now(),
-            last_packet_received: Instant::now(),
+            last_packet_sent: now,
+            last_packet_received: now,
             ping_sent_at: None,
             parser,
             outgoing_buffer: VecDeque::new(),
@@ -309,7 +328,7 @@ impl MqttEngine {
     /// This should be called frequently (e.g., after `handle_incoming` or `handle_tick`)
     /// to process state changes and incoming messages.
     pub fn take_events(&mut self) -> Vec<MqttEvent> {
-        std::mem::take(&mut self.events)
+        core::mem::take(&mut self.events)
     }
 
     /// Select how deeply subsequent incoming packets are parsed.
@@ -378,16 +397,16 @@ impl MqttEngine {
         self.is_connected
     }
 
-    pub fn handle_connection_lost(&mut self) {
-        self.connection_lost_at(Instant::now());
+    fn handle_connection_lost_inner(&mut self) {
+        self.connection_lost_at(self.now);
     }
 
-    fn connection_lost_at(&mut self, now: Instant) {
+    fn connection_lost_at(&mut self, now: T) {
         let scheduled = self.next_reconnect_at;
-        self.reset_for_new_transport();
+        self.reset_for_new_transport_inner();
         self.next_reconnect_at = scheduled;
         if self.options.reconnect {
-            self.schedule_reconnect(now);
+            self.schedule_reconnect_inner(now);
         }
     }
 
@@ -399,7 +418,7 @@ impl MqttEngine {
     /// the inbound parser (any partial packet from the old transport). The MQTT
     /// session and the inflight queue are **retained** so QoS 1/2 messages can be
     /// resumed if the server reports `session_present`.
-    pub fn reset_for_new_transport(&mut self) {
+    fn reset_for_new_transport_inner(&mut self) {
         self.close_input();
         self.outgoing_buffer.clear();
         self.configured_subscriptions_pending = false;
@@ -435,7 +454,7 @@ impl MqttEngine {
             for (id, packet) in outstanding {
                 self.fail_operation(id, &packet, MqttClientError::SessionExpired);
             }
-            let replay = std::mem::take(&mut self.session_replay);
+            let replay = core::mem::take(&mut self.session_replay);
             for (id, packet) in replay {
                 self.fail_operation(id, &packet, MqttClientError::SessionExpired);
             }
@@ -447,7 +466,7 @@ impl MqttEngine {
         // ReconnectNeeded while a new transport handshake is in progress. The
         // attempt counter is left intact until CONNACK resets it.
         self.next_reconnect_at = None;
-        let now = Instant::now();
+        let now = self.now;
         self.last_packet_sent = now;
         self.last_packet_received = now;
         self.ping_sent_at = None;
@@ -461,7 +480,7 @@ impl MqttEngine {
     /// and the engine remains in a disconnected state essentially "giving up".
     ///
     /// Emits `MqttEvent::ReconnectScheduled` to notify the application of the next attempt.
-    pub fn schedule_reconnect(&mut self, now: Instant) {
+    fn schedule_reconnect_inner(&mut self, now: T) {
         if self.next_reconnect_at.is_some() {
             return;
         }
@@ -487,7 +506,7 @@ impl MqttEngine {
         let delay_ms = delay_ms.min(self.reconnect_max_delay.as_millis());
         let delay = Duration::from_millis(delay_ms as u64);
 
-        self.next_reconnect_at = Some(now + delay);
+        self.next_reconnect_at = Some(self.deadline_from(now, delay));
         self.reconnect_attempts += 1;
 
         self.events.push(MqttEvent::ReconnectScheduled {
@@ -514,7 +533,7 @@ impl MqttEngine {
     /// If the internal `events` buffer reaches `max_event_count`, this method will **stop processing**
     /// and return early, leaving remaining bytes in the internal buffer. The caller should
     /// consume events via `take_events()` and call `handle_incoming(&[])` again to resume processing.
-    pub fn handle_incoming(&mut self, data: &[u8]) -> Vec<MqttEvent> {
+    fn handle_incoming_inner(&mut self, data: &[u8]) -> Vec<MqttEvent> {
         if self.state.input_closed {
             return self.take_events();
         }
@@ -547,7 +566,7 @@ impl MqttEngine {
 
             match self.parser.next_parsed() {
                 Ok(Some(ParsedPacket::Full(packet))) => {
-                    self.last_packet_received = Instant::now();
+                    self.last_packet_received = self.now;
                     let (packet_events, responses) = self.handle_packet(packet, None);
                     self.events.extend(packet_events);
                     // Single-stream transports (TCP/TLS, QUIC control stream) send
@@ -556,7 +575,7 @@ impl MqttEngine {
                     self.flush_responses();
                 }
                 Ok(Some(packet)) => {
-                    self.last_packet_received = Instant::now();
+                    self.last_packet_received = self.now;
                     let (event, response) = self.handle_reduced_packet(packet, None);
                     if let Some(event) = event {
                         self.events.push(event);
@@ -611,7 +630,7 @@ impl MqttEngine {
                     event = Some(MqttEvent::PingResponse(PingResult { success: true }));
                 }
                 crate::mqtt_serde::control_packet::ControlPacketType::DISCONNECT => {
-                    self.handle_connection_lost();
+                    self.handle_connection_lost_inner();
                     event = Some(MqttEvent::Disconnected(None));
                 }
                 _ => {}
@@ -699,7 +718,7 @@ impl MqttEngine {
                     reason_code,
                     properties,
                 } => {
-                    self.handle_connection_lost();
+                    self.handle_connection_lost_inner();
                     event = Some(MqttEvent::DisconnectReceived {
                         reason_code,
                         properties,
@@ -709,7 +728,7 @@ impl MqttEngine {
                     if packet.packet_type
                         == crate::mqtt_serde::control_packet::ControlPacketType::DISCONNECT =>
                 {
-                    self.handle_connection_lost();
+                    self.handle_connection_lost_inner();
                     event = Some(MqttEvent::Disconnected(None));
                 }
                 _ => {}
@@ -739,7 +758,7 @@ impl MqttEngine {
     /// 2. **Keep-Alive**: Sends `PINGREQ` if no control packets have been sent within the Keep-Alive interval.
     /// 3. **Timeout Detection**: Detects dead connections when a PINGREQ is unanswered for Keep-Alive * multiplier, then schedules reconnect.
     /// 4. **Retransmissions** (MQTT v3.1.1): Resends unacknowledged QoS 1/2 packets.
-    pub fn handle_tick(&mut self, now: Instant) -> Vec<MqttEvent> {
+    fn handle_tick_inner(&mut self, now: T) -> Vec<MqttEvent> {
         self.check_deadlines(now);
         self.flush_responses();
         // Handle reconnection timer when disconnected
@@ -763,7 +782,7 @@ impl MqttEngine {
         if keep_alive > Duration::ZERO
             && self
                 .ping_sent_at
-                .is_some_and(|sent_at| now.duration_since(sent_at) >= ping_timeout)
+                .is_some_and(|sent_at| now.saturating_duration_since(sent_at) >= ping_timeout)
         {
             self.connection_lost_at(now);
             self.events.push(MqttEvent::Disconnected(None));
@@ -775,9 +794,9 @@ impl MqttEngine {
         if self.ping_sent_at.is_none()
             && self.options.auto_keepalive
             && keep_alive > Duration::ZERO
-            && now.duration_since(self.last_packet_sent) >= keep_alive
+            && now.saturating_duration_since(self.last_packet_sent) >= keep_alive
         {
-            let _ = self.send_ping_at(now);
+            let _ = self.send_ping_inner_at(now);
         }
 
         self.process_queue();
@@ -789,10 +808,13 @@ impl MqttEngine {
         self.take_events()
     }
 
-    fn handle_retransmissions(&mut self, now: Instant) -> Vec<MqttEvent> {
+    fn handle_retransmissions(&mut self, now: T) -> Vec<MqttEvent> {
         let events = Vec::new();
 
-        let expired = self.inflight_queue.get_expired_with_stream(now);
+        let expired = self
+            .inflight_queue
+            .get_expired_with_stream_at(now)
+            .expect("validated engine time");
         for (mut packet, stream) in expired {
             packet.set_dup(true);
             if let Ok(bytes) = packet.to_bytes() {
@@ -801,7 +823,7 @@ impl MqttEngine {
                     // to preserve the same-stream QoS handshake.
                     Some(stream_id) => self.stream_retransmissions.push_back((stream_id, bytes)),
                     None => {
-                        if let Err(error) = self.enqueue_packet(packet) {
+                        if let Err(error) = self.enqueue_packet_inner(packet) {
                             if !matches!(error, MqttClientError::BufferFull { .. }) {
                                 self.events.push(MqttEvent::Error(error));
                             }
@@ -820,7 +842,7 @@ impl MqttEngine {
     /// Each entry is `(stream_handle, encoded_bytes)`. The transport routes each
     /// onto the named channel. Empty for single-stream transports.
     pub fn take_stream_retransmissions(&mut self) -> VecDeque<(u64, Vec<u8>)> {
-        std::mem::take(&mut self.stream_retransmissions)
+        core::mem::take(&mut self.stream_retransmissions)
     }
 
     /// Returns the exact timestamp of the next required wake-up.
@@ -833,7 +855,7 @@ impl MqttEngine {
     /// 1. Reconnection attempts (if disconnected).
     /// 2. Keep-alive PINGs and their response timeout.
     /// 4. Packet retransmissions.
-    pub fn next_tick_at(&self) -> Option<Instant> {
+    pub fn next_tick_at(&self) -> Option<T> {
         // 1. Reconnection timer (highest priority when disconnected)
         if !self.is_connected {
             return self
@@ -849,11 +871,13 @@ impl MqttEngine {
         // 2. A PINGREQ response timeout takes precedence over another PINGREQ.
         if keep_alive > Duration::ZERO {
             if let Some(ping_sent_at) = self.ping_sent_at {
-                let timeout_deadline =
-                    ping_sent_at + keep_alive * self.options.ping_timeout_multiplier;
+                let timeout_deadline = self.deadline_from(
+                    ping_sent_at,
+                    keep_alive * self.options.ping_timeout_multiplier,
+                );
                 next = Some(timeout_deadline);
             } else if self.options.auto_keepalive {
-                let ping_deadline = self.last_packet_sent + keep_alive;
+                let ping_deadline = self.deadline_from(self.last_packet_sent, keep_alive);
                 next = Some(ping_deadline);
             }
         }
@@ -879,7 +903,7 @@ impl MqttEngine {
     ///
     /// This should be written to the underlying transport immediately.
     /// Clears the internal outgoing buffer.
-    pub fn take_outgoing(&mut self) -> Vec<u8> {
+    fn take_outgoing_inner(&mut self) -> Vec<u8> {
         let mut all_bytes = Vec::new();
         loop {
             while let Some(packet) = self.outgoing_buffer.pop_front() {
@@ -887,7 +911,7 @@ impl MqttEngine {
             }
             self.flush_responses();
             if !self.state.input_closed {
-                let events = self.handle_incoming(&[]);
+                let events = self.handle_incoming_inner(&[]);
                 self.events.extend(events);
             }
             self.process_queue();
@@ -903,7 +927,7 @@ impl MqttEngine {
     /// Initiate the MQTT connection handshake (send CONNECT packet).
     ///
     /// Should be called after the physical connection is established.
-    pub fn connect(&mut self) -> Result<(), MqttClientError> {
+    fn connect_inner(&mut self) -> Result<(), MqttClientError> {
         if self.is_connected {
             return Err(MqttClientError::AlreadyConnected);
         }
@@ -939,7 +963,7 @@ impl MqttEngine {
             .map_err(MqttClientError::from)?
             .len()
             .max(6);
-        self.enqueue_packet(packet)?;
+        self.enqueue_packet_inner(packet)?;
         // An interrupted handshake may already own deferred replay entries.
         // Keep them until CONNACK resolves the session, refreshing live entries
         // by identifier so a newer QoS stage wins without duplicating work.
@@ -1016,7 +1040,10 @@ impl MqttEngine {
     ///
     /// The command is pushed to the `PriorityQueue` and only moved to the `outgoing_buffer`
     /// via `process_queue()` if the buffer limits allow.
-    pub fn publish(&mut self, mut command: PublishCommand) -> Result<Option<u16>, MqttClientError> {
+    fn publish_inner(
+        &mut self,
+        mut command: PublishCommand,
+    ) -> Result<Option<u16>, MqttClientError> {
         if command.qos > 0 {
             self.require_full_parser()?;
         }
@@ -1076,7 +1103,7 @@ impl MqttEngine {
     /// `stream` records the logical channel the packet is sent on so that QoS 1/2
     /// retransmissions are routed back onto the same channel (see
     /// [`take_stream_retransmissions`](Self::take_stream_retransmissions)).
-    pub fn publish_encoded(
+    fn publish_encoded_inner(
         &mut self,
         mut command: PublishCommand,
         stream: Option<u64>,
@@ -1109,11 +1136,12 @@ impl MqttEngine {
         // QoS > 0 messages must be tracked for retransmission/acknowledgement.
         // `push_with_stream` enforces the receive-maximum limit and errors if exceeded.
         if command.qos > 0 {
-            self.inflight_queue.push_with_stream(
+            self.inflight_queue.push_with_stream_at(
                 pid.expect("QoS > 0 always assigns a packet id"),
                 packet,
                 command.qos,
                 stream,
+                self.now,
             )?;
         }
 
@@ -1125,7 +1153,7 @@ impl MqttEngine {
         if let Some((id, topic)) = alias {
             self.state.outgoing_aliases.insert(id, topic);
         }
-        self.last_packet_sent = Instant::now();
+        self.last_packet_sent = self.now;
         Ok((pid, bytes))
     }
 
@@ -1144,7 +1172,7 @@ impl MqttEngine {
     /// inflight entry (QoS 2 PUBREL) created while handling it.
     ///
     /// Returns `(events, response_bytes)`.
-    pub fn ingest_stream_packet(
+    fn ingest_stream_packet_inner(
         &mut self,
         packet: MqttPacket,
         stream: u64,
@@ -1161,7 +1189,7 @@ impl MqttEngine {
         stream: u64,
         events: &mut Vec<MqttEvent>,
     ) -> Vec<u8> {
-        self.last_packet_received = Instant::now();
+        self.last_packet_received = self.now;
         events.extend(self.take_events());
         let mut response_bytes = Vec::new();
         match packet {
@@ -1189,7 +1217,7 @@ impl MqttEngine {
             }
         }
         if !response_bytes.is_empty() {
-            self.last_packet_sent = Instant::now();
+            self.last_packet_sent = self.now;
         }
 
         // Acknowledgements may have freed inflight capacity; flush any control
@@ -1204,7 +1232,7 @@ impl MqttEngine {
     ///
     /// Be aware that this might fail immediately with `MqttClientError::BufferFull`
     /// if the outgoing buffer is at capacity.
-    pub fn subscribe(&mut self, mut command: SubscribeCommand) -> Result<u16, MqttClientError> {
+    fn subscribe_inner(&mut self, mut command: SubscribeCommand) -> Result<u16, MqttClientError> {
         #[cfg(feature = "strict-protocol-compliance")]
         self.ensure_outgoing_allowed(ControlPacketType::SUBSCRIBE)?;
         self.require_full_parser()?;
@@ -1230,14 +1258,17 @@ impl MqttEngine {
             MqttPacket::Subscribe3(subscribev3::MqttSubscribe::new(pid, v3_subs))
         };
 
-        self.enqueue_packet(packet.clone())?;
-        self.inflight_queue.push(pid, packet, 1)?;
+        self.enqueue_packet_inner(packet.clone())?;
+        self.inflight_queue.push_at(pid, packet, 1, self.now)?;
         self.state.reserved.insert(pid);
         self.start_deadline(OperationKind::Subscribe, Some(pid));
         Ok(pid)
     }
 
-    pub fn unsubscribe(&mut self, mut command: UnsubscribeCommand) -> Result<u16, MqttClientError> {
+    fn unsubscribe_inner(
+        &mut self,
+        mut command: UnsubscribeCommand,
+    ) -> Result<u16, MqttClientError> {
         #[cfg(feature = "strict-protocol-compliance")]
         self.ensure_outgoing_allowed(ControlPacketType::UNSUBSCRIBE)?;
         self.require_full_parser()?;
@@ -1254,8 +1285,8 @@ impl MqttEngine {
             MqttPacket::Unsubscribe3(unsubscribev3::MqttUnsubscribe::new(pid, command.topics))
         };
 
-        self.enqueue_packet(packet.clone())?;
-        self.inflight_queue.push(pid, packet, 1)?;
+        self.enqueue_packet_inner(packet.clone())?;
+        self.inflight_queue.push_at(pid, packet, 1, self.now)?;
         self.state.reserved.insert(pid);
         self.start_deadline(OperationKind::Unsubscribe, Some(pid));
         Ok(pid)
@@ -1268,7 +1299,7 @@ impl MqttEngine {
     /// transport to route a SUBSCRIBE onto a dedicated data stream so the SUBACK
     /// (and subsequently delivered messages) flow on that same stream. Packet-id
     /// allocation and inflight tracking remain centralized.
-    pub fn subscribe_encoded(
+    fn subscribe_encoded_inner(
         &mut self,
         mut command: SubscribeCommand,
         stream: Option<u64>,
@@ -1301,16 +1332,16 @@ impl MqttEngine {
         let bytes = packet.to_bytes().map_err(MqttClientError::from)?;
         self.check_packet_size(&bytes)?;
         self.inflight_queue
-            .push_with_stream(pid, packet, 1, stream)?;
+            .push_with_stream_at(pid, packet, 1, stream, self.now)?;
         self.state.reserved.insert(pid);
         self.start_deadline(OperationKind::Subscribe, Some(pid));
-        self.last_packet_sent = Instant::now();
+        self.last_packet_sent = self.now;
         Ok((pid, bytes))
     }
 
     /// Encode an UNSUBSCRIBE packet immediately and return its bytes, bypassing
     /// the shared outgoing buffer. See [`subscribe_encoded`](Self::subscribe_encoded).
-    pub fn unsubscribe_encoded(
+    fn unsubscribe_encoded_inner(
         &mut self,
         mut command: UnsubscribeCommand,
         stream: Option<u64>,
@@ -1334,10 +1365,10 @@ impl MqttEngine {
         let bytes = packet.to_bytes().map_err(MqttClientError::from)?;
         self.check_packet_size(&bytes)?;
         self.inflight_queue
-            .push_with_stream(pid, packet, 1, stream)?;
+            .push_with_stream_at(pid, packet, 1, stream, self.now)?;
         self.state.reserved.insert(pid);
         self.start_deadline(OperationKind::Unsubscribe, Some(pid));
-        self.last_packet_sent = Instant::now();
+        self.last_packet_sent = self.now;
         Ok((pid, bytes))
     }
 
@@ -1351,19 +1382,19 @@ impl MqttEngine {
 
     /// Queue a DISCONNECT packet and mark the session disconnected on success.
     /// Queueing errors are returned without marking a connected session disconnected.
-    pub fn disconnect(&mut self) -> Result<(), MqttClientError> {
-        self.try_disconnect()
+    fn disconnect_inner(&mut self) -> Result<(), MqttClientError> {
+        self.try_disconnect_inner()
     }
 
     /// Queue a DISCONNECT packet, propagating [`MqttClientError::BufferFull`] if
     /// the outgoing buffer is full. The session is marked disconnected only once
     /// the packet has actually been queued. A no-op (returns `Ok`) if already
     /// disconnected.
-    pub fn try_disconnect(&mut self) -> Result<(), MqttClientError> {
-        self.try_disconnect_with(0, Vec::new())
+    fn try_disconnect_inner(&mut self) -> Result<(), MqttClientError> {
+        self.try_disconnect_with_inner(0, Vec::new())
     }
 
-    pub fn try_disconnect_with(
+    fn try_disconnect_with_inner(
         &mut self,
         reason_code: u8,
         properties: Vec<Property>,
@@ -1400,21 +1431,21 @@ impl MqttEngine {
         } else {
             self.disconnect_packet()
         };
-        self.enqueue_packet(packet)?;
+        self.enqueue_packet_inner(packet)?;
         self.next_reconnect_at = None;
         self.close_input();
         Ok(())
     }
 
-    pub fn auth(
+    fn auth_inner(
         &mut self,
         reason_code: u8,
         properties: Vec<Property>,
     ) -> Result<(), MqttClientError> {
-        self.try_auth(reason_code, properties)
+        self.try_auth_inner(reason_code, properties)
     }
 
-    pub fn try_auth(
+    fn try_auth_inner(
         &mut self,
         reason_code: u8,
         mut properties: Vec<Property>,
@@ -1464,7 +1495,7 @@ impl MqttEngine {
         {
             properties.insert(0, Property::AuthenticationMethod(method.clone()));
         }
-        self.enqueue_packet(MqttPacket::Auth(authv5::MqttAuth::new(
+        self.enqueue_packet_inner(MqttPacket::Auth(authv5::MqttAuth::new(
             reason_code,
             properties,
         )))?;
@@ -1505,7 +1536,7 @@ impl MqttEngine {
         if reason_code == 0 {
             self.state.reauthenticating = false;
         }
-        Some(MqttEvent::AuthReceived(super::client::AuthResult {
+        Some(MqttEvent::AuthReceived(super::types::AuthResult {
             reason_code,
             properties,
         }))
@@ -1619,7 +1650,7 @@ impl MqttEngine {
                 if self.is_connected {
                     self.restore_session(ack.session_present, &mut events);
                 } else {
-                    self.handle_connection_lost();
+                    self.handle_connection_lost_inner();
                 }
             }
             MqttPacket::ConnAck3(ack) => {
@@ -1646,7 +1677,7 @@ impl MqttEngine {
                 if self.is_connected {
                     self.restore_session(ack.session_present, &mut events);
                 } else {
-                    self.handle_connection_lost();
+                    self.handle_connection_lost_inner();
                 }
             }
             MqttPacket::PubAck5(ack) => {
@@ -1740,14 +1771,16 @@ impl MqttEngine {
                 } else {
                     let rel = MqttPacket::PubRel5(MqttPubRel::new(rec.packet_id, 0, Vec::new()));
                     self.inflight_queue
-                        .transition_pubrel(rec.packet_id, rel.clone());
+                        .transition_pubrel_at(rec.packet_id, rel.clone(), self.now)
+                        .expect("validated engine time");
                     responses.push(rel);
                 }
             }
             MqttPacket::PubRec3(rec) => {
                 let rel = MqttPacket::PubRel3(pubrelv3::MqttPubRel::new(rec.message_id));
                 self.inflight_queue
-                    .transition_pubrel(rec.message_id, rel.clone());
+                    .transition_pubrel_at(rec.message_id, rel.clone(), self.now)
+                    .expect("validated engine time");
                 responses.push(rel);
             }
             MqttPacket::PubRel5(rel) => return self.receive_pubrel(rel.packet_id, stream),
@@ -1780,7 +1813,7 @@ impl MqttEngine {
                 }
             }
             MqttPacket::Disconnect5(d) => {
-                self.handle_connection_lost();
+                self.handle_connection_lost_inner();
                 events.push(MqttEvent::DisconnectReceived {
                     reason_code: d.reason_code,
                     properties: d.properties,
@@ -1792,7 +1825,7 @@ impl MqttEngine {
     }
 
     fn restore_session(&mut self, session_present: bool, events: &mut Vec<MqttEvent>) {
-        let mut previous = std::mem::take(&mut self.previous_inflight);
+        let mut previous = core::mem::take(&mut self.previous_inflight);
         let resumed = session_present && !self.options.sessionless;
         let replay_unacknowledged = resumed
             || (self.mqtt_version() != 5 && !self.options.clean_start && !self.options.sessionless);
@@ -1833,7 +1866,7 @@ impl MqttEngine {
             } else if !self.options.subscription_topics.is_empty() {
                 let command =
                     SubscribeCommand::new(None, self.options.subscription_topics.clone(), vec![]);
-                if let Err(error) = self.subscribe(command) {
+                if let Err(error) = self.subscribe_inner(command) {
                     events.push(MqttEvent::Error(error));
                 }
             }
@@ -1850,19 +1883,19 @@ impl MqttEngine {
     }
 
     /// Queue a PINGREQ, returning an error if it cannot be queued.
-    pub fn send_ping(&mut self) -> Result<(), MqttClientError> {
-        self.send_ping_at(Instant::now())
+    fn send_ping_inner(&mut self) -> Result<(), MqttClientError> {
+        self.send_ping_inner_at(self.now)
     }
 
     /// Queue a PINGREQ, propagating [`MqttClientError::BufferFull`] if the
     /// outgoing buffer is full, so callers can confirm it was actually queued.
-    pub fn try_send_ping(&mut self) -> Result<(), MqttClientError> {
-        self.send_ping_at(Instant::now())
+    fn try_send_ping_inner(&mut self) -> Result<(), MqttClientError> {
+        self.send_ping_inner_at(self.now)
     }
 
-    fn send_ping_at(&mut self, now: Instant) -> Result<(), MqttClientError> {
+    fn send_ping_inner_at(&mut self, now: T) -> Result<(), MqttClientError> {
         let packet = self.pingreq_packet();
-        self.enqueue_packet(packet)?;
+        self.enqueue_packet_inner(packet)?;
         self.last_packet_sent = now;
         self.ping_sent_at = Some(now);
         Ok(())
@@ -1895,7 +1928,7 @@ impl MqttEngine {
         Ok(())
     }
 
-    pub fn enqueue_packet(&mut self, packet: MqttPacket) -> Result<(), MqttClientError> {
+    fn enqueue_packet_inner(&mut self, packet: MqttPacket) -> Result<(), MqttClientError> {
         #[cfg(feature = "strict-protocol-compliance")]
         self.ensure_outgoing_allowed(packet.packet_type())?;
         if self.outgoing_buffer.len() >= self.options.max_outgoing_packet_count {
@@ -1911,7 +1944,7 @@ impl MqttEngine {
                 self.check_packet_size(&bytes)?;
                 self.check_output_capacity(bytes.len())?;
                 self.outgoing_buffer.push_back(bytes);
-                self.last_packet_sent = Instant::now();
+                self.last_packet_sent = self.now;
                 Ok(())
             }
             Err(e) => Err(MqttClientError::from(e)),
@@ -1969,21 +2002,21 @@ impl MqttEngine {
                                 MqttPacket::Publish5(p) if p.qos > 0 => {
                                     let pid = p.packet_id.unwrap();
                                     self.inflight_queue
-                                        .push(pid, packet.clone(), p.qos)
+                                        .push_at(pid, packet.clone(), p.qos, self.now)
                                         .expect("reserved packet ID and checked quota");
                                     self.start_deadline(OperationKind::Publish, Some(pid));
                                 }
                                 MqttPacket::Publish3(p) if p.qos > 0 => {
                                     let pid = p.message_id.unwrap();
                                     self.inflight_queue
-                                        .push(pid, packet.clone(), p.qos)
+                                        .push_at(pid, packet.clone(), p.qos, self.now)
                                         .expect("reserved packet ID and checked quota");
                                     self.start_deadline(OperationKind::Publish, Some(pid));
                                 }
                                 _ => {}
                             }
                             self.outgoing_buffer.push_back(bytes);
-                            self.last_packet_sent = Instant::now();
+                            self.last_packet_sent = self.now;
                         }
                     }
                     Err(e) => {
@@ -2120,7 +2153,7 @@ impl ClearableQuicSessionCache {
 
     fn clear(&self) {
         let mut guard = self.inner.lock().unwrap();
-        let _ = std::mem::replace(&mut *guard, ClientSessionMemoryCache::new(self.size));
+        let _ = core::mem::replace(&mut *guard, ClientSessionMemoryCache::new(self.size));
     }
 }
 
@@ -2466,7 +2499,7 @@ impl QuicMqttEngine {
         transport.datagram_receive_buffer_size(None);
         // Set max_idle_timeout to prevent QUIC from timing out before MQTT keepalive mechanism
         // Use 120 seconds to accommodate MQTT keepalive (typically 30-60s) with 2x multiplier for safety
-        let idle_timeout = std::time::Duration::from_secs(120)
+        let idle_timeout = core::time::Duration::from_secs(120)
             .try_into()
             .map_err(|e| MqttClientError::InternalError {
                 message: format!("Failed to convert QUIC idle timeout: {}", e),
@@ -3003,6 +3036,10 @@ impl QuicMqttEngine {
 
     /// Drive time-dependent logic for both QUIC and MQTT state machines.
     pub fn handle_tick(&mut self, now: Instant) -> Vec<MqttEvent> {
+        let now = now.max(self.mqtt_engine.now);
+        if let Err(error) = self.mqtt_engine.begin_update(now) {
+            return vec![MqttEvent::Error(error)];
+        }
         let mut mqtt_events: Vec<MqttEvent> = self.pending_transport_events.drain(..).collect();
 
         let parser_buffer_size = self.mqtt_engine.options().parser_buffer_size;
@@ -3076,7 +3113,7 @@ impl QuicMqttEngine {
                                     .zero_rtt_config
                                     .map(|config| config.replay_on_reject)
                                     .unwrap_or(false);
-                                let journals = std::mem::take(&mut self.early_stream_journal);
+                                let journals = core::mem::take(&mut self.early_stream_journal);
                                 self.control_stream = None;
                                 self.data_streams.clear();
                                 self.default_pub_stream = None;
@@ -3498,7 +3535,7 @@ impl QuicMqttEngine {
         }
 
         // 7. Drive MqttEngine tick
-        let tick_events = self.mqtt_engine.handle_tick(now);
+        let tick_events = self.mqtt_engine.handle_tick(now.max(self.mqtt_engine.now));
         mqtt_events.extend(tick_events);
 
         // 8. Route per-stream (MQTT v3) retransmissions back onto their
@@ -3521,7 +3558,7 @@ impl QuicMqttEngine {
     }
 
     pub fn take_outgoing_datagrams(&mut self) -> VecDeque<(std::net::SocketAddr, Vec<u8>)> {
-        std::mem::take(&mut self.outgoing_datagrams)
+        core::mem::take(&mut self.outgoing_datagrams)
     }
 
     pub fn take_events(&mut self) -> Vec<MqttEvent> {
@@ -3677,9 +3714,10 @@ impl QuicMqttEngine {
             }
 
             if let Some(ds) = data_streams.get_mut(&stream_id) {
-                if let Err(error) =
-                    MqttEngine::validate_input_buffer(mqtt_engine.options(), ds.parser.buffer_mut())
-                {
+                if let Err(error) = MqttEngine::<Instant>::validate_input_buffer(
+                    mqtt_engine.options(),
+                    ds.parser.buffer_mut(),
+                ) {
                     mqtt_engine.fail_connection(error);
                     events.extend(mqtt_engine.take_events());
                     ds.recv_closed = true;
@@ -3788,7 +3826,7 @@ impl QuicMqttEngine {
 
     fn stream_send_order(streams: &HashMap<StreamId, QuicStream>) -> Vec<StreamId> {
         let mut order: Vec<_> = streams.keys().copied().collect();
-        order.sort_by_key(|id| (std::cmp::Reverse(streams[id].priority), u64::from(*id)));
+        order.sort_by_key(|id| (core::cmp::Reverse(streams[id].priority), u64::from(*id)));
         order
     }
 
@@ -3832,11 +3870,12 @@ impl QuicMqttEngine {
                 MqttPacket::Publish3(p) => p.qos,
                 _ => 2,
             };
-            self.mqtt_engine.inflight_queue.push_with_stream(
+            self.mqtt_engine.inflight_queue.push_with_stream_at(
                 packet_id,
                 packet,
                 qos,
                 Some(stream.into()),
+                self.mqtt_engine.now,
             )?;
             self.mqtt_engine
                 .start_deadline(OperationKind::Publish, Some(packet_id));

@@ -46,12 +46,16 @@ macro_rules! v3_packet_id_ack {
                 $flags
             }
 
-            fn variable_header(&self) -> Result<Vec<u8>, $crate::mqtt_serde::parser::ParseError> {
+            fn variable_header(
+                &self,
+            ) -> Result<alloc::vec::Vec<u8>, $crate::mqtt_serde::parser::ParseError> {
                 Ok(self.message_id.to_be_bytes().to_vec())
             }
 
-            fn payload(&self) -> Result<Vec<u8>, $crate::mqtt_serde::parser::ParseError> {
-                Ok(Vec::new())
+            fn payload(
+                &self,
+            ) -> Result<alloc::vec::Vec<u8>, $crate::mqtt_serde::parser::ParseError> {
+                Ok(alloc::vec::Vec::new())
             }
 
             fn from_bytes(
@@ -68,7 +72,10 @@ macro_rules! v3_packet_id_ack {
                 let flags = buffer[0] & 0x0F;
                 if flags != $flags {
                     return Err($crate::mqtt_serde::parser::ParseError::ParseError(
-                        concat!($packet_name, " packet has invalid fixed header flags").to_string(),
+                        alloc::string::String::from(concat!(
+                            $packet_name,
+                            " packet has invalid fixed header flags"
+                        )),
                     ));
                 }
 
@@ -85,8 +92,10 @@ macro_rules! v3_packet_id_ack {
 
                 if size != 2 {
                     return Err($crate::mqtt_serde::parser::ParseError::ParseError(
-                        concat!($packet_name, " packet must have remaining length of 2")
-                            .to_string(),
+                        alloc::string::String::from(concat!(
+                            $packet_name,
+                            " packet must have remaining length of 2"
+                        )),
                     ));
                 }
 

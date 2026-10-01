@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::string::String;
+use alloc::string::ToString;
+use alloc::vec::Vec;
+
 use crate::mqtt_serde::mqttv5::common::properties::Property;
 use crate::mqtt_serde::mqttv5::subscribev5;
 use crate::mqtt_serde::mqttv5::willv5::Will;
@@ -19,16 +23,16 @@ pub enum TlsBackend {
 /// Optional protocol-operation deadlines. All deadlines are disabled by default.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct OperationTimeouts {
-    pub connect: Option<std::time::Duration>,
-    pub publish: Option<std::time::Duration>,
-    pub subscribe: Option<std::time::Duration>,
-    pub unsubscribe: Option<std::time::Duration>,
+    pub connect: Option<core::time::Duration>,
+    pub publish: Option<core::time::Duration>,
+    pub subscribe: Option<core::time::Duration>,
+    pub unsubscribe: Option<core::time::Duration>,
 }
 
 impl OperationTimeouts {
     /// Finite deadlines suitable as a starting point for cloud connections.
     pub fn cloud() -> Self {
-        use std::time::Duration;
+        use core::time::Duration;
         Self {
             connect: Some(Duration::from_secs(30)),
             publish: Some(Duration::from_secs(10)),

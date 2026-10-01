@@ -1,12 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::vec::Vec;
+
+use crate::collections::Map as HashMap;
 use crate::mqtt_serde::control_packet::MqttPacket;
 use crate::mqtt_serde::mqttv5::puback::MqttPubAck;
 use crate::mqtt_serde::mqttv5::pubcomp::MqttPubComp;
 use crate::mqtt_serde::mqttv5::publish::MqttPublish;
 use crate::mqtt_serde::mqttv5::pubrec::MqttPubRec;
 use crate::mqtt_serde::mqttv5::pubrel::MqttPubRel;
-use std::collections::HashMap;
 
 pub struct ClientSession {
     // QoS 1 and QoS 2 messages that have been sent but not acknowledged.

@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 
 /// Generates a v5.0 "packet identifier acknowledgement" packet: a struct with
-/// `packet_id: u16`, `reason_code: u8`, and `properties: Vec<Property>` fields,
+/// `packet_id: u16`, `reason_code: u8`, and `properties: alloc::vec::Vec<Property>` fields,
 /// no payload, and the compact wire format defined in MQTT 5.0 §3.x.2.
 ///
 /// Used by PUBACK, PUBREC, PUBCOMP, and PUBREL.
@@ -25,14 +25,17 @@ macro_rules! v5_packet_id_ack {
         pub struct $struct_name {
             pub packet_id: u16,
             pub reason_code: u8,
-            pub properties: Vec<$crate::mqtt_serde::mqttv5::common::properties::Property>,
+            pub properties:
+                alloc::vec::Vec<$crate::mqtt_serde::mqttv5::common::properties::Property>,
         }
 
         impl $struct_name {
             pub fn new(
                 packet_id: u16,
                 reason_code: u8,
-                properties: Vec<$crate::mqtt_serde::mqttv5::common::properties::Property>,
+                properties: alloc::vec::Vec<
+                    $crate::mqtt_serde::mqttv5::common::properties::Property,
+                >,
             ) -> Self {
                 Self {
                     packet_id,
@@ -42,13 +45,15 @@ macro_rules! v5_packet_id_ack {
             }
 
             pub fn new_success(packet_id: u16) -> Self {
-                Self::new(packet_id, 0x00, Vec::new())
+                Self::new(packet_id, 0x00, alloc::vec::Vec::new())
             }
 
             pub fn new_error(
                 packet_id: u16,
                 reason_code: u8,
-                properties: Vec<$crate::mqtt_serde::mqttv5::common::properties::Property>,
+                properties: alloc::vec::Vec<
+                    $crate::mqtt_serde::mqttv5::common::properties::Property,
+                >,
             ) -> Self {
                 Self::new(packet_id, reason_code, properties)
             }
@@ -74,7 +79,9 @@ macro_rules! v5_packet_id_ack {
                 $flags
             }
 
-            fn variable_header(&self) -> Result<Vec<u8>, $crate::mqtt_serde::parser::ParseError> {
+            fn variable_header(
+                &self,
+            ) -> Result<alloc::vec::Vec<u8>, $crate::mqtt_serde::parser::ParseError> {
                 use $crate::mqtt_serde::mqttv5::common::properties::encode_properities_hdr;
                 let mut bytes = self.packet_id.to_be_bytes().to_vec();
                 if self.reason_code == 0x00 && self.properties.is_empty() {
@@ -85,8 +92,10 @@ macro_rules! v5_packet_id_ack {
                 Ok(bytes)
             }
 
-            fn payload(&self) -> Result<Vec<u8>, $crate::mqtt_serde::parser::ParseError> {
-                Ok(Vec::new())
+            fn payload(
+                &self,
+            ) -> Result<alloc::vec::Vec<u8>, $crate::mqtt_serde::parser::ParseError> {
+                Ok(alloc::vec::Vec::new())
             }
 
             fn from_bytes(
@@ -109,10 +118,14 @@ macro_rules! v5_packet_id_ack {
                 {
                     let flags = buffer[0] & 0x0F;
                     if flags != $flags {
-                        return Err($crate::mqtt_serde::parser::ParseError::ParseError(format!(
-                            "Invalid {} flags: expected 0x{:02x}, got 0x{:02x}",
-                            $packet_name, $flags, flags
-                        )));
+                        return Err($crate::mqtt_serde::parser::ParseError::ParseError(
+                            alloc::format!(
+                                "Invalid {} flags: expected 0x{:02x}, got 0x{:02x}",
+                                $packet_name,
+                                $flags,
+                                flags
+                            ),
+                        ));
                     }
                 }
 
@@ -151,13 +164,13 @@ macro_rules! v5_packet_id_ack {
                             .ok_or($crate::mqtt_serde::parser::ParseError::BufferTooShort)?,
                     )?
                 } else {
-                    (vec![], 0)
+                    (alloc::vec![], 0)
                 };
                 offset += consumed;
 
                 if offset != total_len {
                     return Err($crate::mqtt_serde::parser::ParseError::InternalError(
-                        format!("Inconsistent offset {} != total: {}", offset, total_len),
+                        alloc::format!("Inconsistent offset {} != total: {}", offset, total_len),
                     ));
                 }
 

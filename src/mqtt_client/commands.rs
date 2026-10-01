@@ -1,5 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::string::String;
+use alloc::vec;
+use alloc::vec::Vec;
+
 use serde::{Deserialize, Serialize};
 
 use crate::mqtt_serde::mqttv5::{
@@ -140,15 +144,15 @@ pub enum PublishBuilderError {
     NoTopic,
 }
 
-impl std::fmt::Display for PublishBuilderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for PublishBuilderError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::NoTopic => write!(f, "Topic name not provided. Call topic() to set the topic."),
         }
     }
 }
 
-impl std::error::Error for PublishBuilderError {}
+impl core::error::Error for PublishBuilderError {}
 
 impl PublishCommandBuilder {
     pub fn new() -> Self {
@@ -302,8 +306,8 @@ pub enum SubscribeBuilderError {
     NoTopics,
 }
 
-impl std::fmt::Display for SubscribeBuilderError {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+impl core::fmt::Display for SubscribeBuilderError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
         match self {
             Self::NoTopics => write!(
                 f,
@@ -313,7 +317,7 @@ impl std::fmt::Display for SubscribeBuilderError {
     }
 }
 
-impl std::error::Error for SubscribeBuilderError {}
+impl core::error::Error for SubscribeBuilderError {}
 
 impl SubscribeCommandBuilder {
     pub fn new() -> Self {

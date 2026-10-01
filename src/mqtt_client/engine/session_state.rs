@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use super::*;
+use crate::collections::Set as HashSet;
 use crate::mqtt_session::client_store::{ClientSessionState, ReceivedExchange, ReceivedStage};
 use protocol_state::ReceiveStage;
-use std::collections::HashSet;
 
 fn invalid(reason: &str) -> MqttClientError {
     MqttClientError::InvalidConfiguration {
@@ -71,7 +71,7 @@ fn packet_id(
     Ok(Some(id))
 }
 
-impl MqttEngine {
+impl<T: TimePoint> MqttEngine<T> {
     /// Capture an owned, serializable checkpoint without changing the engine.
     ///
     /// Requires a nonempty client ID and session tracking. Includes accepted

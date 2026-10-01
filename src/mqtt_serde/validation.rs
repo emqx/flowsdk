@@ -2,6 +2,8 @@
 
 //! Shared field validation for strict MQTT encoding and decoding.
 
+use alloc::borrow::ToOwned;
+
 use super::control_packet::ControlPacketType;
 use super::mqttv5::common::properties::Property;
 use super::parser::ParseError;

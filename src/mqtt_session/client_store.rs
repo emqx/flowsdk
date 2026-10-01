@@ -2,6 +2,8 @@
 
 //! Application-owned storage for MQTT client sessions.
 
+use alloc::{string::String, vec::Vec};
+
 use crate::mqtt_serde::control_packet::MqttPacket;
 use serde::{Deserialize, Serialize};
 
@@ -100,7 +102,7 @@ pub(crate) enum ReceivedStage {
 /// exactly-once. Application events and completion notifications are not stored
 /// in the checkpoint.
 pub trait ClientSessionStore {
-    type Error: std::error::Error + Send + Sync + 'static;
+    type Error: core::error::Error + Send + Sync + 'static;
 
     /// Insert a new record. Return an error if the key already exists.
     fn create(&mut self, key: &str, state: &ClientSessionState) -> Result<(), Self::Error>;

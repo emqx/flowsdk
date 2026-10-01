@@ -1,9 +1,14 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use serde::{de::DeserializeOwned, Deserialize, Serialize};
-use std::collections::{BTreeMap, VecDeque};
+use alloc::collections::{BTreeMap, VecDeque};
+#[cfg(feature = "std")]
+use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
+#[cfg(feature = "std")]
 use std::fs::File;
+#[cfg(feature = "std")]
 use std::io::{self, BufReader, BufWriter};
+#[cfg(feature = "std")]
 use std::path::Path;
 
 /// A priority queue with a fixed capacity limit.
@@ -110,6 +115,7 @@ where
     }
 
     /// Saves the queue state to a file (JSON format).
+    #[cfg(feature = "std")]
     pub fn save_to_file<Q: AsRef<Path>>(&self, path: Q) -> io::Result<()>
     where
         P: Serialize + DeserializeOwned,
@@ -122,6 +128,7 @@ where
     }
 
     /// Restores the queue state from a file.
+    #[cfg(feature = "std")]
     pub fn load_from_file<Q: AsRef<Path>>(path: Q) -> io::Result<Self>
     where
         P: Serialize + DeserializeOwned,

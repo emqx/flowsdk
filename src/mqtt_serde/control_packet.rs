@@ -1,7 +1,10 @@
 // SPDX-License-Identifier: MPL-2.0
 
+use alloc::vec;
+use alloc::vec::Vec;
+
+use core::convert::TryFrom;
 use serde::{Deserialize, Serialize};
-use std::convert::TryFrom;
 
 use super::base_data::VariableByteInteger;
 use super::parser::packet_type;
