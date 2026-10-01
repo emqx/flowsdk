@@ -90,7 +90,7 @@ pub fn parse_utf8_string(buffer: &[u8]) -> Result<(String, usize), ParseError> {
 
 pub fn parse_topic_name(buffer: &[u8]) -> Result<ParseOk, ParseError> {
     let (res, consumed) = parse_utf8_string(buffer)?;
-    Ok(ParseOk::TopicName(res.to_string(), consumed))
+    Ok(ParseOk::TopicName(res, consumed))
 }
 
 pub fn parse_packet_id(buffer: &[u8]) -> Result<(u16, usize), ParseError> {
