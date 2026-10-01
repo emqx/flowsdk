@@ -66,10 +66,9 @@ impl VariableByteInteger {
         }
 
         loop {
-            let byte = *buffer.get(i).ok_or(ParseError::More(
-                1,
-                "vbi: not enough bytes for remaining length".to_string(),
-            ))?;
+            let byte = *buffer.get(i).ok_or_else(|| {
+                ParseError::More(1, "vbi: not enough bytes for remaining length".to_string())
+            })?;
 
             if byte > 127 && i == 3 {
                 // most significant bit is 1 and we have 4 bytes, so the remaining length is invalid
