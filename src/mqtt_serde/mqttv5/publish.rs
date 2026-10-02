@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket, MqttPacket};
-use crate::mqtt_serde::mqttv5::common::properties::{encode_properities_hdr, Property};
+use crate::mqtt_serde::mqttv5::common::properties::{
+    encode_properities_hdr, Property, PropertyEncoder,
+};
 use crate::mqtt_serde::parser;
 use crate::mqtt_serde::parser::{
     packet_type, parse_packet_id, parse_remaining_length, parse_topic_name, ParseError, ParseOk,
@@ -125,18 +127,41 @@ impl MqttControlPacket for MqttPublish {
     }
 
     fn encode_to_buffer(&self, bytes: &mut Vec<u8>) -> Result<(), ParseError> {
-        // We pre-calculate lengths to avoid multiple allocations
-        // This is a trade-off: we still call variable_header() and payload(),
-        // but we can optimize encode_to_buffer further later if needed.
-        // For now, let's at least avoid the clone in Default implementation of encode_to_buffer
-
         self.validate()?;
-        let vhdr = self.variable_header()?;
-        let remaining_length = vhdr.len() + self.payload.len();
-
-        bytes.extend(self.fixed_header(remaining_length));
-        bytes.extend(vhdr);
-        bytes.extend_from_slice(&self.payload);
+        // The UTF-8 encoder also enforces this limit without strict validation.
+        if self.topic_name.len() > u16::MAX as usize {
+            return Err(ParseError::StringTooLong);
+        }
+        let packet_id = if self.qos > 0 {
+            Some(self.packet_id.ok_or_else(|| {
+                ParseError::ParseError("QoS > 0 requires a packet identifier".to_string())
+            })?)
+        } else {
+            None
+        };
+        // Finish all fallible work before appending anything to the caller's buffer.
+        if self.properties.is_empty() {
+            crate::mqtt_serde::control_packet::encode_publish_into(
+                self.flags(),
+                &self.topic_name,
+                packet_id,
+                &[0],
+                &self.payload,
+                bytes,
+            );
+        } else {
+            let properties = PropertyEncoder::new(&self.properties)?;
+            crate::mqtt_serde::control_packet::encode_publish_header_into(
+                self.flags(),
+                &self.topic_name,
+                packet_id,
+                properties.encoded_len(),
+                self.payload.len(),
+                bytes,
+            );
+            properties.encode_into(bytes);
+            bytes.extend_from_slice(&self.payload);
+        }
         Ok(())
     }
 
@@ -244,15 +269,8 @@ impl MqttControlPacket for MqttPublish {
     }
 
     fn to_bytes(&self) -> Result<Vec<u8>, ParseError> {
-        self.validate()?;
-        let vhdr = self.variable_header()?;
-        let remaining_length = vhdr.len() + self.payload.len();
-        let fixed_hdr = self.fixed_header(remaining_length);
-
-        let mut bytes = Vec::with_capacity(fixed_hdr.len() + remaining_length);
-        bytes.extend(fixed_hdr);
-        bytes.extend(vhdr);
-        bytes.extend_from_slice(&self.payload);
+        let mut bytes = Vec::new();
+        self.encode_to_buffer(&mut bytes)?;
         Ok(bytes)
     }
 }

@@ -2,9 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::mqtt_serde::base_data::VariableByteInteger;
+use crate::mqtt_serde::decode_binary_data;
 use crate::mqtt_serde::parser;
 use crate::mqtt_serde::parser::{parse_utf8_string, ParseError};
-use crate::mqtt_serde::{decode_binary_data, encode_utf8_string, encode_variable_length};
 
 pub type Properties = Vec<Property>;
 // MQTT 5.0: 2.2.2
@@ -71,9 +72,54 @@ pub enum Property {
 }
 
 impl Property {
-    fn encode(&self, bytes: &mut Vec<u8>) -> Result<(), parser::ParseError> {
+    fn encoded_len(&self) -> Result<usize, ParseError> {
         #[cfg(feature = "strict-protocol-compliance")]
         crate::mqtt_serde::validation::property_value(self)?;
+
+        // Wire length limits also apply when strict protocol validation is disabled.
+        fn binary_len(len: usize) -> Result<usize, ParseError> {
+            if len > u16::MAX as usize {
+                return Err(ParseError::StringTooLong);
+            }
+            Ok(2 + len)
+        }
+
+        let value_len = match self {
+            Property::PayloadFormatIndicator(_)
+            | Property::RequestProblemInformation(_)
+            | Property::RequestResponseInformation(_)
+            | Property::MaximumQoS(_)
+            | Property::RetainAvailable(_)
+            | Property::WildcardSubscriptionAvailable(_)
+            | Property::SubscriptionIdentifierAvailable(_)
+            | Property::SharedSubscriptionAvailable(_) => 1,
+            Property::ServerKeepAlive(_)
+            | Property::ReceiveMaximum(_)
+            | Property::TopicAliasMaximum(_)
+            | Property::TopicAlias(_) => 2,
+            Property::MessageExpiryInterval(_)
+            | Property::SessionExpiryInterval(_)
+            | Property::WillDelayInterval(_)
+            | Property::MaximumPacketSize(_) => 4,
+            Property::SubscriptionIdentifier(val) => VariableByteInteger::encoded_len(*val),
+            Property::ContentType(val)
+            | Property::ResponseTopic(val)
+            | Property::AssignedClientIdentifier(val)
+            | Property::AuthenticationMethod(val)
+            | Property::ResponseInformation(val)
+            | Property::ServerReference(val)
+            | Property::ReasonString(val) => binary_len(val.len())?,
+            Property::CorrelationData(val) | Property::AuthenticationData(val) => {
+                binary_len(val.len())?
+            }
+            Property::UserProperty(key, val) => binary_len(key.len())? + binary_len(val.len())?,
+        };
+        // All current MQTT property identifiers fit in one VBI byte.
+        Ok(1 + value_len)
+    }
+
+    // Only PropertyEncoder calls this, after validating every value and length.
+    fn encode_validated(&self, bytes: &mut Vec<u8>) {
         match self {
             Property::PayloadFormatIndicator(val) => {
                 bytes.push(property_id(PropertyID::PayloadFormatIndicator));
@@ -85,19 +131,19 @@ impl Property {
             }
             Property::ContentType(val) => {
                 bytes.push(property_id(PropertyID::ContentType));
-                bytes.extend(encode_utf8_string(val.as_str())?);
+                append_binary(val.as_bytes(), bytes);
             }
             Property::ResponseTopic(val) => {
                 bytes.push(property_id(PropertyID::ResponseTopic));
-                bytes.extend(encode_utf8_string(val.as_str())?);
+                append_binary(val.as_bytes(), bytes);
             }
             Property::CorrelationData(val) => {
                 bytes.push(property_id(PropertyID::CorrelationData));
-                bytes.extend(crate::mqtt_serde::encode_binary_data(val)?);
+                append_binary(val, bytes);
             }
             Property::SubscriptionIdentifier(val) => {
                 bytes.push(property_id(PropertyID::SubscriptionIdentifier));
-                bytes.extend(crate::mqtt_serde::encode_variable_length(*val as usize));
+                VariableByteInteger::encode_into(*val, bytes);
             }
             Property::SessionExpiryInterval(val) => {
                 bytes.push(property_id(PropertyID::SessionExpiryInterval));
@@ -105,7 +151,7 @@ impl Property {
             }
             Property::AssignedClientIdentifier(val) => {
                 bytes.push(property_id(PropertyID::AssignedClientIdentifier));
-                bytes.extend(encode_utf8_string(val.as_str())?);
+                append_binary(val.as_bytes(), bytes);
             }
             Property::ServerKeepAlive(val) => {
                 bytes.push(property_id(PropertyID::ServerKeepAlive));
@@ -113,11 +159,11 @@ impl Property {
             }
             Property::AuthenticationMethod(val) => {
                 bytes.push(property_id(PropertyID::AuthenticationMethod));
-                bytes.extend(encode_utf8_string(val.as_str())?);
+                append_binary(val.as_bytes(), bytes);
             }
             Property::AuthenticationData(val) => {
                 bytes.push(property_id(PropertyID::AuthenticationData));
-                bytes.extend(crate::mqtt_serde::encode_binary_data(val)?);
+                append_binary(val, bytes);
             }
             Property::RequestProblemInformation(val) => {
                 bytes.push(property_id(PropertyID::RequestProblemInformation));
@@ -133,15 +179,15 @@ impl Property {
             }
             Property::ResponseInformation(val) => {
                 bytes.push(property_id(PropertyID::ResponseInformation));
-                bytes.extend(encode_utf8_string(val.as_str())?);
+                append_binary(val.as_bytes(), bytes);
             }
             Property::ServerReference(val) => {
                 bytes.push(property_id(PropertyID::ServerReference));
-                bytes.extend(encode_utf8_string(val.as_str())?);
+                append_binary(val.as_bytes(), bytes);
             }
             Property::ReasonString(val) => {
                 bytes.push(property_id(PropertyID::ReasonString));
-                bytes.extend(encode_utf8_string(val.as_str())?);
+                append_binary(val.as_bytes(), bytes);
             }
             Property::ReceiveMaximum(val) => {
                 bytes.push(property_id(PropertyID::ReceiveMaximum));
@@ -165,8 +211,8 @@ impl Property {
             }
             Property::UserProperty(key, val) => {
                 bytes.push(property_id(PropertyID::UserProperty));
-                bytes.extend(encode_utf8_string(key.as_str())?);
-                bytes.extend(encode_utf8_string(val.as_str())?);
+                append_binary(key.as_bytes(), bytes);
+                append_binary(val.as_bytes(), bytes);
             }
             Property::MaximumPacketSize(val) => {
                 bytes.push(property_id(PropertyID::MaximumPacketSize));
@@ -185,7 +231,43 @@ impl Property {
                 bytes.push(*val);
             }
         }
-        Ok(())
+    }
+}
+
+fn append_binary(data: &[u8], bytes: &mut Vec<u8>) {
+    bytes.extend_from_slice(&(data.len() as u16).to_be_bytes());
+    bytes.extend_from_slice(data);
+}
+
+/// A validated, immutably borrowed property section with its wire size computed.
+/// Preparation can fail; writing the prepared section cannot return a parse error.
+pub(crate) struct PropertyEncoder<'a> {
+    properties: &'a [Property],
+    body_len: usize,
+}
+
+impl<'a> PropertyEncoder<'a> {
+    pub(crate) fn new(properties: &'a [Property]) -> Result<Self, ParseError> {
+        let mut body_len = 0;
+        for property in properties {
+            body_len += property.encoded_len()?;
+        }
+        Ok(Self {
+            properties,
+            body_len,
+        })
+    }
+
+    pub(crate) fn encoded_len(&self) -> usize {
+        VariableByteInteger::encoded_len(self.body_len as u32) + self.body_len
+    }
+
+    pub(crate) fn encode_into(&self, bytes: &mut Vec<u8>) {
+        bytes.reserve(self.encoded_len());
+        VariableByteInteger::encode_into(self.body_len as u32, bytes);
+        for property in self.properties {
+            property.encode_validated(bytes);
+        }
     }
 }
 
@@ -194,23 +276,13 @@ fn property_id(property: PropertyID) -> u8 {
     property as u8
 }
 
+// Preserve the existing public function signature; internal writers accept slices.
+#[allow(clippy::ptr_arg)]
 pub fn encode_properities_hdr(properties: &Vec<Property>) -> Result<Vec<u8>, parser::ParseError> {
-    let mut props = Vec::new();
-    encode_properities(properties, &mut props)?;
-    let mut bytes = Vec::new();
-    bytes.extend(encode_variable_length(props.len()));
-    bytes.extend(props);
+    let properties = PropertyEncoder::new(properties)?;
+    let mut bytes = Vec::with_capacity(properties.encoded_len());
+    properties.encode_into(&mut bytes);
     Ok(bytes)
-}
-
-fn encode_properities(
-    properties: &Vec<Property>,
-    bytes: &mut Vec<u8>,
-) -> Result<(), parser::ParseError> {
-    for p in properties {
-        p.encode(bytes)?;
-    }
-    Ok(())
 }
 
 pub fn parse_properties_hdr(buffer: &[u8]) -> Result<(Vec<Property>, usize), ParseError> {
@@ -477,8 +549,10 @@ mod tests {
     fn test_encode_property() {
         let prop = Property::PayloadFormatIndicator(1);
         let mut bytes = Vec::new();
-        prop.encode(&mut bytes).unwrap();
-        assert_eq!(bytes, vec![0x01, 0x01]);
+        PropertyEncoder::new(&[prop])
+            .unwrap()
+            .encode_into(&mut bytes);
+        assert_eq!(bytes, vec![0x02, 0x01, 0x01]);
     }
 
     #[test]

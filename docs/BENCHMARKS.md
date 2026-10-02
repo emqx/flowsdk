@@ -14,6 +14,9 @@ cargo +stable bench -p flowsdk --bench parser
 # Direct leveled APIs, without streaming feed/buffer overhead
 cargo +stable bench -p flowsdk --bench leveled_parser
 
+# Encoding only, across MQTT versions and packet fixtures (25 cases)
+cargo +stable bench -p flowsdk --bench codec -- '^codec/(v3_1_1|v5)/encode/'
+
 # All suites (Criterion's default warm-up, sampling, and measurement settings)
 cargo +stable bench -p flowsdk --bench codec --bench parser --bench leveled_parser --bench queues --bench engine
 
