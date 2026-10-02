@@ -35,6 +35,10 @@ SWIFT_LIB_DIR="swift/lib"
 echo "Building flowsdk_ffi ($PROFILE)..."
 if [[ "$COVERAGE" == true ]]; then
     mkdir -p target/llvm-cov-target
+    # The Cargo cache may contain profiles from an older Rust/LLVM version.
+    # Raw profiles are not compatible across all LLVM versions; collect afresh.
+    find target/llvm-cov-target -maxdepth 1 -type f \
+        \( -name 'swift-*.profraw' -o -name 'swift-cov.profdata' \) -delete
     export RUSTFLAGS="-C instrument-coverage"
     export LLVM_PROFILE_FILE="$PWD/target/llvm-cov-target/swift-%p-%m.profraw"
 fi
