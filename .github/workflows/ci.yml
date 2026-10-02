@@ -297,9 +297,6 @@ jobs:
       with:
         components: llvm-tools-preview
 
-    - name: Install cargo-llvm-cov
-      run: cargo install cargo-llvm-cov
-
     - name: Cache Cargo dependencies
       uses: actions/cache@v4
       with:
@@ -316,16 +313,12 @@ jobs:
 
     - name: Export coverage to lcov
       run: |
-        PROFDATA_VAR=$(cargo +stable llvm-cov show-env | grep LLVM_PROFDATA) || true
-        PROFDATA_TOOL=$(echo "$PROFDATA_VAR" | cut -d= -f2- | tr -d '"' | tr -d "'" | xargs)
-        if [ -z "$PROFDATA_TOOL" ] || [ ! -x "$PROFDATA_TOOL" ]; then
-          export PATH="$(rustc --print=target-libdir)/../bin:$PATH"
-          PROFDATA_TOOL=$(which llvm-profdata)
-        fi
-        if ls target/llvm-cov-target/*.profraw 2>/dev/null; then
-          "$PROFDATA_TOOL" merge -sparse target/llvm-cov-target/*.profraw \
+        # Both tools must match the Rust compiler that built libflowsdk_ffi.
+        LLVM_TOOLS_DIR="$(rustc --print=target-libdir)/../bin"
+        if ls target/llvm-cov-target/swift-*.profraw 2>/dev/null; then
+          "$LLVM_TOOLS_DIR/llvm-profdata" merge -sparse target/llvm-cov-target/swift-*.profraw \
             -o target/llvm-cov-target/swift-cov.profdata
-          llvm-cov export -format=lcov \
+          "$LLVM_TOOLS_DIR/llvm-cov" export -format=lcov \
             --instr-profile target/llvm-cov-target/swift-cov.profdata \
             -object target/debug/libflowsdk_ffi.dylib \
             > lcov-swift.info
