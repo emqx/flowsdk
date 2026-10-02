@@ -8,7 +8,7 @@ pub mod parser;
 #[cfg(feature = "strict-protocol-compliance")]
 mod validation;
 
-use crate::mqtt_serde::base_data::{BinaryData, TwoByteInteger, Utf8String, VariableByteInteger};
+use crate::mqtt_serde::base_data::{BinaryData, TwoByteInteger, Utf8String};
 use crate::mqtt_serde::parser::ParseError;
 //re export
 pub use crate::mqtt_serde::parser::leveled::ParseLevel;
@@ -142,11 +142,6 @@ pub fn validate_shared_subscription(topic_filter: &str) -> Result<(), ParseError
     }
 
     Ok(())
-}
-
-// MQTT 5.0 Spec, 1.5.5
-fn encode_variable_length(len: usize) -> Vec<u8> {
-    VariableByteInteger::encode(len as u32)
 }
 
 // for property

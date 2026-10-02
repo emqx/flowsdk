@@ -39,8 +39,22 @@ impl FourByteInteger {
 pub struct VariableByteInteger;
 
 impl VariableByteInteger {
+    pub(crate) const fn encoded_len(mut val: u32) -> usize {
+        let mut len = 1;
+        while val >= 128 {
+            val >>= 7;
+            len += 1;
+        }
+        len
+    }
+
     pub fn encode(val: u32) -> Vec<u8> {
         let mut bytes = Vec::new();
+        Self::encode_into(val, &mut bytes);
+        bytes
+    }
+
+    pub(crate) fn encode_into(val: u32, bytes: &mut Vec<u8>) {
         let mut num = val;
         loop {
             let mut byte = (num % 128) as u8;
@@ -53,7 +67,6 @@ impl VariableByteInteger {
                 break;
             }
         }
-        bytes
     }
 
     pub fn decode(buffer: &[u8]) -> Result<(usize, usize), ParseError> {

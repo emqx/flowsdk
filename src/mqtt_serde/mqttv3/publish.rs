@@ -76,6 +76,32 @@ impl MqttControlPacket for MqttPublish {
         Ok(self.payload.clone())
     }
 
+    fn encode_to_buffer(&self, bytes: &mut Vec<u8>) -> Result<(), ParseError> {
+        self.validate()?;
+        let packet_id = if self.qos > 0 {
+            Some(self.message_id.ok_or_else(|| {
+                ParseError::ParseError("Message ID is required for QoS > 0".to_string())
+            })?)
+        } else {
+            None
+        };
+        crate::mqtt_serde::control_packet::encode_publish_into(
+            self.flags(),
+            &self.topic_name,
+            packet_id,
+            &[],
+            &self.payload,
+            bytes,
+        );
+        Ok(())
+    }
+
+    fn to_bytes(&self) -> Result<Vec<u8>, ParseError> {
+        let mut bytes = Vec::new();
+        self.encode_to_buffer(&mut bytes)?;
+        Ok(bytes)
+    }
+
     fn from_bytes(buffer: &[u8]) -> Result<ParseOk, ParseError> {
         let packet_type = packet_type(buffer)?;
         if packet_type != ControlPacketType::PUBLISH as u8 {

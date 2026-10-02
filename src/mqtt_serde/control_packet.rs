@@ -3,7 +3,7 @@
 use serde::{Deserialize, Serialize};
 use std::convert::TryFrom;
 
-use super::encode_variable_length;
+use super::base_data::VariableByteInteger;
 use super::parser::packet_type;
 use super::parser::{ParseError, ParseOk};
 
@@ -284,9 +284,9 @@ pub trait MqttControlPacket {
     // The fixed header consists of a control packet type, flags, and the remaining length.
     fn fixed_header(&self, len: usize) -> Vec<u8> {
         let byte1: u8 = (self.control_packet_type()) << 4 | self.flags();
-        let variable_length = encode_variable_length(len);
-        let mut hdr = vec![byte1];
-        hdr.extend(variable_length);
+        let mut hdr = Vec::with_capacity(6);
+        hdr.push(byte1);
+        VariableByteInteger::encode_into(len as u32, &mut hdr);
         hdr
     }
 
@@ -325,6 +325,50 @@ pub trait MqttControlPacket {
         bytes.extend(vhdr);
         bytes.extend(payload);
         Ok(bytes)
+    }
+}
+
+/// Append PUBLISH fields after the caller has validated them. `properties`
+/// includes its length prefix for MQTT 5 and is empty for MQTT 3.1.1.
+pub(crate) fn encode_publish_into(
+    flags: u8,
+    topic: &str,
+    packet_id: Option<u16>,
+    properties: &[u8],
+    payload: &[u8],
+    bytes: &mut Vec<u8>,
+) {
+    encode_publish_header_into(
+        flags,
+        topic,
+        packet_id,
+        properties.len(),
+        payload.len(),
+        bytes,
+    );
+    bytes.extend_from_slice(properties);
+    bytes.extend_from_slice(payload);
+}
+
+/// Reserve the complete PUBLISH packet and append its fixed header, topic, and ID.
+/// The caller then appends the already-validated properties and payload.
+pub(crate) fn encode_publish_header_into(
+    flags: u8,
+    topic: &str,
+    packet_id: Option<u16>,
+    properties_len: usize,
+    payload_len: usize,
+    bytes: &mut Vec<u8>,
+) {
+    let remaining_length =
+        2 + topic.len() + usize::from(packet_id.is_some()) * 2 + properties_len + payload_len;
+    bytes.reserve(1 + VariableByteInteger::encoded_len(remaining_length as u32) + remaining_length);
+    bytes.push(0x30 | flags);
+    VariableByteInteger::encode_into(remaining_length as u32, bytes);
+    bytes.extend_from_slice(&(topic.len() as u16).to_be_bytes());
+    bytes.extend_from_slice(topic.as_bytes());
+    if let Some(id) = packet_id {
+        bytes.extend_from_slice(&id.to_be_bytes());
     }
 }
 
