@@ -39,7 +39,7 @@ The regression suite uses raw byte fixtures for malformed input:
 
 ```sh
 cargo test -p flowsdk --test codec_validation
-cargo test -p flowsdk --no-default-features --features strict-protocol-compliance --test codec_validation
+cargo test -p flowsdk --no-default-features --features std,strict-protocol-compliance --test codec_validation
 ```
 
 

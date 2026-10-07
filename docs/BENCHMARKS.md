@@ -29,7 +29,7 @@ cargo +stable bench -p flowsdk --bench codec --bench parser --bench leveled_pars
 
 # The core configuration, with protocol validation and without transport features
 cargo +stable bench -p flowsdk --bench codec --bench parser --bench leveled_parser --bench queues --bench engine \
-  --no-default-features --features strict-protocol-compliance -- --test
+  --no-default-features --features std,strict-protocol-compliance -- --test
 ```
 
 HTML reports are in `target/criterion/report/index.html`.

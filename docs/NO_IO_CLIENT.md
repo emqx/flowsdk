@@ -13,7 +13,7 @@ To build the protocol core without optional runtimes or transports while retaini
 strict packet validation:
 
 ```sh
-cargo build --no-default-features --features strict-protocol-compliance
+cargo build --no-default-features --features std,strict-protocol-compliance
 ```
 
 ## Driving the engine

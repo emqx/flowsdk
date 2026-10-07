@@ -68,6 +68,16 @@ fn connect_encodes_ffi_credentials() {
 }
 
 #[test]
+fn rounded_ticks_do_not_emit_clock_errors_after_connect() {
+    let engine = MqttEngineFFI::new(None, 5).unwrap();
+    engine.connect_checked().unwrap();
+    let now_ms = engine.elapsed_ms();
+    engine.take_outgoing();
+    assert!(engine.handle_tick(now_ms).is_empty());
+    assert!(engine.take_events().is_empty());
+}
+
+#[test]
 fn publish_options_reach_the_wire() {
     for version in [3, 5] {
         let engine = MqttEngineFFI::new_with_opts(authenticated_options(version)).unwrap();

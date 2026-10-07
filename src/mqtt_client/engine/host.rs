@@ -22,8 +22,9 @@ impl MqttEngine<Instant> {
         }
     }
 
+    /// Schedule from at least the latest accepted time, tolerating a stale host sample.
     pub fn schedule_reconnect(&mut self, now: Instant) {
-        if let Err(error) = self.schedule_reconnect_at(now) {
+        if let Err(error) = self.schedule_reconnect_at(now.max(self.now)) {
             self.events.push(MqttEvent::Error(error));
         }
     }
@@ -33,8 +34,13 @@ impl MqttEngine<Instant> {
             .unwrap_or_else(|error| vec![MqttEvent::Error(error)])
     }
 
+    /// Drive timers without moving time backwards when host clock samples are stale.
+    ///
+    /// Convenience calls may have already read a later clock value, and FFI
+    /// callers may round ticks to milliseconds. Use `handle_tick_at` when clock
+    /// regression should instead be reported as an error.
     pub fn handle_tick(&mut self, now: Instant) -> Vec<MqttEvent> {
-        self.handle_tick_at(now)
+        self.handle_tick_at(now.max(self.now))
             .unwrap_or_else(|error| vec![MqttEvent::Error(error)])
     }
 

@@ -1,7 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 
 use alloc::string::String;
-use alloc::string::ToString;
 use alloc::vec::Vec;
 
 use super::control_packet::MqttPacket;
