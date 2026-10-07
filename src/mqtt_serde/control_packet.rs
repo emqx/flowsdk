@@ -1,6 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
 
-use alloc::vec;
 use alloc::vec::Vec;
 
 use core::convert::TryFrom;
@@ -378,6 +377,7 @@ pub(crate) fn encode_publish_header_into(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloc::{string::ToString, vec};
 
     #[test]
     fn test_control_packet_type_conversion() {
