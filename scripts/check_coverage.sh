@@ -14,13 +14,46 @@ if [[ "$COVERAGE_TOOL_VERSION" != 'cargo-llvm-cov 0.9.1' ]]; then
 fi
 
 mkdir -p target/coverage
+export CARGO_LLVM_COV_TARGET_DIR="$PWD/target/llvm-cov-target"
 cargo llvm-cov clean --workspace
+cargo llvm-cov clean --manifest-path tests/no_std/Cargo.toml --workspace
 cargo llvm-cov --workspace --all-features --tests --no-report
+
+# Keep the portable feature graph isolated while collecting into the same report.
+# Instrument both the harness and flowsdk so generic Timestamp methods get counts.
+(
+    export CARGO_TARGET_DIR="$CARGO_LLVM_COV_TARGET_DIR"
+    eval "$(cargo llvm-cov show-env --manifest-path tests/no_std/Cargo.toml --dep-coverage flowsdk --sh)"
+    cargo test --manifest-path tests/no_std/Cargo.toml --locked --no-default-features \
+        --features strict-protocol-compliance,durable-session --tests --message-format=json \
+        | tee target/coverage/portable-artifacts.jsonl
+)
+
+# The root report only discovers binaries belonging to the root workspace.
+# Add the separate suite's current executables through an LLVM response file.
+"$PYTHON" - <<'PY'
+import json
+from pathlib import Path
+
+binaries = set()
+for line in Path("target/coverage/portable-artifacts.jsonl").read_text().splitlines():
+    if not line.startswith("{"):
+        continue  # libtest output shares stdout with Cargo's JSON messages.
+    artifact = json.loads(line)
+    if artifact.get("reason") == "compiler-artifact" and artifact.get("executable"):
+        binaries.add(artifact["executable"])
+if not binaries:
+    raise SystemExit("Portable coverage produced no test executables")
+Path("target/coverage/portable-objects.rsp").write_text(
+    "".join("-object\n" + json.dumps(path, ensure_ascii=False) + "\n" for path in sorted(binaries))
+)
+PY
+export LLVM_COV_FLAGS="${LLVM_COV_FLAGS:-} @target/coverage/portable-objects.rsp"
 
 # Use the same instrumentation for binaries and the library loaded by Python.
 (
     export CARGO_TARGET_DIR="$PWD/target/llvm-cov-target"
-    eval "$(cargo llvm-cov show-env --export-prefix)"
+    eval "$(cargo llvm-cov show-env --sh)"
     cargo build --workspace --all-features --bins
     cargo build -p flowsdk_ffi --all-features --lib
 )
