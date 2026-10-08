@@ -1,6 +1,6 @@
 [package]
 name = "flowsdk"
-version = "0.6.2"
+version = "0.7.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Safety-first, realistic, behavior-predictable messaging SDK for MQTT and more."
