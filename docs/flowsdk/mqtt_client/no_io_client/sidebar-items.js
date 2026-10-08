@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"struct":["NoIoMqttClient"]};
+window.SIDEBAR_ITEMS = {"struct":["NoIoMqttClient"],"type":["PortableNoIoMqttClient"]};

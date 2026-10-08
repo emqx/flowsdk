@@ -2,7 +2,7 @@
 <details class="toggle type-contents-toggle"><summary class="hideme"><span>Show 16 methods</span></summary>    // Provided methods
     fn <a href="#method.on_connected" class="fn">on_connected</a>&lt;'life0, 'life1, 'async_trait&gt;(
         &amp;'life0 mut self,
-        result: &amp;'life1 <a class="struct" href="../client/struct.ConnectionResult.html" title="struct flowsdk::mqtt_client::client::ConnectionResult">ConnectionResult</a>,
+        result: &amp;'life1 <a class="struct" href="../types/struct.ConnectionResult.html" title="struct flowsdk::mqtt_client::types::ConnectionResult">ConnectionResult</a>,
     ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.99.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.99.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="primitive" href="https://doc.rust-lang.org/1.99.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;
        <span class="where">where Self: 'async_trait,
              'life0: 'async_trait,
@@ -29,21 +29,21 @@
              'life0: 'async_trait</span> { ... }
 <span class="item-spacer"></span>    fn <a href="#method.on_published" class="fn">on_published</a>&lt;'life0, 'life1, 'async_trait&gt;(
         &amp;'life0 mut self,
-        result: &amp;'life1 <a class="struct" href="../client/struct.PublishResult.html" title="struct flowsdk::mqtt_client::client::PublishResult">PublishResult</a>,
+        result: &amp;'life1 <a class="struct" href="../types/struct.PublishResult.html" title="struct flowsdk::mqtt_client::types::PublishResult">PublishResult</a>,
     ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.99.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.99.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="primitive" href="https://doc.rust-lang.org/1.99.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;
        <span class="where">where Self: 'async_trait,
              'life0: 'async_trait,
              'life1: 'async_trait</span> { ... }
 <span class="item-spacer"></span>    fn <a href="#method.on_subscribed" class="fn">on_subscribed</a>&lt;'life0, 'life1, 'async_trait&gt;(
         &amp;'life0 mut self,
-        result: &amp;'life1 <a class="struct" href="../client/struct.SubscribeResult.html" title="struct flowsdk::mqtt_client::client::SubscribeResult">SubscribeResult</a>,
+        result: &amp;'life1 <a class="struct" href="../types/struct.SubscribeResult.html" title="struct flowsdk::mqtt_client::types::SubscribeResult">SubscribeResult</a>,
     ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.99.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.99.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="primitive" href="https://doc.rust-lang.org/1.99.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;
        <span class="where">where Self: 'async_trait,
              'life0: 'async_trait,
              'life1: 'async_trait</span> { ... }
 <span class="item-spacer"></span>    fn <a href="#method.on_unsubscribed" class="fn">on_unsubscribed</a>&lt;'life0, 'life1, 'async_trait&gt;(
         &amp;'life0 mut self,
-        result: &amp;'life1 <a class="struct" href="../client/struct.UnsubscribeResult.html" title="struct flowsdk::mqtt_client::client::UnsubscribeResult">UnsubscribeResult</a>,
+        result: &amp;'life1 <a class="struct" href="../types/struct.UnsubscribeResult.html" title="struct flowsdk::mqtt_client::types::UnsubscribeResult">UnsubscribeResult</a>,
     ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.99.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.99.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="primitive" href="https://doc.rust-lang.org/1.99.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;
        <span class="where">where Self: 'async_trait,
              'life0: 'async_trait,
@@ -57,7 +57,7 @@
              'life1: 'async_trait</span> { ... }
 <span class="item-spacer"></span>    fn <a href="#method.on_ping_response" class="fn">on_ping_response</a>&lt;'life0, 'life1, 'async_trait&gt;(
         &amp;'life0 mut self,
-        result: &amp;'life1 <a class="struct" href="../client/struct.PingResult.html" title="struct flowsdk::mqtt_client::client::PingResult">PingResult</a>,
+        result: &amp;'life1 <a class="struct" href="../types/struct.PingResult.html" title="struct flowsdk::mqtt_client::types::PingResult">PingResult</a>,
     ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.99.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.99.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="primitive" href="https://doc.rust-lang.org/1.99.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;
        <span class="where">where Self: 'async_trait,
              'life0: 'async_trait,
@@ -104,7 +104,7 @@
              'life0: 'async_trait</span> { ... }
 <span class="item-spacer"></span>    fn <a href="#method.on_auth_received" class="fn">on_auth_received</a>&lt;'life0, 'life1, 'async_trait&gt;(
         &amp;'life0 mut self,
-        result: &amp;'life1 <a class="struct" href="../client/struct.AuthResult.html" title="struct flowsdk::mqtt_client::client::AuthResult">AuthResult</a>,
+        result: &amp;'life1 <a class="struct" href="../types/struct.AuthResult.html" title="struct flowsdk::mqtt_client::types::AuthResult">AuthResult</a>,
     ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.99.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.99.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="primitive" href="https://doc.rust-lang.org/1.99.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;
        <span class="where">where Self: 'async_trait,
              'life0: 'async_trait,
@@ -114,7 +114,7 @@
 completion-waiting calls to another task so the worker can keep processing I/O.</p>
 </div></details><h2 id="provided-methods" class="section-header">Provided Methods<a href="#provided-methods" class="anchor">§</a></h2><div class="methods"><details class="toggle method-toggle" open><summary><section id="method.on_connected" class="method"><a class="src rightside" href="../../../src/flowsdk/mqtt_client/tokio_async_client.rs.html#93-95">Source</a><h4 class="code-header">fn <a href="#method.on_connected" class="fn">on_connected</a>&lt;'life0, 'life1, 'async_trait&gt;(
     &amp;'life0 mut self,
-    result: &amp;'life1 <a class="struct" href="../client/struct.ConnectionResult.html" title="struct flowsdk::mqtt_client::client::ConnectionResult">ConnectionResult</a>,
+    result: &amp;'life1 <a class="struct" href="../types/struct.ConnectionResult.html" title="struct flowsdk::mqtt_client::types::ConnectionResult">ConnectionResult</a>,
 ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.99.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.99.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="primitive" href="https://doc.rust-lang.org/1.99.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
     Self: 'async_trait,
     'life0: 'async_trait,
@@ -142,21 +142,21 @@ completion-waiting calls to another task so the worker can keep processing I/O.<
 With manual acknowledgements, arrange a <code>pubcomp</code> call from another task.</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.on_published" class="method"><a class="src rightside" href="../../../src/flowsdk/mqtt_client/tokio_async_client.rs.html#114-116">Source</a><h4 class="code-header">fn <a href="#method.on_published" class="fn">on_published</a>&lt;'life0, 'life1, 'async_trait&gt;(
     &amp;'life0 mut self,
-    result: &amp;'life1 <a class="struct" href="../client/struct.PublishResult.html" title="struct flowsdk::mqtt_client::client::PublishResult">PublishResult</a>,
+    result: &amp;'life1 <a class="struct" href="../types/struct.PublishResult.html" title="struct flowsdk::mqtt_client::types::PublishResult">PublishResult</a>,
 ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.99.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.99.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="primitive" href="https://doc.rust-lang.org/1.99.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
     Self: 'async_trait,
     'life0: 'async_trait,
     'life1: 'async_trait,</div></h4></section></summary><div class="docblock"><p>Called when a message is successfully published</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.on_subscribed" class="method"><a class="src rightside" href="../../../src/flowsdk/mqtt_client/tokio_async_client.rs.html#119-121">Source</a><h4 class="code-header">fn <a href="#method.on_subscribed" class="fn">on_subscribed</a>&lt;'life0, 'life1, 'async_trait&gt;(
     &amp;'life0 mut self,
-    result: &amp;'life1 <a class="struct" href="../client/struct.SubscribeResult.html" title="struct flowsdk::mqtt_client::client::SubscribeResult">SubscribeResult</a>,
+    result: &amp;'life1 <a class="struct" href="../types/struct.SubscribeResult.html" title="struct flowsdk::mqtt_client::types::SubscribeResult">SubscribeResult</a>,
 ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.99.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.99.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="primitive" href="https://doc.rust-lang.org/1.99.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
     Self: 'async_trait,
     'life0: 'async_trait,
     'life1: 'async_trait,</div></h4></section></summary><div class="docblock"><p>Called when subscription is completed</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.on_unsubscribed" class="method"><a class="src rightside" href="../../../src/flowsdk/mqtt_client/tokio_async_client.rs.html#124-126">Source</a><h4 class="code-header">fn <a href="#method.on_unsubscribed" class="fn">on_unsubscribed</a>&lt;'life0, 'life1, 'async_trait&gt;(
     &amp;'life0 mut self,
-    result: &amp;'life1 <a class="struct" href="../client/struct.UnsubscribeResult.html" title="struct flowsdk::mqtt_client::client::UnsubscribeResult">UnsubscribeResult</a>,
+    result: &amp;'life1 <a class="struct" href="../types/struct.UnsubscribeResult.html" title="struct flowsdk::mqtt_client::types::UnsubscribeResult">UnsubscribeResult</a>,
 ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.99.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.99.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="primitive" href="https://doc.rust-lang.org/1.99.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
     Self: 'async_trait,
     'life0: 'async_trait,
@@ -170,7 +170,7 @@ With manual acknowledgements, arrange a <code>pubcomp</code> call from another t
     'life1: 'async_trait,</div></h4></section></summary><div class="docblock"><p>Called when an incoming publish message is received</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.on_ping_response" class="method"><a class="src rightside" href="../../../src/flowsdk/mqtt_client/tokio_async_client.rs.html#134-136">Source</a><h4 class="code-header">fn <a href="#method.on_ping_response" class="fn">on_ping_response</a>&lt;'life0, 'life1, 'async_trait&gt;(
     &amp;'life0 mut self,
-    result: &amp;'life1 <a class="struct" href="../client/struct.PingResult.html" title="struct flowsdk::mqtt_client::client::PingResult">PingResult</a>,
+    result: &amp;'life1 <a class="struct" href="../types/struct.PingResult.html" title="struct flowsdk::mqtt_client::types::PingResult">PingResult</a>,
 ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.99.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.99.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="primitive" href="https://doc.rust-lang.org/1.99.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
     Self: 'async_trait,
     'life0: 'async_trait,
@@ -217,7 +217,7 @@ With manual acknowledgements, arrange a <code>pubcomp</code> call from another t
     'life0: 'async_trait,</div></h4></section></summary><div class="docblock"><p>Called when pending operations are cleared (usually on reconnect)</p>
 </div></details><details class="toggle method-toggle" open><summary><section id="method.on_auth_received" class="method"><a class="src rightside" href="../../../src/flowsdk/mqtt_client/tokio_async_client.rs.html#166-168">Source</a><h4 class="code-header">fn <a href="#method.on_auth_received" class="fn">on_auth_received</a>&lt;'life0, 'life1, 'async_trait&gt;(
     &amp;'life0 mut self,
-    result: &amp;'life1 <a class="struct" href="../client/struct.AuthResult.html" title="struct flowsdk::mqtt_client::client::AuthResult">AuthResult</a>,
+    result: &amp;'life1 <a class="struct" href="../types/struct.AuthResult.html" title="struct flowsdk::mqtt_client::types::AuthResult">AuthResult</a>,
 ) -&gt; <a class="struct" href="https://doc.rust-lang.org/1.99.0/core/pin/struct.Pin.html" title="struct core::pin::Pin">Pin</a>&lt;<a class="struct" href="https://doc.rust-lang.org/1.99.0/alloc/boxed/struct.Box.html" title="struct alloc::boxed::Box">Box</a>&lt;dyn <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/future/future/trait.Future.html" title="trait core::future::future::Future">Future</a>&lt;Output = <a class="primitive" href="https://doc.rust-lang.org/1.99.0/std/primitive.unit.html">()</a>&gt; + <a class="trait" href="https://doc.rust-lang.org/1.99.0/core/marker/trait.Send.html" title="trait core::marker::Send">Send</a> + 'async_trait&gt;&gt;<div class="where">where
     Self: 'async_trait,
     'life0: 'async_trait,

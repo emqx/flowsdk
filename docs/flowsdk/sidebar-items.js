@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"mod":["mqtt_client","mqtt_serde","mqtt_session","priority_queue"]};
+window.SIDEBAR_ITEMS = {"mod":["mqtt_client","mqtt_serde","mqtt_session","priority_queue","time"]};

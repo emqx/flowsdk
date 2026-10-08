@@ -1,0 +1,1 @@
+window.SIDEBAR_ITEMS = {"struct":["TimeError","Timestamp"],"trait":["TimePoint"],"type":["DefaultTime"]};
