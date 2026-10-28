@@ -60,6 +60,8 @@ mod explicit;
 #[cfg(feature = "std")]
 mod host;
 mod protocol_state;
+#[cfg(test)]
+mod publish_tests;
 #[cfg(feature = "durable-session")]
 mod session_state;
 
@@ -907,7 +909,11 @@ impl<T: TimePoint> MqttEngine<T> {
         let mut all_bytes = Vec::new();
         loop {
             while let Some(packet) = self.outgoing_buffer.pop_front() {
-                all_bytes.extend(packet);
+                if all_bytes.is_empty() {
+                    all_bytes = packet;
+                } else {
+                    all_bytes.extend(packet);
+                }
             }
             self.flush_responses();
             if !self.state.input_closed {
@@ -1062,10 +1068,11 @@ impl<T: TimePoint> MqttEngine<T> {
             None
         };
 
+        let priority = command.priority;
         let packet = if self.options.mqtt_version == 5 {
-            MqttPacket::Publish5(command.to_mqtt_publish())
+            MqttPacket::Publish5(command.into_mqtt_publish())
         } else {
-            MqttPacket::Publish3(command.to_mqttv3_publish())
+            MqttPacket::Publish3(command.into_mqttv3_publish())
         };
 
         let bytes = packet.to_bytes().map_err(MqttClientError::from)?;
@@ -1083,8 +1090,13 @@ impl<T: TimePoint> MqttEngine<T> {
             self.state.outgoing_aliases.insert(id, topic);
         }
 
-        self.priority_queue.enqueue(command.priority, packet);
-        self.process_queue();
+        // Only an empty queue guarantees this encoding belongs to its first
+        // entry. Keep deferred publications canonical: if output or inflight
+        // quota blocks progress, the temporary encoding is dropped here rather
+        // than retaining a second payload allocation for the lifetime of the queue.
+        let first_encoding = self.priority_queue.is_empty().then_some(bytes);
+        self.priority_queue.enqueue(priority, packet);
+        self.process_queue_with_encoding(first_encoding);
         Ok(pid)
     }
 
@@ -1122,10 +1134,11 @@ impl<T: TimePoint> MqttEngine<T> {
             None
         };
 
+        let qos = command.qos;
         let packet = if self.options.mqtt_version == 5 {
-            MqttPacket::Publish5(command.to_mqtt_publish())
+            MqttPacket::Publish5(command.into_mqtt_publish())
         } else {
-            MqttPacket::Publish3(command.to_mqttv3_publish())
+            MqttPacket::Publish3(command.into_mqttv3_publish())
         };
 
         // Encode before registering inflight so a serialization failure leaves
@@ -1135,11 +1148,11 @@ impl<T: TimePoint> MqttEngine<T> {
 
         // QoS > 0 messages must be tracked for retransmission/acknowledgement.
         // `push_with_stream` enforces the receive-maximum limit and errors if exceeded.
-        if command.qos > 0 {
+        if qos > 0 {
             self.inflight_queue.push_with_stream_at(
                 pid.expect("QoS > 0 always assigns a packet id"),
                 packet,
-                command.qos,
+                qos,
                 stream,
                 self.now,
             )?;
@@ -1952,13 +1965,26 @@ impl<T: TimePoint> MqttEngine<T> {
     }
 
     fn process_queue(&mut self) {
+        self.process_queue_with_encoding(None);
+    }
+
+    // `first_encoding`, when present, belongs to the current first queued packet
+    // and was validated at admission during this same engine call. It is never
+    // retained across a blocked queue, reconnect, or session state transition.
+    fn process_queue_with_encoding(&mut self, mut first_encoding: Option<Vec<u8>>) {
         if !self.is_connected {
             return;
         }
 
         self.flush_responses();
+        // A protocol response can fail the connection and normalize queued
+        // packets for the next transport. Its admission encoding is then stale.
+        if !self.is_connected {
+            return;
+        }
         self.process_replay();
-        if !self.state.responses.is_empty() || !self.session_replay.is_empty() {
+        if !self.is_connected || !self.state.responses.is_empty() || !self.session_replay.is_empty()
+        {
             return;
         }
         while self.outgoing_buffer.len() < self.options.max_outgoing_packet_count {
@@ -1972,8 +1998,9 @@ impl<T: TimePoint> MqttEngine<T> {
                     break;
                 }
 
-                // Attempt to encode before dequeuing
-                match packet.to_bytes() {
+                // Reuse admission's encoding for the newly inserted first packet.
+                // Deferred packets still encode from canonical state on emission.
+                match first_encoding.take().map_or_else(|| packet.to_bytes(), Ok) {
                     Ok(bytes) => {
                         // Queued byte reservations move to the serialized output buffer.
                         self.state.queued_bytes =
@@ -1998,22 +2025,20 @@ impl<T: TimePoint> MqttEngine<T> {
                         }
                         // All checks pass, dequeue and track
                         if let Some((_, packet)) = self.priority_queue.dequeue() {
-                            match &packet {
+                            let inflight = match &packet {
                                 MqttPacket::Publish5(p) if p.qos > 0 => {
-                                    let pid = p.packet_id.unwrap();
-                                    self.inflight_queue
-                                        .push_at(pid, packet.clone(), p.qos, self.now)
-                                        .expect("reserved packet ID and checked quota");
-                                    self.start_deadline(OperationKind::Publish, Some(pid));
+                                    Some((p.packet_id.unwrap(), p.qos))
                                 }
                                 MqttPacket::Publish3(p) if p.qos > 0 => {
-                                    let pid = p.message_id.unwrap();
-                                    self.inflight_queue
-                                        .push_at(pid, packet.clone(), p.qos, self.now)
-                                        .expect("reserved packet ID and checked quota");
-                                    self.start_deadline(OperationKind::Publish, Some(pid));
+                                    Some((p.message_id.unwrap(), p.qos))
                                 }
-                                _ => {}
+                                _ => None,
+                            };
+                            if let Some((pid, qos)) = inflight {
+                                self.inflight_queue
+                                    .push_at(pid, packet, qos, self.now)
+                                    .expect("reserved packet ID and checked quota");
+                                self.start_deadline(OperationKind::Publish, Some(pid));
                             }
                             self.outgoing_buffer.push_back(bytes);
                             self.last_packet_sent = self.now;

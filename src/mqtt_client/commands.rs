@@ -61,6 +61,21 @@ impl PublishCommand {
         )
     }
 
+    /// Create a command from an owned byte buffer.
+    ///
+    /// Conversion can reuse the allocation of uniquely owned, Vec-backed
+    /// [`bytes::Bytes`]. Shared and static buffers are copied because the command
+    /// retains a `Vec<u8>` payload. This avoids an unconditional `Bytes::to_vec`
+    /// copy without changing the existing public payload type.
+    pub fn from_bytes(
+        topic: impl Into<String>,
+        payload: bytes::Bytes,
+        qos: u8,
+        retain: bool,
+    ) -> Self {
+        Self::simple(topic, payload.into(), qos, retain)
+    }
+
     pub fn with_priority(
         topic: impl Into<String>,
         payload: Vec<u8>,
@@ -109,11 +124,43 @@ impl PublishCommand {
         )
     }
 
+    /// Consume the command, moving its buffers into an MQTT 5 PUBLISH packet.
+    ///
+    /// This preserves the same packet fields as [`Self::to_mqtt_publish`] without
+    /// cloning the topic, payload, or properties. Priority is queue metadata and
+    /// is not included in the packet.
+    pub fn into_mqtt_publish(self) -> MqttPublish {
+        MqttPublish::new_with_prop(
+            self.qos,
+            self.topic_name,
+            self.packet_id,
+            self.payload,
+            self.retain,
+            self.dup,
+            self.properties,
+        )
+    }
+
     pub fn to_mqttv3_publish(&self) -> crate::mqtt_serde::mqttv3::publish::MqttPublish {
         crate::mqtt_serde::mqttv3::publish::MqttPublish::new(
             self.topic_name.clone(),
             self.qos,
             self.payload.clone(),
+            self.packet_id,
+            self.retain,
+            self.dup,
+        )
+    }
+
+    /// Consume the command, moving its buffers into an MQTT 3.1.1 PUBLISH packet.
+    ///
+    /// Like [`Self::to_mqttv3_publish`], this conversion omits MQTT 5 properties
+    /// and queue priority. It does not clone the topic or payload.
+    pub fn into_mqttv3_publish(self) -> crate::mqtt_serde::mqttv3::publish::MqttPublish {
+        crate::mqtt_serde::mqttv3::publish::MqttPublish::new(
+            self.topic_name,
+            self.qos,
+            self.payload,
             self.packet_id,
             self.retain,
             self.dup,
@@ -442,6 +489,89 @@ impl UnsubscribeCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::mqtt_serde::control_packet::MqttControlPacket;
+
+    #[test]
+    fn publish_from_bytes_reuses_unique_allocation() {
+        let mut payload = Vec::with_capacity(8192);
+        payload.extend_from_slice(&[42; 4096]);
+        let buffer = bytes::Bytes::from(payload);
+        let ptr = buffer.as_ptr();
+        let command = PublishCommand::from_bytes("devices/temperature", buffer, 1, true);
+        assert_eq!(command.payload.as_ptr(), ptr);
+        assert_eq!(command.payload, vec![42; 4096]);
+        assert_eq!(command.topic_name, "devices/temperature");
+        assert_eq!(command.qos, 1);
+        assert!(command.retain);
+    }
+
+    #[test]
+    fn publish_from_bytes_preserves_shared_sliced_and_static_contents() {
+        let original = bytes::Bytes::from(vec![0, 1, 2, 3, 4, 5]);
+        let shared = original.clone();
+        let slice = original.slice(1..5);
+        let mut command = PublishCommand::from_bytes("topic", shared, 0, false);
+        assert_eq!(command.payload, original.as_ref());
+        command.payload[1] = 99;
+        assert_eq!(original.as_ref(), &[0, 1, 2, 3, 4, 5]);
+        let mut command = PublishCommand::from_bytes("topic", slice, 0, false);
+        assert_eq!(command.payload, &[1, 2, 3, 4]);
+        command.payload[0] = 99;
+        assert_eq!(original.as_ref(), &[0, 1, 2, 3, 4, 5]);
+        let command =
+            PublishCommand::from_bytes("topic", bytes::Bytes::from_static(b"static"), 0, false);
+        assert_eq!(command.payload, b"static");
+    }
+
+    #[test]
+    fn consuming_publish_conversions_preserve_buffers_and_wire_bytes() {
+        for qos in 0..=2 {
+            for retain in [false, true] {
+                let command = PublishCommand::new(
+                    "devices/temperature".into(),
+                    vec![42; 4096],
+                    qos,
+                    retain,
+                    qos > 0,
+                    (qos > 0).then_some(42),
+                    vec![
+                        Property::UserProperty("duplicate".into(), "first".into()),
+                        Property::UserProperty("duplicate".into(), "second".into()),
+                    ],
+                    23,
+                );
+                let legacy = command.to_mqtt_publish();
+                let topic = command.topic_name.as_ptr();
+                let payload = command.payload.as_ptr();
+                let properties = command.properties.as_ptr();
+                let packet = command.into_mqtt_publish();
+                assert_eq!(packet.topic_name.as_ptr(), topic);
+                assert_eq!(packet.payload.as_ptr(), payload);
+                assert_eq!(packet.properties.as_ptr(), properties);
+                assert_eq!(packet, legacy);
+                assert_eq!(packet.to_bytes().unwrap(), legacy.to_bytes().unwrap());
+
+                let command = PublishCommand::new(
+                    packet.topic_name,
+                    packet.payload,
+                    packet.qos,
+                    packet.retain,
+                    packet.dup,
+                    packet.packet_id,
+                    packet.properties,
+                    23,
+                );
+                let legacy = command.to_mqttv3_publish();
+                let topic = command.topic_name.as_ptr();
+                let payload = command.payload.as_ptr();
+                let packet = command.into_mqttv3_publish();
+                assert_eq!(packet.topic_name.as_ptr(), topic);
+                assert_eq!(packet.payload.as_ptr(), payload);
+                assert_eq!(packet, legacy);
+                assert_eq!(packet.to_bytes().unwrap(), legacy.to_bytes().unwrap());
+            }
+        }
+    }
 
     // ============================================================================
     // PublishCommand Builder Tests
