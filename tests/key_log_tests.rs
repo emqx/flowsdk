@@ -53,21 +53,23 @@ fn rustls_tls_config_enable_key_log() {
 #[cfg(feature = "rustls-tls")]
 #[test]
 fn rustls_tls_config_key_log_builds_client_config() {
-    rustls::crypto::ring::default_provider()
+    // rustls-tls enables this provider through tokio-rustls; ring is optional.
+    rustls::crypto::aws_lc_rs::default_provider()
         .install_default()
         .ok();
 
     use flowsdk::mqtt_client::transport::RustlsTlsConfig;
 
     let cfg = RustlsTlsConfig::builder()
-        .use_system_roots(true)
+        // This tests configuration wiring, not a TLS handshake or host trust store.
+        .use_system_roots(false)
         .enable_key_log(true)
         .build();
 
     let client_cfg = cfg.to_client_config();
     assert!(
         client_cfg.is_ok(),
-        "to_client_config() should succeed with key_log enabled"
+        "to_client_config() should succeed with key_log enabled: {client_cfg:?}"
     );
 }
 
