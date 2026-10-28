@@ -43,8 +43,12 @@ async fn receive_response<T>(
     })?
 }
 
-/// Events that can occur during MQTT client operation
+/// Events that can occur during MQTT client operation.
+///
+/// New variants may be added. Downstream matches must include a wildcard arm;
+/// batch consumers should treat unknown variants as ordering boundaries.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum TokioMqttEvent {
     /// Connection established with broker
     Connected(ConnectionResult),
@@ -81,6 +85,20 @@ pub enum TokioMqttEvent {
     },
     /// Authentication challenge or response received (MQTT v5 enhanced auth)
     AuthReceived(AuthResult),
+    /// Broker MQTT 5 DISCONNECT, delivered before `Disconnected`.
+    DisconnectReceived {
+        reason_code: u8,
+        properties: Vec<Property>,
+    },
+    /// Incoming QoS 2 PUBREL; manual-ack clients can now send PUBCOMP.
+    PubRelReceived { packet_id: u16 },
+    /// An engine event with no high-level notification in the current state.
+    ///
+    /// Kept in batches so filtering cannot erase an ordering boundary. Includes
+    /// `Disconnected` when already disconnected, `ReconnectNeeded`, and
+    /// `ReconnectScheduled` when reconnecting is disabled or stopped. The
+    /// default handler ignores these events.
+    EngineEvent(MqttEvent),
 }
 
 /// Trait for handling MQTT events in async context
@@ -89,6 +107,69 @@ pub enum TokioMqttEvent {
 /// completion-waiting calls to another task so the worker can keep processing I/O.
 #[async_trait]
 pub trait TokioMqttEventHandler: Send + Sync {
+    /// Takes ownership of one non-empty, ordered batch of ready events.
+    ///
+    /// Batch boundaries reflect local parsing and transport reads, not broker
+    /// write boundaries. Override to move the vector into a channel or process
+    /// it directly; the default calls the individual callbacks in order.
+    ///
+    /// Runs on the worker: awaiting a bounded channel applies backpressure to
+    /// I/O, and awaiting a client operation here can deadlock.
+    ///
+    /// ```
+    /// use async_trait::async_trait;
+    /// use flowsdk::mqtt_client::{TokioMqttEvent, TokioMqttEventHandler};
+    /// use tokio::sync::mpsc;
+    ///
+    /// struct ForwardBatches(mpsc::Sender<Vec<TokioMqttEvent>>);
+    ///
+    /// #[async_trait]
+    /// impl TokioMqttEventHandler for ForwardBatches {
+    ///     async fn on_event_batch(&mut self, events: Vec<TokioMqttEvent>) {
+    ///         // Drain the receiver in another task to avoid deadlock.
+    ///         let _ = self.0.send(events).await;
+    ///     }
+    /// }
+    /// ```
+    async fn on_event_batch(&mut self, events: Vec<TokioMqttEvent>) {
+        for event in events {
+            match event {
+                TokioMqttEvent::Connected(result) => self.on_connected(&result).await,
+                TokioMqttEvent::Disconnected(reason) => self.on_disconnected(reason).await,
+                TokioMqttEvent::DisconnectReceived {
+                    reason_code,
+                    properties,
+                } => self.on_disconnect_received(reason_code, &properties).await,
+                TokioMqttEvent::Published(result) => self.on_published(&result).await,
+                TokioMqttEvent::Subscribed(result) => self.on_subscribed(&result).await,
+                TokioMqttEvent::Unsubscribed(result) => self.on_unsubscribed(&result).await,
+                TokioMqttEvent::MessageReceived(message) => {
+                    self.on_message_received(&message).await
+                }
+                TokioMqttEvent::PubRelReceived { packet_id } => {
+                    self.on_pubrel_received(packet_id).await
+                }
+                TokioMqttEvent::PingResponse(result) => self.on_ping_response(&result).await,
+                TokioMqttEvent::Error(error) => self.on_error(&error).await,
+                TokioMqttEvent::PeerCertReceived(cert) => self.on_peer_cert_received(&cert).await,
+                TokioMqttEvent::ConnectionLost => self.on_connection_lost().await,
+                TokioMqttEvent::ReconnectAttempt(attempt) => {
+                    self.on_reconnect_attempt(attempt).await
+                }
+                TokioMqttEvent::PendingOperationsCleared => {
+                    self.on_pending_operations_cleared().await
+                }
+                TokioMqttEvent::ParseError {
+                    raw_data,
+                    error,
+                    recoverable,
+                } => self.on_parse_error(&raw_data, &error, recoverable).await,
+                TokioMqttEvent::AuthReceived(result) => self.on_auth_received(&result).await,
+                TokioMqttEvent::EngineEvent(_) => {}
+            }
+        }
+    }
+
     /// Called when connection to broker is established
     async fn on_connected(&mut self, result: &ConnectionResult) {
         let _ = result;
@@ -1828,43 +1909,25 @@ mod config_builder_tests {
 
     #[tokio::test]
     async fn outgoing_drain_dispatches_buffered_message_events() {
-        use crate::mqtt_serde::mqttv5::publishv5::MqttPublish;
+        use worker::test_support::{connected_worker, publish};
         for write_fails in [false, true] {
             let (messages, mut received) = mpsc::unbounded_channel();
-            let (_commands, rx) = mpsc::channel(1);
-            let mut worker = TokioClientWorker::new(
+            let (mut worker, _commands) = connected_worker(
                 MqttClientOptions::builder()
                     .keep_alive(0)
                     .max_outgoing_packet_count(1)
                     .build(),
                 Box::new(MessageRecorder(messages)),
-                rx,
                 TokioAsyncClientConfig::default(),
-            );
-            worker.engine.connect().unwrap();
-            worker.engine.take_outgoing();
-            let events = worker.engine.handle_incoming(&[0x20, 3, 0, 0, 0]);
-            worker.dispatch_events(events).await;
+            )
+            .await;
             let (transport, peer) = tokio::io::duplex(1024);
             worker.stream = Some(Box::new(transport));
             let mut peer = Some(peer);
             if write_fails {
                 peer.take();
             }
-            let bytes: Vec<_> = (1..=3)
-                .flat_map(|id| {
-                    MqttPacket::Publish5(MqttPublish::new(
-                        1,
-                        "t".into(),
-                        Some(id),
-                        vec![id as u8],
-                        false,
-                        false,
-                    ))
-                    .to_bytes()
-                    .unwrap()
-                })
-                .collect();
+            let bytes: Vec<_> = (1..=3).flat_map(|id| publish(5, id, 1)).collect();
             let events = worker.engine.handle_incoming(&bytes);
             worker.dispatch_events(events).await;
             assert_eq!(worker.handle_outgoing().await.is_err(), write_fails);

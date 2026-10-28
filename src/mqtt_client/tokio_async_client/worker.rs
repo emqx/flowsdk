@@ -413,7 +413,7 @@ impl TokioClientWorker {
                                 self.stream = None;
                                 self.pending.fail_all(error);
                                 if !matches!(self.state, ConnectionState::Disconnected) {
-                                    self.event_handler.on_disconnected(None).await;
+                                    self.emit_event(TokioMqttEvent::Disconnected(None)).await;
                                 }
                             }
                             return result;
@@ -446,8 +446,7 @@ impl TokioClientWorker {
                                 Err(error) => MqttClientError::from_io_error(error, "transport read"),
                                 _ => MqttClientError::ConnectionLost { reason: "Connection closed by server".into() },
                             };
-                            self.event_handler.on_error(&error).await;
-                            self.connection_lost(None).await;
+                            self.transport_failed(error).await;
                         }
                     }
                 }
@@ -463,8 +462,7 @@ impl TokioClientWorker {
                 _ = poll_fn(|cx| self.pending.poll_cancelled(cx)) => {}
             }
             if let Err(error) = self.handle_outgoing().await {
-                self.event_handler.on_error(&error).await;
-                self.connection_lost(None).await;
+                self.transport_failed(error).await;
             }
         }
     }
@@ -485,12 +483,11 @@ impl TokioClientWorker {
             Ok(transport) => {
                 if self.config.tcp_nodelay {
                     if let Err(error) = transport.set_nodelay(true) {
-                        self.event_handler
-                            .on_error(&MqttClientError::NetworkError {
-                                kind: io::ErrorKind::Other,
-                                message: format!("TCP_NODELAY: {error}"),
-                            })
-                            .await;
+                        self.emit_event(TokioMqttEvent::Error(MqttClientError::NetworkError {
+                            kind: io::ErrorKind::Other,
+                            message: format!("TCP_NODELAY: {error}"),
+                        }))
+                        .await;
                     }
                 }
                 self.stream = Some(transport);
@@ -501,33 +498,53 @@ impl TokioClientWorker {
         };
         if let Err(error) = result {
             self.pending.fail_connect(&error);
-            self.event_handler.on_error(&error).await;
-            self.connection_lost(None).await;
+            self.transport_failed(error).await;
         }
     }
 
     pub(super) async fn dispatch_events(&mut self, events: Vec<MqttEvent>) {
-        for event in events {
+        if events.is_empty() {
+            return;
+        }
+        let mut batch = Vec::with_capacity(events.len());
+        let mut events = events.into_iter().peekable();
+        while let Some(event) = events.next() {
             match event {
                 MqttEvent::Connected(result) => {
                     self.state = ConnectionState::Connected(result.clone());
                     for tx in self.pending.connect.drain(..) {
                         let _ = tx.send(Ok(result.clone()));
                     }
-                    self.event_handler.on_connected(&result).await;
-                    if !result.is_success() {
-                        self.connection_lost(Some(result.reason_code)).await;
+                    let failure = (!result.is_success()).then_some(result.reason_code);
+                    batch.push(TokioMqttEvent::Connected(result));
+                    if let Some(reason) = failure {
+                        batch.extend(
+                            self.record_connection_lost(Some(reason))
+                                .into_iter()
+                                .flatten(),
+                        );
                     }
                 }
-                MqttEvent::Disconnected(reason) => self.connection_lost(reason).await,
+                MqttEvent::Disconnected(reason) => {
+                    if matches!(self.state, ConnectionState::Disconnected) {
+                        batch.push(TokioMqttEvent::EngineEvent(MqttEvent::Disconnected(reason)));
+                    } else {
+                        batch.extend(self.record_connection_lost(reason).into_iter().flatten());
+                    }
+                }
                 MqttEvent::DisconnectReceived {
                     reason_code,
                     properties,
                 } => {
-                    self.event_handler
-                        .on_disconnect_received(reason_code, &properties)
-                        .await;
-                    self.connection_lost(Some(reason_code)).await;
+                    batch.push(TokioMqttEvent::DisconnectReceived {
+                        reason_code,
+                        properties,
+                    });
+                    batch.extend(
+                        self.record_connection_lost(Some(reason_code))
+                            .into_iter()
+                            .flatten(),
+                    );
                 }
                 MqttEvent::Published(result) => {
                     if let Some(tx) = result
@@ -536,34 +553,34 @@ impl TokioClientWorker {
                     {
                         let _ = tx.send(Ok(result.clone()));
                     }
-                    self.event_handler.on_published(&result).await;
+                    batch.push(TokioMqttEvent::Published(result));
                 }
                 MqttEvent::Subscribed(result) => {
                     if let Some(tx) = self.pending.subscribe.remove(&result.packet_id) {
                         let _ = tx.send(Ok(result.clone()));
                     }
-                    self.event_handler.on_subscribed(&result).await;
+                    batch.push(TokioMqttEvent::Subscribed(result));
                 }
                 MqttEvent::Unsubscribed(result) => {
                     if let Some(tx) = self.pending.unsubscribe.remove(&result.packet_id) {
                         let _ = tx.send(Ok(result.clone()));
                     }
-                    self.event_handler.on_unsubscribed(&result).await;
+                    batch.push(TokioMqttEvent::Unsubscribed(result));
                 }
                 MqttEvent::MessageReceived(message) => {
-                    self.event_handler.on_message_received(&message).await
+                    batch.push(TokioMqttEvent::MessageReceived(message));
                 }
                 MqttEvent::PubRelReceived { packet_id, .. } => {
-                    self.event_handler.on_pubrel_received(packet_id).await
+                    batch.push(TokioMqttEvent::PubRelReceived { packet_id });
                 }
                 MqttEvent::PingResponse(result) => {
                     for tx in self.pending.ping.drain(..) {
                         let _ = tx.send(Ok(result.clone()));
                     }
-                    self.event_handler.on_ping_response(&result).await;
+                    batch.push(TokioMqttEvent::PingResponse(result));
                 }
                 MqttEvent::AuthReceived(result) => {
-                    self.event_handler.on_auth_received(&result).await
+                    batch.push(TokioMqttEvent::AuthReceived(result));
                 }
                 MqttEvent::OperationFailed {
                     operation,
@@ -594,44 +611,57 @@ impl TokioClientWorker {
                             }
                         }
                     }
-                    self.event_handler.on_error(&error).await;
+                    batch.push(TokioMqttEvent::Error(error));
                     if operation == OperationKind::Connect {
-                        self.connection_lost(None).await;
+                        batch.extend(self.record_connection_lost(None).into_iter().flatten());
                     }
                 }
                 MqttEvent::Error(error) => {
                     if matches!(self.state, ConnectionState::Connecting) {
                         self.pending.fail_connect(&error);
                     }
-                    self.event_handler.on_error(&error).await;
+                    batch.push(TokioMqttEvent::Error(error));
                 }
-                MqttEvent::ReconnectNeeded
-                    if self.config.auto_reconnect && !self.intentional_stop =>
-                {
-                    if self.stream.is_some() {
-                        self.connection_lost(None).await;
-                    } else if matches!(self.state, ConnectionState::Disconnected) {
-                        // Preserve retry counters across attempts; CONNACK resets them.
-                        self.state = ConnectionState::Connecting;
-                        self.connecting = Some(self.create_transport());
+                MqttEvent::ReconnectNeeded => {
+                    batch.push(TokioMqttEvent::EngineEvent(MqttEvent::ReconnectNeeded));
+                    if self.config.auto_reconnect && !self.intentional_stop {
+                        if self.stream.is_some() {
+                            batch.extend(self.record_connection_lost(None).into_iter().flatten());
+                        } else if matches!(self.state, ConnectionState::Disconnected) {
+                            // Preserve retry counters across attempts; CONNACK resets them.
+                            self.state = ConnectionState::Connecting;
+                            self.connecting = Some(self.create_transport());
+                        }
                     }
                 }
-                MqttEvent::ReconnectScheduled { attempt, .. }
-                    if !self.intentional_stop && self.config.auto_reconnect =>
-                {
-                    self.event_handler.on_reconnect_attempt(attempt).await;
+                event @ MqttEvent::ReconnectScheduled { attempt, .. } => {
+                    if self.config.auto_reconnect && !self.intentional_stop {
+                        batch.push(TokioMqttEvent::ReconnectAttempt(attempt));
+                    } else {
+                        batch.push(TokioMqttEvent::EngineEvent(event));
+                    }
                 }
-                // Full messages carry publish metadata. This wrapper owns one byte-stream transport.
+                // A fully parsed PUBLISH has two engine events. Fold only its
+                // redundant metadata into the message, keeping consecutive
+                // PUBLISH messages adjacent without erasing other boundaries.
                 MqttEvent::PublishReceived { .. }
-                | MqttEvent::TransportClosed { .. }
-                | MqttEvent::StreamClosed { .. }
-                | MqttEvent::StreamReset { .. }
-                | MqttEvent::StreamStopped { .. }
-                | MqttEvent::ZeroRttStatusChanged { .. }
-                | MqttEvent::ReconnectNeeded
-                | MqttEvent::ReconnectScheduled { .. } => {}
+                    if matches!(events.peek(), Some(MqttEvent::MessageReceived(_))) => {}
+                event => {
+                    batch.push(TokioMqttEvent::EngineEvent(event));
+                }
             }
         }
+        self.emit_batch(batch).await;
+    }
+
+    async fn emit_batch(&mut self, batch: Vec<TokioMqttEvent>) {
+        if !batch.is_empty() {
+            self.event_handler.on_event_batch(batch).await;
+        }
+    }
+
+    async fn emit_event(&mut self, event: TokioMqttEvent) {
+        self.emit_batch(vec![event]).await;
     }
 
     async fn write_output(&mut self) -> Result<(), MqttClientError> {
@@ -731,7 +761,7 @@ impl TokioClientWorker {
                     }
                     Err(error) => {
                         let _ = response_tx.send(Err(error.clone()));
-                        self.event_handler.on_error(&error).await;
+                        self.emit_event(TokioMqttEvent::Error(error)).await;
                     }
                 }
                 Ok(())
@@ -747,7 +777,7 @@ impl TokioClientWorker {
                     }
                     Err(error) => {
                         let _ = response_tx.send(Err(error.clone()));
-                        self.event_handler.on_error(&error).await;
+                        self.emit_event(TokioMqttEvent::Error(error)).await;
                     }
                 }
                 Ok(())
@@ -765,7 +795,7 @@ impl TokioClientWorker {
                     }
                     Err(error) => {
                         let _ = response_tx.send(Err(error.clone()));
-                        self.event_handler.on_error(&error).await;
+                        self.emit_event(TokioMqttEvent::Error(error)).await;
                     }
                 }
                 Ok(())
@@ -775,7 +805,7 @@ impl TokioClientWorker {
                 if self.pending.ping.is_empty() {
                     if let Err(error) = self.ping() {
                         let _ = response_tx.send(Err(error.clone()));
-                        self.event_handler.on_error(&error).await;
+                        self.emit_event(TokioMqttEvent::Error(error)).await;
                         return;
                     }
                 }
@@ -842,7 +872,7 @@ impl TokioClientWorker {
             TokioClientCommand::Shutdown => unreachable!("shutdown is handled by the run loop"),
         };
         if let Err(error) = result {
-            self.event_handler.on_error(&error).await;
+            self.emit_event(TokioMqttEvent::Error(error)).await;
         }
     }
 
@@ -881,14 +911,22 @@ impl TokioClientWorker {
         self.engine.reset_for_new_transport();
         self.state = ConnectionState::Disconnected;
         if active {
-            self.event_handler.on_disconnected(Some(reason)).await;
+            self.emit_event(TokioMqttEvent::Disconnected(Some(reason)))
+                .await;
         }
         write.and(close)
     }
 
-    async fn connection_lost(&mut self, reason: Option<u8>) {
+    async fn transport_failed(&mut self, error: MqttClientError) {
+        let mut batch = Vec::with_capacity(3);
+        batch.push(TokioMqttEvent::Error(error));
+        batch.extend(self.record_connection_lost(None).into_iter().flatten());
+        self.emit_batch(batch).await;
+    }
+
+    fn record_connection_lost(&mut self, reason: Option<u8>) -> Option<[TokioMqttEvent; 2]> {
         if matches!(self.state, ConnectionState::Disconnected) {
-            return;
+            return None;
         }
         self.stream = None;
         self.connecting = None;
@@ -905,10 +943,18 @@ impl TokioClientWorker {
         {
             self.pending.fail_all(&error);
         }
-        self.event_handler.on_disconnected(reason).await;
-        self.event_handler.on_connection_lost().await;
+        Some([
+            TokioMqttEvent::Disconnected(reason),
+            TokioMqttEvent::ConnectionLost,
+        ])
     }
 }
+
+#[cfg(test)]
+mod batch_tests;
+
+#[cfg(test)]
+pub(super) mod test_support;
 
 #[cfg(test)]
 mod tests {
@@ -938,24 +984,14 @@ mod tests {
         Arc<AtomicUsize>,
     ) {
         let disconnected = Arc::new(AtomicUsize::new(0));
-        let (tx, rx) = mpsc::channel(4);
-        let mut worker = TokioClientWorker::new(
+        let (worker, tx) = test_support::connected_worker(
             options,
             Box::new(Handler(disconnected.clone())),
-            rx,
             TokioAsyncClientConfig::builder()
                 .default_operation_timeout_ms(20)
                 .build(),
-        );
-        worker.engine.connect().unwrap();
-        worker.engine.take_outgoing();
-        let bytes: &[u8] = if worker.engine.mqtt_version() == 5 {
-            &[0x20, 3, 0, 0, 0]
-        } else {
-            &[0x20, 2, 0, 0]
-        };
-        let events = worker.engine.handle_incoming(bytes);
-        worker.dispatch_events(events).await;
+        )
+        .await;
         (worker, tx, disconnected)
     }
 
