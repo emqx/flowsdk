@@ -772,6 +772,89 @@ let result = client.ping_sync_with_timeout(2000).await?;
 
 All asynchronous events are delivered through the `TokioMqttEventHandler` trait.
 
+### Owned ordered event batches
+
+Override `on_event_batch(&mut self, events: Vec<TokioMqttEvent>)` to receive one
+owned vector per non-empty engine dispatch. The default implementation calls
+the existing individual callbacks in order, so existing handlers need no changes.
+Overriding it replaces those callbacks; handle all relevant event variants in
+the batch consumer. `TokioMqttEvent` is now `#[non_exhaustive]`: downstream matches
+must include a wildcard arm, even if they handle every currently known variant.
+Adding this attribute and the `DisconnectReceived`, `PubRelReceived`, and
+`EngineEvent` variants is a breaking API change for existing exhaustive matches.
+The wildcard arm allows future variants to be added without another such break;
+treat unknown variants as ordering boundaries just like other non-message events.
+
+Each read, timer tick, and outgoing drain has its own dispatch boundary. The
+worker does not read more data, drain a callback channel, or wait to fill a batch.
+Worker-generated errors and lifecycle notifications also use this callback.
+Transport failures deliver `Error`, `Disconnected`, and `ConnectionLost` in one
+batch, in that order; the last two are omitted if already disconnected.
+These boundaries depend on local transport reads and parsing, so they are not
+guaranteed to match the broker's writes.
+
+Consecutive `MessageReceived` events can be processed together. Stop at the
+first other event or the end of the vector. For example,
+`[MessageReceived(A), MessageReceived(B), PingResponse, MessageReceived(C)]`
+contains message runs `[A, B]` and `[C]`, with the ping handled between them.
+Do not filter out other events before grouping messages or combine runs across
+vectors. The adapter folds redundant PUBLISH metadata into a fully parsed
+message. Other engine events without a dedicated high-level callback remain
+visible as `EngineEvent`, including metadata-only PUBLISH events. This also
+includes `Disconnected` when the worker is already disconnected, every
+`ReconnectNeeded`, and `ReconnectScheduled` when automatic reconnection is
+disabled or intentionally stopped. The default callback adapter ignores these
+wrapped events; batch consumers must preserve their ordering boundaries.
+
+```rust
+use async_trait::async_trait;
+use flowsdk::mqtt_client::{TokioMqttEvent, TokioMqttEventHandler};
+use tokio::sync::mpsc;
+
+struct BatchForwarder {
+    tx: mpsc::Sender<Vec<TokioMqttEvent>>,
+}
+
+#[async_trait]
+impl TokioMqttEventHandler for BatchForwarder {
+    async fn on_event_batch(&mut self, events: Vec<TokioMqttEvent>) {
+        // One channel send per batch, moving ownership of every message.
+        let _ = self.tx.send(events).await;
+    }
+}
+
+async fn consume_batches(mut rx: mpsc::Receiver<Vec<TokioMqttEvent>>) {
+    while let Some(batch) = rx.recv().await {
+        let mut events = batch.into_iter().peekable();
+        while let Some(event) = events.next() {
+            match event {
+                TokioMqttEvent::MessageReceived(first) => {
+                    let mut messages = vec![first];
+                    while matches!(events.peek(), Some(TokioMqttEvent::MessageReceived(_))) {
+                        if let Some(TokioMqttEvent::MessageReceived(message)) = events.next() {
+                            messages.push(message);
+                        }
+                    }
+                    // Replace with application batch processing.
+                    println!("Received {} consecutive messages", messages.len());
+                }
+                other => println!("Event: {other:?}"),
+            }
+        }
+    }
+}
+```
+
+Pass `Box::new(BatchForwarder { tx })` to `TokioAsyncMqttClient::new` and run the
+consumer in another task. Callbacks execute on the transport worker. A bounded
+channel applies backpressure to I/O; keep its consumer draining and avoid a
+cycle where the consumer waits for a client operation while the worker waits
+for channel capacity. Never await a client operation from inside the callback.
+For engine batches, protocol state and pending operation results are updated
+before delivery, including connect, publish, subscribe, unsubscribe, and ping completion. Manual
+acknowledgement calls still belong in a separate task; `PubRelReceived` marks
+when a QoS 2 exchange is ready for PUBCOMP.
+
 ### Event Handler Trait
 
 ```rust
