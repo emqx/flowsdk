@@ -17,6 +17,7 @@ acknowledgement or local completion; they do not block a runtime thread.
 | `connect_sync` | An actual CONNACK arrived; concurrent callers share its result and calls while connected return its cached metadata |
 | `subscribe_sync`, `unsubscribe_sync`, QoS 1/2 `publish_sync`, `ping_sync` | The corresponding broker response arrived |
 | QoS 0 `publish_sync` | The engine validated and accepted the publication into its output queue |
+| `publish_with_command_admitted` (all QoS levels) | The engine validated and admitted this publication; no transport write or broker acknowledgement is promised |
 | `puback`, `pubrec`, `pubcomp` | The engine validated the receive stage, queued the acknowledgement, and updated its state |
 | `disconnect`, `disconnect_with` | A disconnect command entered the worker queue |
 | `disconnect_sync`, `disconnect_with_sync` | DISCONNECT was written and the local transport closed |
@@ -36,7 +37,9 @@ corresponding timeout is disabled.
 Callbacks execute on the worker. Keep them short and send work to another task
 before awaiting acknowledgement/completion methods or `shutdown`. Awaiting
 those methods inside a callback would wait for the same worker that is running
-the callback.
+the callback. Local `publish_with_command_admitted` is the exception: its
+dedicated bounded queue is serviced while a callback is waiting, without socket
+I/O or recursive event delivery.
 
 ### Configuration precedence and reconnect
 
@@ -713,6 +716,80 @@ client.publish_with_command(command).await?;
 
 ---
 
+#### `publish_with_command_admitted()` - Correlated Local Admission
+
+```rust
+pub async fn publish_with_command_admitted(
+    &self,
+    command: PublishCommand,
+) -> Result<Option<u16>, MqttClientError>
+```
+
+Use this method when an application needs the result of local validation and
+capacity checks without waiting for PUBACK or PUBCOMP. It returns `None` for
+QoS 0 and the assigned packet identifier for QoS 1/2. Offline buffering still
+follows the client configuration. Local rejection is returned to this caller
+without a duplicate generic error callback; it does not itself mark the
+connection as lost. Later protocol/transport outcomes remain event-handler
+notifications. Packet identifiers may be reused after an exchange completes.
+
+The existing `publish_with_command` remains enqueue-only. The existing
+`publish_with_command_sync` still waits for broker acknowledgement at QoS 1/2.
+Admission adds a worker round trip, so it is a correctness choice rather than
+a promise of lower per-call latency. For concurrent publishing, bound the number
+of outstanding application operations instead of spawning an unbounded task
+per message.
+
+Admission uses a separate queue with `command_queue_size` slots, in addition to
+the existing command queue. It remains serviced while an event callback waits
+on downstream capacity, so a shared source/sink can obtain local admission or
+a precise capacity rejection without first draining that callback. Callback
+completion has priority; no additional socket reads, writes, or recursive
+callbacks occur while it waits. Output admitted during a callback is flushed
+promptly after the callback completes, without waiting for a new input or timer.
+
+The admission queue is FIFO internally, but it has no enqueue-order guarantee
+with the legacy command queue. Await `connect_sync` when connection completion
+must precede admission; enqueueing `connect` alone is not a sequencing barrier.
+During saturation, admission can return `BufferFull`. This is bounded progress
+of the local request, not a guarantee of successful delivery under arbitrary
+backpressure or indefinite application retries. Event consumption must resume
+for transport output and acknowledgements to progress.
+
+There is no implicit acknowledgement timeout for admission. If the application
+times out or drops the future after enqueueing, the publish can still proceed;
+do not retry on the assumption that cancellation retracted it. Shutdown closes
+the admission queue and rejects requests that have not yet been admitted.
+
+#### Moving Existing Payload Buffers
+
+`PublishCommand::from_bytes(topic, payload, qos, retain)` accepts an owned
+`bytes::Bytes`. It reclaims a uniquely owned, Vec-backed allocation where possible.
+Shared or static buffers require a copy into the command's existing `Vec<u8>`;
+this API does not provide shared-buffer storage throughout the engine.
+
+```rust
+use bytes::Bytes;
+use flowsdk::mqtt_client::{MqttClientError, PublishCommand, TokioAsyncMqttClient};
+
+async fn submit(
+    client: &TokioAsyncMqttClient,
+    payload: Bytes,
+) -> Result<Option<u16>, MqttClientError> {
+    // A separate task must continue draining the client's events.
+    let command = PublishCommand::from_bytes("sensors/temp", payload, 1, false);
+    client.publish_with_command_admitted(command).await
+}
+```
+
+The engine consumes commands using `into_mqtt_publish` / `into_mqttv3_publish`,
+moving the topic, payload, and MQTT 5 properties. The borrowed `to_*` conversions
+remain available and continue to clone. Owned receive batches similarly let an
+adapter move `message.topic_name` and use `Bytes::from(message.payload)` without
+copying the payload into its downstream channel.
+
+---
+
 ### Ping Operations
 
 #### `ping()` - Async Ping
@@ -847,9 +924,11 @@ async fn consume_batches(mut rx: mpsc::Receiver<Vec<TokioMqttEvent>>) {
 
 Pass `Box::new(BatchForwarder { tx })` to `TokioAsyncMqttClient::new` and run the
 consumer in another task. Callbacks execute on the transport worker. A bounded
-channel applies backpressure to I/O; keep its consumer draining and avoid a
-cycle where the consumer waits for a client operation while the worker waits
-for channel capacity. Never await a client operation from inside the callback.
+channel applies backpressure to I/O. Local publish admission is serviced while
+the callback waits, but completion/acknowledgement operations still require the
+callback to return. Keep the consumer progressing and delegate those operations
+to another task. A full local output queue produces a correlated admission
+rejection; it does not justify unbounded buffering or indefinite retries.
 For engine batches, protocol state and pending operation results are updated
 before delivery, including connect, publish, subscribe, unsubscribe, and ping completion. Manual
 acknowledgement calls still belong in a separate task; `PubRelReceived` marks

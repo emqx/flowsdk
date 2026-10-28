@@ -9,7 +9,8 @@ pub(crate) async fn connected_worker(
     config: TokioAsyncClientConfig,
 ) -> (TokioClientWorker, mpsc::Sender<TokioClientCommand>) {
     let (commands, command_rx) = mpsc::channel(4);
-    let mut worker = TokioClientWorker::new(options, handler, command_rx, config);
+    let mut worker =
+        TokioClientWorker::new(options, handler, command_rx, mpsc::channel(1).1, config);
     worker.state = ConnectionState::Connecting;
     worker.engine.connect().unwrap();
     worker.engine.take_outgoing();

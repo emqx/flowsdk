@@ -113,8 +113,11 @@ pub trait TokioMqttEventHandler: Send + Sync {
     /// write boundaries. Override to move the vector into a channel or process
     /// it directly; the default calls the individual callbacks in order.
     ///
-    /// Runs on the worker: awaiting a bounded channel applies backpressure to
-    /// I/O, and awaiting a client operation here can deadlock.
+    /// For engine batches, protocol state and pending operation results are
+    /// updated before delivery. Runs on the worker: awaiting a bounded channel
+    /// applies backpressure to I/O. Local publish admission is serviced while
+    /// this callback waits; other client operations that require worker progress,
+    /// including acknowledgement waits, can still deadlock here.
     ///
     /// ```
     /// use async_trait::async_trait;
@@ -310,6 +313,14 @@ enum TokioClientCommand {
     SendPacket(MqttPacket),
 }
 
+/// A separate bounded lane keeps local publish admission available when event
+/// delivery backpressures the worker. It never waits for transport I/O or an ACK.
+#[derive(Debug)]
+struct PublishAdmission {
+    command: PublishCommand,
+    response_tx: Response<Option<u16>>,
+}
+
 /// Configuration for the tokio async client
 #[derive(Debug, Clone)]
 pub struct TokioAsyncClientConfig {
@@ -320,7 +331,7 @@ pub struct TokioAsyncClientConfig {
     pub max_reconnect_delay_ms: u64,
     /// Maximum number of reconnect attempts (0 = infinite)
     pub max_reconnect_attempts: u32,
-    /// Queue size for pending commands
+    /// Capacity of each independent legacy-command and local-admission queue.
     pub command_queue_size: usize,
     /// Enable buffering of messages during disconnection
     pub buffer_messages: bool,
@@ -948,6 +959,7 @@ impl Default for ConfigBuilder {
 pub struct TokioAsyncMqttClient {
     /// Command sender to worker task
     command_tx: mpsc::Sender<TokioClientCommand>,
+    admission_tx: mpsc::Sender<PublishAdmission>,
     /// Client configuration
     _config: TokioAsyncClientConfig,
     worker: tokio::task::JoinHandle<Result<(), MqttClientError>>,
@@ -965,14 +977,21 @@ impl TokioAsyncMqttClient {
     ) -> io::Result<Self> {
         worker::resolve_options(&mut mqtt_options, &config)?;
         let (command_tx, command_rx) = mpsc::channel(config.command_queue_size);
+        let (admission_tx, admission_rx) = mpsc::channel(config.command_queue_size);
 
         // Spawn the worker task
-        let worker =
-            TokioClientWorker::new(mqtt_options, event_handler, command_rx, config.clone());
+        let worker = TokioClientWorker::new(
+            mqtt_options,
+            event_handler,
+            command_rx,
+            admission_rx,
+            config.clone(),
+        );
         let worker = tokio::spawn(worker.run());
 
         Ok(TokioAsyncMqttClient {
             command_tx,
+            admission_tx,
             _config: config,
             worker,
         })
@@ -1093,6 +1112,51 @@ impl TokioAsyncMqttClient {
     pub async fn publish_with_command(&self, command: PublishCommand) -> io::Result<()> {
         self.send_command(TokioClientCommand::Publish(command))
             .await
+    }
+
+    /// Publish and wait for local engine admission, without waiting for a broker ACK.
+    ///
+    /// Unlike [`Self::publish_with_command`], success means the engine has validated
+    /// and accepted this command under its current connection and capacity limits,
+    /// not just that the worker's command channel accepted it. Returns `None` for
+    /// QoS 0 or the assigned packet identifier for QoS 1/2. It does not confirm a
+    /// transport write or broker delivery. Later protocol and transport results
+    /// still arrive through the event handler.
+    ///
+    /// Local rejection is returned only to this call, without a duplicate generic
+    /// error callback. A validation or capacity error does not by itself mean the
+    /// connection was lost. The configured offline-buffering policy still applies.
+    ///
+    /// Admission has a separate bounded channel with `command_queue_size` slots.
+    /// The worker services it even while an event callback is backpressured,
+    /// returning local capacity errors without requiring that callback to finish.
+    /// No socket reads, writes, or recursive callbacks occur on that path. Commands
+    /// are FIFO within this channel, but there is no enqueue-order guarantee with
+    /// the legacy command channel. Await `connect_sync` before admission when
+    /// connection completion is required; enqueueing `connect` alone is not a fence.
+    ///
+    /// This method has no implicit acknowledgement timeout. A caller may wrap it
+    /// in `tokio::time::timeout`, but dropping or timing out the future after its
+    /// command entered the channel does **not** cancel that publish. Its admission
+    /// and delivery may still proceed; do not automatically retry an unknown result.
+    /// Event consumption must still progress for transport writes and subsequent
+    /// acknowledgements. Waiting for those completions inside a callback can
+    /// deadlock even though this local admission operation remains available.
+    pub async fn publish_with_command_admitted(
+        &self,
+        command: PublishCommand,
+    ) -> Result<Option<u16>, MqttClientError> {
+        let (response_tx, response_rx) = oneshot::channel();
+        self.admission_tx
+            .send(PublishAdmission {
+                command,
+                response_tx,
+            })
+            .await
+            .map_err(|_| MqttClientError::ChannelClosed {
+                channel: "async client admission".into(),
+            })?;
+        receive_response(response_rx).await
     }
 
     /// Publish a message and wait for acknowledgment (QoS 1 = PUBACK, QoS 2 = PUBCOMP)
@@ -1355,6 +1419,18 @@ impl TokioAsyncMqttClient {
             .map_err(Into::into)
     }
 
+    /// Obtain a handle for immediate cancellation of the transport worker.
+    ///
+    /// Aborting drops the transport and pending operations without a graceful
+    /// MQTT disconnect or a delivery guarantee. Prefer [`Self::shutdown`] for
+    /// normal shutdown; this handle supports bounded cleanup when a callback or
+    /// transport prevents graceful shutdown. Await task completion by polling
+    /// [`tokio::task::AbortHandle::is_finished`] if resource release must finish
+    /// before continuing.
+    pub fn abort_handle(&self) -> tokio::task::AbortHandle {
+        self.worker.abort_handle()
+    }
+
     /// Send a raw MQTT packet to the broker (non-blocking)
     pub async fn send_packet(&self, packet: MqttPacket) -> io::Result<()> {
         self.send_command(TokioClientCommand::SendPacket(packet))
@@ -1469,7 +1545,11 @@ impl TokioAsyncMqttClient {
             .await
     }
 
-    /// Subscribe with fully customized command and wait for acknowledgment
+    /// Subscribe with fully customized command and wait for acknowledgment.
+    ///
+    /// A command whose response waiter was cancelled before worker handling is
+    /// skipped. Cancellation or timeout after engine admission does not retract
+    /// the subscription and may leave its broker outcome unknown.
     pub async fn subscribe_with_command_sync(
         &self,
         command: SubscribeCommand,
