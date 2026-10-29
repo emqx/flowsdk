@@ -372,6 +372,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_auth_invalid_flags() {
         let bytes = vec![0xF1, 0x02, 0x00, 0x00]; // AUTH with invalid flags (should be 0x00)

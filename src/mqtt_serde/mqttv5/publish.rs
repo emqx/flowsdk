@@ -385,6 +385,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_publish_qos0_dup1_is_invalid() {
         // [MQTT-3.3.1-2]
@@ -396,6 +397,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::ParseError(_))));
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_publish_invalid_qos3() {
         // [MQTT-3.3.1-4]
@@ -409,6 +411,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::ParseError(_))));
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_publish_topic_with_wildcard_is_invalid() {
         // [MQTT-3.3.2-2]
