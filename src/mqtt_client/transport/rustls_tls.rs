@@ -84,7 +84,7 @@ mod imp {
                 })?;
                 let key_der: PrivateKeyDer<'static> = parsed_key.clone_key();
 
-                RustlsClientConfig::builder()
+                super::super::tls_config_builder(rustls::crypto::ring::default_provider())
                     .with_root_certificates(roots)
                     .with_client_auth_cert(chain_der, key_der)
                     .map_err(|e| {
@@ -94,7 +94,7 @@ mod imp {
                         ))
                     })?
             } else {
-                RustlsClientConfig::builder()
+                super::super::tls_config_builder(rustls::crypto::ring::default_provider())
                     .with_root_certificates(roots)
                     .with_no_client_auth()
             };

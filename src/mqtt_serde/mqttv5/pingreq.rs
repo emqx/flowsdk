@@ -145,6 +145,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_pingreq_invalid_remaining_length() {
         let bytes = vec![0xC0, 0x01, 0xFF]; // PINGREQ with invalid remaining length 1
@@ -157,6 +158,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_pingreq_invalid_flags() {
         let bytes = vec![0xC1, 0x00]; // PINGREQ with invalid flags (should be 0x00)

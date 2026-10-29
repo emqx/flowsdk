@@ -9,7 +9,6 @@ use flowsdk::mqtt_client::{
 use std::sync::Arc;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
     let peer = std::env::var("MQTT_PEER")?;
     let name = std::env::var("MQTT_SERVER_NAME")?;
     let mut tls = RustlsTlsConfig::builder().use_system_roots(true);
