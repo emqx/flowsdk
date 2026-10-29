@@ -1,0 +1,311 @@
+name: Feature Gates
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: '21 3 * * 5'
+  workflow_dispatch:
+    inputs:
+      exhaustive:
+        description: Check the full feature powerset on Linux
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+concurrency:
+  group: feature-gates-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  # Each feature set has a different cache; a full sweep can exceed runner disk space.
+  CARGO_INCREMENTAL: '0'
+  RUST_BACKTRACE: '1'
+
+jobs:
+  compile:
+    name: Compile (${{ matrix.os }}, ${{ matrix.package }}, ${{ matrix.partition }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        package: [flowsdk, flowsdk_ffi]
+        partition: ['1/2', '2/2']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack@0.6.44
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: features-${{ matrix.package }}-${{ matrix.partition }}
+      - name: Install OpenSSL
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev pkg-config
+      - name: Install OpenSSL on macOS
+        if: runner.os == 'macOS'
+        run: brew install openssl@3 pkg-config
+      - name: Check public feature combinations without dev dependencies
+        shell: bash
+        env:
+          PACKAGE: ${{ matrix.package }}
+          PARTITION: ${{ matrix.partition }}
+          EXHAUSTIVE: ${{ runner.os == 'Linux' && (github.event_name == 'schedule' || inputs.exhaustive == true) }}
+          RUSTFLAGS: -Dwarnings
+        run: |
+          set -o pipefail
+          mkdir -p reports/feature-gates
+          depth=(--depth 3)
+          required=()
+          if [[ "$PACKAGE" == flowsdk ]]; then required=(--features alloc); fi
+          if [[ "$EXHAUSTIVE" == true ]]; then depth=(); fi
+          # cargo-hack temporarily removes dev dependencies. Keep this job's
+          # checkout separate from jobs compiling examples or running tests.
+          cargo hack check -p "$PACKAGE" --lib --feature-powerset --optional-deps "${depth[@]}" "${required[@]}" \
+            --no-dev-deps --keep-going --partition "$PARTITION" \
+            2>&1 | tee reports/feature-gates/compile.log
+      - name: Save resolved feature graphs
+        if: always()
+        shell: bash
+        env:
+          PACKAGE: ${{ matrix.package }}
+        run: |
+          mkdir -p reports/feature-gates
+          cargo tree -p "$PACKAGE" -e normal,features --no-default-features > reports/feature-gates/minimal-tree.txt
+          cargo tree -p "$PACKAGE" -e normal,features --all-features > reports/feature-gates/all-tree.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: feature-compile-${{ matrix.os }}-${{ matrix.package }}-${{ strategy.job-index }}
+          path: reports/feature-gates/
+
+  core-runtime:
+    name: Runtime (${{ matrix.name }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: minimal-host
+            features: std
+          - name: strict
+            features: std,strict-protocol-compliance
+          - name: defaults
+            features: default
+          - name: async
+            features: async-client
+          - name: native-tls
+            features: tls
+          - name: rustls-tls
+            features: rustls-tls
+          - name: both-tls
+            features: tls,rustls-tls
+          - name: quic-proto-ring
+            features: quic-proto
+          - name: quic-proto-openssl
+            features: quic-proto-openssl
+          - name: quic-ring
+            features: quic
+          - name: quic-openssl
+            features: quic-openssl
+          - name: mixed-quic
+            features: quic,quic-proto-openssl
+          - name: durable-core
+            features: std,durable-session
+          - name: transports-ring
+            features: strict-protocol-compliance,tls,rustls-tls,quic,durable-session
+          - name: transports-openssl
+            features: strict-protocol-compliance,tls,rustls-tls,quic-openssl,durable-session
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install OpenSSL
+        run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: feature-runtime-${{ matrix.name }}
+      - name: Resolve workspace dependencies
+        run: cargo fetch
+      - name: Check all targets and run local tests
+        shell: bash
+        env:
+          FEATURES: ${{ matrix.features }}
+        run: |
+          set -o pipefail
+          mkdir -p reports/feature-gates
+          args=(--locked -p flowsdk --no-default-features)
+          if [[ -n "$FEATURES" ]]; then args+=(--features "$FEATURES"); fi
+          cargo tree "${args[@]}" -e normal,features > reports/feature-gates/tree.txt
+          cargo check "${args[@]}" --all-targets 2>&1 | tee reports/feature-gates/targets.log
+          cargo test "${args[@]}" --lib --tests 2>&1 | tee reports/feature-gates/tests.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: feature-runtime-${{ matrix.name }}
+          path: reports/feature-gates/
+
+  portable-runtime:
+    name: Portable core powerset
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack@0.6.44
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: tests/no_std -> target
+          key: portable-features
+      - name: Test the isolated portable feature combinations
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p reports/feature-gates
+          cargo hack test --manifest-path tests/no_std/Cargo.toml --locked \
+            --feature-powerset --keep-going 2>&1 | tee reports/feature-gates/portable.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: feature-portable
+          path: reports/feature-gates/
+
+  ffi-runtime:
+    name: FFI powerset (${{ matrix.partition }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        partition: ['1/2', '2/2']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install OpenSSL
+        run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev pkg-config
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack@0.6.44
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ffi-powerset-${{ matrix.partition }}
+      - name: Resolve workspace dependencies
+        run: cargo fetch
+      - name: Test every FFI feature combination
+        shell: bash
+        env:
+          PARTITION: ${{ matrix.partition }}
+        run: |
+          set -o pipefail
+          mkdir -p reports/feature-gates
+          cargo hack test -p flowsdk_ffi --locked --lib --feature-powerset --optional-deps \
+            --keep-going --partition "$PARTITION" 2>&1 | tee reports/feature-gates/ffi.log
+      - name: Save FFI feature graphs
+        if: always()
+        run: |
+          mkdir -p reports/feature-gates
+          cargo tree -p flowsdk_ffi -e normal,features --no-default-features > reports/feature-gates/minimal-tree.txt
+          cargo tree -p flowsdk_ffi -e normal,features --all-features > reports/feature-gates/all-tree.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: feature-ffi-${{ strategy.job-index }}
+          path: reports/feature-gates/
+
+  contracts:
+    name: Disabled feature contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install OpenSSL
+        run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev pkg-config
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: feature-contracts
+      - name: Check API, dependency, and C export gates
+        shell: bash
+        run: |
+          set -o pipefail
+          mkdir -p reports/feature-gates
+          python3 scripts/check_feature_contracts.py 2>&1 | tee reports/feature-gates/contracts.log
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: feature-contracts
+          path: reports/feature-gates/
+
+  workspace:
+    name: Workspace feature integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - name: Install OpenSSL
+        run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev pkg-config
+      - uses: arduino/setup-protoc@v3
+        with:
+          version: '25.x'
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+      - uses: taiki-e/install-action@v2
+        with:
+          tool: cargo-hack@0.6.44
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: feature-workspace
+      - name: Resolve workspace dependencies
+        run: cargo fetch
+      - name: Check Linux benchmark and isolated proxy
+        run: |
+          set -o pipefail
+          mkdir -p reports/feature-gates
+          cargo hack check -p mqtt_ring_bench --feature-powerset --optional-deps --no-dev-deps --keep-going \
+            2>&1 | tee reports/feature-gates/benchmark.log
+          cargo test --locked -p mqtt-grpc-proxy 2>&1 | tee reports/feature-gates/proxy.log
+      - name: Check mixed workspace backends
+        run: |
+          set -o pipefail
+          cargo check --locked --workspace --all-targets 2>&1 | tee reports/feature-gates/workspace-default.log
+          cargo check --locked --workspace --all-targets --features flowsdk/quic,flowsdk_ffi/quic-openssl \
+            2>&1 | tee reports/feature-gates/workspace-mixed.log
+          cargo check --locked --workspace --all-targets --all-features 2>&1 | tee reports/feature-gates/workspace-all.log
+      - name: Save workspace feature graph
+        if: always()
+        run: |
+          mkdir -p reports/feature-gates
+          cargo tree --workspace -e normal,features --all-features > reports/feature-gates/tree.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: feature-workspace
+          path: reports/feature-gates/
+
+  feature-gates:
+    name: Feature gates
+    if: always()
+    needs: [compile, core-runtime, portable-runtime, ffi-runtime, contracts, workspace]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every feature job to pass
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 - <<'PY'
+          import json, os, sys
+          results = json.loads(os.environ['RESULTS'])
+          failed = {name: job['result'] for name, job in results.items() if job['result'] != 'success'}
+          if failed:
+              print(f'Feature jobs did not pass: {failed}')
+              sys.exit(1)
+          PY

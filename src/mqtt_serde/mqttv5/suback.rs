@@ -288,6 +288,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_suback_error_conditions() {
         // Test SUBACK with packet_id = 0 (invalid)

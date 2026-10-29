@@ -9,6 +9,17 @@ use async_trait::async_trait;
 use std::io;
 use tokio::io::{AsyncRead, AsyncWrite};
 
+// Select explicitly: other workspace members may enable a second Rustls
+// provider, so ClientConfig::builder() cannot always infer a unique provider.
+#[cfg(any(feature = "rustls-tls", feature = "quic"))]
+pub(crate) fn tls_config_builder(
+    provider: rustls::crypto::CryptoProvider,
+) -> rustls::ConfigBuilder<rustls::ClientConfig, rustls::WantsVerifier> {
+    rustls::ClientConfig::builder_with_provider(std::sync::Arc::new(provider))
+        .with_safe_default_protocol_versions()
+        .expect("The selected crypto provider supports default TLS versions")
+}
+
 #[cfg(feature = "async-client")]
 pub mod tcp;
 

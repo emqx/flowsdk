@@ -6600,11 +6600,13 @@ mod tests {
     #[cfg(feature = "quic-proto")]
     fn quic_test_crypto_config() -> rustls::ClientConfig {
         #[cfg(feature = "quic-proto-openssl")]
-        let _ = rustls_openssl::default_provider().install_default();
+        let provider = rustls_openssl::default_provider();
         #[cfg(not(feature = "quic-proto-openssl"))]
-        let _ = rustls::crypto::ring::default_provider().install_default();
+        let provider = rustls::crypto::ring::default_provider();
 
-        rustls::ClientConfig::builder()
+        rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+            .with_safe_default_protocol_versions()
+            .unwrap()
             .with_root_certificates(rustls::RootCertStore::empty())
             .with_no_client_auth()
     }

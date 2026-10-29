@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
+#![cfg(feature = "async-client")]
 
 //! Integration tests for transport abstraction layer
 

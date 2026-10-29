@@ -156,6 +156,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_connack_invalid_reserved_flags() {
         // [MQTT-3.2.2-1]

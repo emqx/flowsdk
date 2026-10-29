@@ -286,6 +286,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_unsuback_error_conditions() {
         // Test UNSUBACK with packet_id = 0 (invalid)

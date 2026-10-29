@@ -11,7 +11,10 @@ use openssl::{
     hash::MessageDigest,
     nid::Nid,
     pkey::PKey,
-    x509::{extension::SubjectAlternativeName, X509NameBuilder, X509},
+    x509::{
+        extension::{ExtendedKeyUsage, KeyUsage, SubjectAlternativeName},
+        X509NameBuilder, X509,
+    },
 };
 #[cfg(feature = "quic-openssl")]
 use quinn_openssl as quinn;
@@ -29,6 +32,14 @@ struct Identity {
     key_pem: Vec<u8>,
 }
 
+fn crypto_provider() -> Arc<rustls::crypto::CryptoProvider> {
+    #[cfg(feature = "quic-proto-openssl")]
+    let provider = rustls_openssl::default_provider();
+    #[cfg(not(feature = "quic-proto-openssl"))]
+    let provider = rustls::crypto::ring::default_provider();
+    Arc::new(provider)
+}
+
 #[tokio::test]
 async fn tokio_quic_client_completes_mqtt_commands_after_rebinding() {
     use flowsdk::mqtt_client::{
@@ -40,7 +51,7 @@ async fn tokio_quic_client_completes_mqtt_commands_after_rebinding() {
     use flowsdk::mqtt_serde::{control_packet::MqttPacket, parser::ParseOk};
     let workflow = async {
         let identity = Identity::new();
-        let mut server_config = identity.server();
+        let mut server_config = identity.server(crypto_provider());
         server_config.alpn_protocols = vec![b"mqtt".to_vec()];
         let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(server_config).unwrap();
         let endpoint = quinn::Endpoint::new(
@@ -137,7 +148,9 @@ async fn tokio_quic_client_completes_mqtt_commands_after_rebinding() {
         .unwrap();
         let mut roots = rustls::RootCertStore::empty();
         roots.add(identity.cert.into()).unwrap();
-        let mut crypto = rustls::ClientConfig::builder()
+        let mut crypto = rustls::ClientConfig::builder_with_provider(crypto_provider())
+            .with_safe_default_protocol_versions()
+            .unwrap()
             .with_root_certificates(roots)
             .with_no_client_auth();
         crypto.alpn_protocols = vec![b"mqtt".to_vec()];
@@ -197,7 +210,6 @@ async fn tokio_quic_client_completes_mqtt_commands_after_rebinding() {
 
 impl Identity {
     fn new() -> Self {
-        let _ = rustls::crypto::ring::default_provider().install_default();
         let key = PKey::from_ec_key(
             EcKey::generate(&EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap()).unwrap(),
         )
@@ -214,6 +226,16 @@ impl Identity {
             .unwrap();
         cert.set_not_after(&Asn1Time::days_from_now(1).unwrap())
             .unwrap();
+        cert.append_extension(KeyUsage::new().digital_signature().build().unwrap())
+            .unwrap();
+        cert.append_extension(
+            ExtendedKeyUsage::new()
+                .server_auth()
+                .client_auth()
+                .build()
+                .unwrap(),
+        )
+        .unwrap();
         let san = SubjectAlternativeName::new()
             .dns("localhost")
             .ip("127.0.0.1")
@@ -230,8 +252,10 @@ impl Identity {
         }
     }
 
-    fn server(&self) -> rustls::ServerConfig {
-        rustls::ServerConfig::builder()
+    fn server(&self, provider: Arc<rustls::crypto::CryptoProvider>) -> rustls::ServerConfig {
+        rustls::ServerConfig::builder_with_provider(provider)
+            .with_safe_default_protocol_versions()
+            .unwrap()
             .with_no_client_auth()
             .with_single_cert(
                 vec![CertificateDer::from(self.cert.clone())],
@@ -283,7 +307,9 @@ async fn tls_backends_verify_custom_roots_and_exchange_binary_data() {
         let identity = Identity::new();
         let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap().to_string();
-        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(identity.server()));
+        let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(
+            identity.server(Arc::new(rustls::crypto::ring::default_provider())),
+        ));
         let server = tokio::spawn(async move {
             for _ in 0..2 {
                 let (socket, _) = listener.accept().await.unwrap();
@@ -382,7 +408,7 @@ fn tls_pem_builders_load_identity_and_reject_malformed_inputs() {
 async fn quic_transport_verifies_roots_and_survives_local_rebind() {
     tokio::time::timeout(Duration::from_secs(15), async {
         let identity = Identity::new();
-        let mut server_config = identity.server();
+        let mut server_config = identity.server(crypto_provider());
         server_config.alpn_protocols = vec![b"mqtt".to_vec()];
         let crypto = quinn::crypto::rustls::QuicServerConfig::try_from(server_config).unwrap();
         let endpoint = quinn::Endpoint::new(

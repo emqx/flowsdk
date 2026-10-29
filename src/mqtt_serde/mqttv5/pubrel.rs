@@ -9,7 +9,9 @@ mod tests {
     use super::MqttPubRel;
     use crate::mqtt_serde::control_packet::{MqttControlPacket, MqttPacket};
     use crate::mqtt_serde::mqttv5::common::properties::Property;
-    use crate::mqtt_serde::parser::{ParseError, ParseOk};
+    #[cfg(feature = "strict-protocol-compliance")]
+    use crate::mqtt_serde::parser::ParseError;
+    use crate::mqtt_serde::parser::ParseOk;
     #[test]
     fn test_pubrel_minimal_success() {
         // Test minimal PUBREL (success, no properties)
