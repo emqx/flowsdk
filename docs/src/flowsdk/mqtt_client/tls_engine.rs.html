@@ -242,20 +242,20 @@
 <a href=#242 id=242 data-nosnippet>242</a>
 <a href=#243 id=243 data-nosnippet>243</a>    <span class="attr">#[test]
 <a href=#244 id=244 data-nosnippet>244</a>    </span><span class="kw">fn </span>test_tls_engine_creation() {
-<a href=#245 id=245 data-nosnippet>245</a>        <span class="kw">let _ </span>= rustls::crypto::ring::default_provider().install_default();
-<a href=#246 id=246 data-nosnippet>246</a>        <span class="kw">let </span>options = MqttClientOptions::builder()
-<a href=#247 id=247 data-nosnippet>247</a>            .client_id(<span class="string">"test_client"</span>)
-<a href=#248 id=248 data-nosnippet>248</a>            .build();
-<a href=#249 id=249 data-nosnippet>249</a>
-<a href=#250 id=250 data-nosnippet>250</a>        <span class="kw">let </span><span class="kw-2">mut </span>roots = RootCertStore::empty();
-<a href=#251 id=251 data-nosnippet>251</a>        <span class="kw">for </span>cert <span class="kw">in </span>rustls_native_certs::load_native_certs().expect(<span class="string">"could not load platform certs"</span>)
-<a href=#252 id=252 data-nosnippet>252</a>        {
-<a href=#253 id=253 data-nosnippet>253</a>            roots.add(cert).unwrap();
-<a href=#254 id=254 data-nosnippet>254</a>        }
-<a href=#255 id=255 data-nosnippet>255</a>
-<a href=#256 id=256 data-nosnippet>256</a>        <span class="kw">let </span>config = ClientConfig::builder()
-<a href=#257 id=257 data-nosnippet>257</a>            .with_root_certificates(roots)
-<a href=#258 id=258 data-nosnippet>258</a>            .with_no_client_auth();
+<a href=#245 id=245 data-nosnippet>245</a>        <span class="kw">let </span>options = MqttClientOptions::builder()
+<a href=#246 id=246 data-nosnippet>246</a>            .client_id(<span class="string">"test_client"</span>)
+<a href=#247 id=247 data-nosnippet>247</a>            .build();
+<a href=#248 id=248 data-nosnippet>248</a>
+<a href=#249 id=249 data-nosnippet>249</a>        <span class="comment">// rustls-tls enables tokio-rustls's aws-lc provider. Select it explicitly
+<a href=#250 id=250 data-nosnippet>250</a>        // for this test without changing the process-global provider; other
+<a href=#251 id=251 data-nosnippet>251</a>        // features may also enable ring. No handshake or platform roots are needed.
+<a href=#252 id=252 data-nosnippet>252</a>        </span><span class="kw">let </span>config = ClientConfig::builder_with_provider(Arc::new(
+<a href=#253 id=253 data-nosnippet>253</a>            rustls::crypto::aws_lc_rs::default_provider(),
+<a href=#254 id=254 data-nosnippet>254</a>        ))
+<a href=#255 id=255 data-nosnippet>255</a>        .with_safe_default_protocol_versions()
+<a href=#256 id=256 data-nosnippet>256</a>        .unwrap()
+<a href=#257 id=257 data-nosnippet>257</a>        .with_root_certificates(RootCertStore::empty())
+<a href=#258 id=258 data-nosnippet>258</a>        .with_no_client_auth();
 <a href=#259 id=259 data-nosnippet>259</a>
 <a href=#260 id=260 data-nosnippet>260</a>        <span class="kw">let </span>engine = TlsMqttEngine::new(options, <span class="string">"localhost"</span>, Arc::new(config));
 <a href=#261 id=261 data-nosnippet>261</a>        <span class="macro">assert!</span>(engine.is_ok());
