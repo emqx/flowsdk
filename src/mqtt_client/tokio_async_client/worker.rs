@@ -373,6 +373,10 @@ pub(super) struct TokioClientWorker {
     pending: Pending,
     event_handler: Box<dyn TokioMqttEventHandler>,
     command_rx: mpsc::Receiver<TokioClientCommand>,
+    admission_rx: mpsc::Receiver<PublishAdmission>,
+    admission_open: bool,
+    admission_transport_failed: bool,
+    admission_needs_drain: bool,
     config: TokioAsyncClientConfig,
 }
 
@@ -381,12 +385,17 @@ impl TokioClientWorker {
         options: MqttClientOptions,
         event_handler: Box<dyn TokioMqttEventHandler>,
         command_rx: mpsc::Receiver<TokioClientCommand>,
+        admission_rx: mpsc::Receiver<PublishAdmission>,
         config: TokioAsyncClientConfig,
     ) -> Self {
         Self {
             engine: MqttEngine::new(options),
             event_handler,
             command_rx,
+            admission_rx,
+            admission_open: true,
+            admission_transport_failed: false,
+            admission_needs_drain: false,
             config,
             stream: None,
             state: ConnectionState::Disconnected,
@@ -406,6 +415,7 @@ impl TokioClientWorker {
                     match command {
                         Some(TokioClientCommand::Shutdown) | None => {
                             self.command_rx.close();
+                            self.close_admissions();
                             let result = self.disconnect(0, Vec::new()).await;
                             if let Err(error) = &result {
                                 self.engine.set_reconnect(false);
@@ -419,6 +429,12 @@ impl TokioClientWorker {
                             return result;
                         }
                         Some(command) => self.handle_command(command).await,
+                    }
+                }
+                request = self.admission_rx.recv(), if self.admission_open => {
+                    match request {
+                        Some(request) => self.admit(request),
+                        None => self.admission_open = false,
                     }
                 }
                 result = async {
@@ -459,6 +475,11 @@ impl TokioClientWorker {
                     let events = self.engine.handle_tick(Instant::now());
                     self.dispatch_events(events).await;
                 }
+                // Event callbacks can admit new output after handle_outgoing's
+                // write. Drain it without waiting for another read or keepalive,
+                // while yielding and competing fairly with the other branches.
+                _ = tokio::task::yield_now(),
+                    if self.admission_needs_drain || self.engine.has_pending_output() => {}
                 _ = poll_fn(|cx| self.pending.poll_cancelled(cx)) => {}
             }
             if let Err(error) = self.handle_outgoing().await {
@@ -656,12 +677,62 @@ impl TokioClientWorker {
 
     async fn emit_batch(&mut self, batch: Vec<TokioMqttEvent>) {
         if !batch.is_empty() {
-            self.event_handler.on_event_batch(batch).await;
+            self.deliver_batch(batch).await;
         }
     }
 
     async fn emit_event(&mut self, event: TokioMqttEvent) {
         self.emit_batch(vec![event]).await;
+    }
+
+    async fn deliver_batch(&mut self, events: Vec<TokioMqttEvent>) {
+        let callback = self.event_handler.on_event_batch(events);
+        tokio::pin!(callback);
+        loop {
+            tokio::select! {
+                biased;
+                _ = &mut callback => return,
+                request = self.admission_rx.recv(), if self.admission_open => {
+                    match request {
+                        Some(request) => {
+                            // Only local admission progresses here. Preserve the
+                            // active callback's order and leave new engine events
+                            // for the next normal outgoing/event drain.
+                            self.admission_needs_drain = true;
+                            let result = if self.admission_transport_failed {
+                                Err(MqttClientError::NotConnected)
+                            } else {
+                                publish_command(
+                                    &mut self.engine,
+                                    &self.config,
+                                    self.intentional_stop,
+                                    request.command,
+                                )
+                            };
+                            let _ = request.response_tx.send(result);
+                        }
+                        None => self.admission_open = false,
+                    }
+                }
+            }
+        }
+    }
+
+    fn admit(&mut self, request: PublishAdmission) {
+        // Dropping the response does not retract an already queued publication.
+        let _ = request.response_tx.send(self.publish(request.command));
+    }
+
+    fn close_admissions(&mut self) {
+        self.admission_rx.close();
+        self.admission_open = false;
+        while let Ok(request) = self.admission_rx.try_recv() {
+            let _ = request
+                .response_tx
+                .send(Err(MqttClientError::OperationCancelled {
+                    operation: "publish admission during shutdown".into(),
+                }));
+        }
     }
 
     async fn write_output(&mut self) -> Result<(), MqttClientError> {
@@ -681,28 +752,27 @@ impl TokioClientWorker {
     }
 
     pub(super) async fn handle_outgoing(&mut self) -> Result<(), MqttClientError> {
+        self.admission_needs_drain = false;
         let result = self.write_output().await;
+        // A drain can expose already-parsed incoming messages even when its
+        // write failed. Deliver those first, but do not accept new output against
+        // the known-failed transport while their callback is backpressured.
+        self.admission_transport_failed = result.is_err();
         let events = self.engine.take_events();
         self.dispatch_events(events).await;
         result
     }
 
-    fn publish(&mut self, mut command: PublishCommand) -> Result<Option<u16>, MqttClientError> {
-        if !self.engine.is_connected() {
-            if !self.config.buffer_messages || self.intentional_stop {
-                return Err(MqttClientError::NotConnected);
-            }
-            if self.engine.pending_publish_count() >= self.config.max_buffer_size {
-                return Err(MqttClientError::BufferFull {
-                    buffer_type: "offline publish queue".into(),
-                    capacity: self.config.max_buffer_size,
-                });
-            }
+    fn publish(&mut self, command: PublishCommand) -> Result<Option<u16>, MqttClientError> {
+        if self.admission_transport_failed {
+            return Err(MqttClientError::NotConnected);
         }
-        if !self.config.priority_queue_enabled {
-            command.priority = 128;
-        }
-        self.engine.publish(command)
+        publish_command(
+            &mut self.engine,
+            &self.config,
+            self.intentional_stop,
+            command,
+        )
     }
 
     fn acknowledge(
@@ -771,6 +841,12 @@ impl TokioClientWorker {
                 command,
                 response_tx,
             } => {
+                // A queued subscription can become obsolete while reconnecting.
+                // Skip it if its waiter cancelled before engine admission; once
+                // admitted, cancelling the response cannot undo the subscription.
+                if response_tx.is_closed() {
+                    return;
+                }
                 match self.engine.subscribe(command) {
                     Ok(id) => {
                         self.pending.subscribe.insert(id, response_tx);
@@ -920,7 +996,9 @@ impl TokioClientWorker {
     async fn transport_failed(&mut self, error: MqttClientError) {
         let mut batch = Vec::with_capacity(3);
         batch.push(TokioMqttEvent::Error(error));
+        // Update connection state before the callback can service admissions.
         batch.extend(self.record_connection_lost(None).into_iter().flatten());
+        self.admission_transport_failed = false;
         self.emit_batch(batch).await;
     }
 
@@ -950,8 +1028,34 @@ impl TokioClientWorker {
     }
 }
 
+fn publish_command(
+    engine: &mut MqttEngine,
+    config: &TokioAsyncClientConfig,
+    intentional_stop: bool,
+    mut command: PublishCommand,
+) -> Result<Option<u16>, MqttClientError> {
+    if !engine.is_connected() {
+        if !config.buffer_messages || intentional_stop {
+            return Err(MqttClientError::NotConnected);
+        }
+        if engine.pending_publish_count() >= config.max_buffer_size {
+            return Err(MqttClientError::BufferFull {
+                buffer_type: "offline publish queue".into(),
+                capacity: config.max_buffer_size,
+            });
+        }
+    }
+    if !config.priority_queue_enabled {
+        command.priority = 128;
+    }
+    engine.publish(command)
+}
+
 #[cfg(test)]
 mod batch_tests;
+
+#[cfg(test)]
+mod admission_tests;
 
 #[cfg(test)]
 pub(super) mod test_support;
@@ -1144,6 +1248,11 @@ mod tests {
                     .build(),
             )
             .await;
+            // Keep admission open and idle, as it is with a live client. A closed
+            // channel can win select! and drain output before Shutdown, hiding
+            // the buffer-full failure this test needs to exercise.
+            let (admission_tx, admission_rx) = mpsc::channel(1);
+            worker.admission_rx = admission_rx;
             let dropped = Arc::new(AtomicBool::new(false));
             worker.stream = Some(Box::new(StalledTransport {
                 write: failure == "transport write",
@@ -1164,7 +1273,7 @@ mod tests {
             let error = tokio::time::timeout(Duration::from_secs(1), worker.run())
                 .await
                 .expect("shutdown must finish even when I/O cannot progress")
-                .unwrap_err();
+                .expect_err(failure);
             if failure == "buffer full" {
                 assert!(matches!(error, MqttClientError::BufferFull { .. }));
             } else {
@@ -1175,6 +1284,7 @@ mod tests {
             assert!(result.await.unwrap().is_err());
             assert!(dropped.load(Ordering::SeqCst));
             assert!(tx.is_closed());
+            assert!(admission_tx.is_closed());
             assert_eq!(disconnected.load(Ordering::SeqCst), 1);
         }
     }
