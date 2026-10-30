@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 use clap::{ArgAction, Parser};
 use flowsdk::mqtt_client::{MqttClientOptions, NoIoMqttClient};

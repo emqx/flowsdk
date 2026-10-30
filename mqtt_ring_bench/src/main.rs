@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 // Linux-only: this bench is built on io_uring. On non-Linux platforms we
 // fall through to a stub `main` below so workspace builds (e.g. macOS CI)

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #[cfg(not(feature = "std"))]
 pub(crate) use alloc::collections::{BTreeMap as Map, BTreeSet as Set};

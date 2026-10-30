@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 use super::*;
 use flowsdk::mqtt_session::ClientSessionState;
 use std::sync::atomic::{AtomicBool, Ordering};

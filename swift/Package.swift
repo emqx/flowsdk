@@ -1,5 +1,5 @@
 // swift-tools-version: 5.8
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 import PackageDescription
 

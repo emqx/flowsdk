@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 //! Caller-supplied monotonic time for the portable MQTT engine.
 //!

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 use super::*;
 use flowsdk::mqtt_client::engine::QuicZeroRttStatus;
 use flowsdk::mqtt_serde::control_packet::MqttPacket;

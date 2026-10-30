@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 // Alias the fork's quinn-proto to the standard name when building with the
 // OpenSSL backend, so engine.rs code using quinn_proto:: works transparently.

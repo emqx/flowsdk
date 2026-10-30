@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 use flowsdk::mqtt_client::client::ConnectionResult;
 use flowsdk::mqtt_client::tokio_async_client::{

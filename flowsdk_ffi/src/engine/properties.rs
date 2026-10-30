@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 use super::ffi_types::MqttErrorFFI;
 use flowsdk::mqtt_serde::mqttv5::common::properties::Property;

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 //! Demonstrates MQTT-over-QUIC multi-stream support with the sans-I/O
 //! `QuicMqttEngine`.

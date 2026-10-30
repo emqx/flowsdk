@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// Generates a v5.0 "packet identifier acknowledgement" packet: a struct with
 /// `packet_id: u16`, `reason_code: u8`, and `properties: alloc::vec::Vec<Property>` fields,

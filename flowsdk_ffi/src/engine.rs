@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 use flowsdk::mqtt_client::engine::{MqttEngine, MqttEvent};
 use std::ffi::{CStr, CString};
 use std::os::raw::{c_char, c_int};

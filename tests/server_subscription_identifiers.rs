@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 //! ServerSession component regressions, not native broker conformance tests.
 //! MQTT 5 sections 3.3.4 and 3.8.4 associate identifiers with subscriptions,

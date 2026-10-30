@@ -381,7 +381,7 @@ wheel before upload.
 
 ## License
 
-Mozilla Public License 2.0
+Apache License 2.0
 
 ### Runtime limits and durable sessions
 

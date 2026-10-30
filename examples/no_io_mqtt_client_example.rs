@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //! Plain TCP example for local development. Use no_io_tls_client_example for cloud credentials.
 #[path = "support/no_io_loop.rs"]
 mod driver;
