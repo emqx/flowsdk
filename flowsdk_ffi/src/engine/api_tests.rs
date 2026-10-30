@@ -16,6 +16,28 @@ fn options(version: u8) -> MqttConnectOptionsFFI {
     .into()
 }
 
+#[cfg(not(feature = "tls"))]
+#[test]
+fn disabled_tls_constructors_return_unsupported() {
+    assert!(matches!(
+        TlsMqttEngineFFI::new_with_options(
+            options(5),
+            MqttTlsOptionsFFI::default(),
+            "localhost".into(),
+        ),
+        Err(MqttErrorFFI::Unsupported { .. })
+    ));
+    assert!(matches!(
+        TlsMqttEngineFFI::new_with_runtime_options(
+            options(5),
+            MqttRuntimeOptionsFFI::default(),
+            MqttTlsOptionsFFI::default(),
+            "localhost".into(),
+        ),
+        Err(MqttErrorFFI::Unsupported { .. })
+    ));
+}
+
 fn connected(engine: &mut MqttEngine, version: u8) {
     engine.connect().unwrap();
     engine.take_outgoing();

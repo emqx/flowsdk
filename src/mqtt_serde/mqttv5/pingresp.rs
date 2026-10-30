@@ -144,6 +144,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_pingresp_invalid_remaining_length() {
         let bytes = vec![0xD0, 0x01, 0xFF]; // PINGRESP with invalid remaining length 1
@@ -156,6 +157,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_pingresp_invalid_flags() {
         let bytes = vec![0xD1, 0x00]; // PINGRESP with invalid flags (should be 0x00)

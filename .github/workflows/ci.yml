@@ -154,17 +154,8 @@ jobs:
     - name: Build (default, no QUIC)
       run: cargo build
 
-    - name: Test FFI transport feature combinations
-      run: |
-        cargo test -p flowsdk_ffi --no-default-features
-        cargo test -p flowsdk_ffi --no-default-features --features json
-        cargo test -p flowsdk_ffi --no-default-features --features uniffi-bindings
-        cargo test -p flowsdk_ffi --no-default-features --features tls,uniffi-bindings
-        cargo test -p flowsdk_ffi --no-default-features --features quic,uniffi-bindings
-        cargo test -p flowsdk_ffi --no-default-features --features quic,json
-        cargo test -p flowsdk_ffi --no-default-features --features durable-session
-        cargo test -p flowsdk_ffi --features durable-session
-        cargo test -p flowsdk_ffi --features json
+    # All FFI combinations (including OpenSSL and persistence) are tested in
+    # feature-gates.yml. Keep linked C tests and release-small builds here.
 
     - name: Test standalone C API without UniFFI
       run: |
@@ -174,11 +165,6 @@ jobs:
         bash scripts/test_c_bindings.sh --json
         cargo build -p flowsdk_ffi --no-default-features --features durable-session
         bash scripts/test_c_bindings.sh --durable-session
-
-    - name: Test OpenSSL FFI backend
-      run: |
-        cargo test -p flowsdk_ffi --no-default-features --features tls,quic-openssl,uniffi-bindings
-        cargo test -p flowsdk_ffi --no-default-features --features tls,quic-openssl,uniffi-bindings,durable-session
 
     # Mode 2: mainstream quinn 0.11 (crates.io) + ring crypto
     - name: Build flowsdk_ffi --features quic (mainstream quinn)

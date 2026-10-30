@@ -31,3 +31,7 @@ path = "../session_reliability.rs"
 [[test]]
 name = "subscriptions"
 path = "../server_subscription_identifiers.rs"
+
+[[test]]
+name = "feature_gate_contracts"
+path = "../feature_gate_contracts.rs"

@@ -387,6 +387,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_disconnect_invalid_flags() {
         let bytes = vec![0xE1, 0x00]; // DISCONNECT with invalid flags (should be 0x00)

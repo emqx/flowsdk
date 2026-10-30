@@ -478,6 +478,7 @@ mod tests {
         assert_eq!(connect1, MqttPacket::Connect5(connect));
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_connect_invalid_reserved_flag() {
         // [MQTT-3.1.2-3]
@@ -490,6 +491,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::ParseError(_))));
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_connect_invalid_will_qos_if_no_will() {
         // [MQTT-3.1.2-11]
@@ -501,6 +503,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::ParseError(_))));
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_connect_invalid_will_retain_if_no_will() {
         // [MQTT-3.1.2-13]
@@ -512,6 +515,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::ParseError(_))));
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_connect_invalid_will_qos_3() {
         // [MQTT-3.1.2-12]
@@ -525,6 +529,7 @@ mod tests {
         assert!(matches!(result, Err(ParseError::ParseError(_))));
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_invalid_client_id() {
         let connect = MqttConnect::new(

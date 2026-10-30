@@ -43,7 +43,7 @@ rustls = { version = "0.23", optional = true, default-features = false, features
 rustls-openssl = { version = "0.3", optional = true }
 rustls-native-certs = { version = "0.7", optional = true }
 rustls-pki-types = { version = "1", optional = true }
-tokio-rustls = { version = "0.26", optional = true }
+tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["ring", "tls12"] }
 
 [features]
 default = ["std", "strict-protocol-compliance", "tls", "async-client"]
@@ -61,7 +61,7 @@ quic = ["quic-proto", "dep:quinn", "async-client"]
 # Implies quic so all #[cfg(feature = "quic")] gates activate; the fork is aliased
 # over mainstream quinn via extern crate in lib.rs.  LTO strips unused mainstream
 # quinn symbols from the final binary.
-# NOTE: do not enable quic and quic-openssl at the same time.
+# OpenSSL takes precedence when both features are enabled (including all-features).
 quic-openssl = ["quic", "quic-proto-openssl", "dep:quinn-openssl"]
 # Sans-I/O QUIC protocol engine — ring crypto (no tokio runtime required)
 quic-proto = ["std", "dep:quinn-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
@@ -88,6 +88,8 @@ async-client = [
 ]
 # gRPC support (only needed for mqtt_grpc_duality proxy)
 grpc = ["std", "dep:tonic", "dep:prost", "dep:tonic-prost"]
+# Arbitrary derives use std for recursion tracking in the host fuzzing harness.
+arbitrary = ["std", "dep:arbitrary"]
 strict-protocol-compliance = []
 # ⚠️ DANGEROUS: Enable raw packet API for protocol compliance testing
 # DO NOT enable in production builds
@@ -176,7 +178,7 @@ required-features = ["std"]
 
 [[example]]
 name = "tokio_async_mqtt_tls_example"
-required-features = ["async-client"]
+required-features = ["tls"]
 
 [[example]]
 name = "mqtt_client_v3_example"

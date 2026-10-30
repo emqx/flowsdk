@@ -15,7 +15,7 @@ mod imp {
     use quinn::{ClientConfig, Endpoint};
     use rustls::client::danger::{ServerCertVerified, ServerCertVerifier};
     use rustls::pki_types::ServerName;
-    use rustls::{ClientConfig as RustlsClientConfig, RootCertStore};
+    use rustls::RootCertStore;
     use rustls_native_certs;
     use rustls_pki_types::pem::PemObject;
     use rustls_pki_types::{CertificateDer, PrivateKeyDer, UnixTime};
@@ -382,10 +382,15 @@ mod imp {
             // early-data (0-RTT) settings from QuicConfig, then convert into
             // a quinn ClientConfig.
 
+            #[cfg(feature = "quic-proto-openssl")]
+            let provider = rustls_openssl::default_provider();
+            #[cfg(not(feature = "quic-proto-openssl"))]
+            let provider = rustls::crypto::ring::default_provider();
+            let builder = super::super::tls_config_builder(provider);
             // Build rustls config based on insecure_skip_verify flag
             let mut rustls_cfg = if cfg.insecure_skip_verify {
                 // ⚠️ DANGEROUS: Skip certificate verification entirely
-                RustlsClientConfig::builder()
+                builder
                     .dangerous()
                     .with_custom_certificate_verifier(Arc::new(InsecureServerCertVerifier))
                     .with_no_client_auth()
@@ -426,7 +431,7 @@ mod imp {
                     })?;
                     let key_der: PrivateKeyDer<'static> = parsed_key.clone_key();
 
-                    RustlsClientConfig::builder()
+                    builder
                         .with_root_certificates(roots)
                         .with_client_auth_cert(cert_chain_der, key_der)
                         .map_err(|e| {
@@ -437,9 +442,7 @@ mod imp {
                         })?
                 } else {
                     // No client auth
-                    RustlsClientConfig::builder()
-                        .with_root_certificates(roots)
-                        .with_no_client_auth()
+                    builder.with_root_certificates(roots).with_no_client_auth()
                 }
             };
 
