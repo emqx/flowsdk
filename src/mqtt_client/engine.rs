@@ -64,6 +64,8 @@ mod protocol_state;
 mod publish_tests;
 #[cfg(feature = "durable-session")]
 mod session_state;
+#[cfg(test)]
+mod test_support;
 
 /// Engine whose clock is always supplied by the caller, including on hosts.
 pub type PortableMqttEngine = MqttEngine<Timestamp>;
@@ -4489,15 +4491,7 @@ mod tests {
     use crate::mqtt_serde::mqttv5::connackv5;
 
     fn establish_connection(engine: &mut MqttEngine) {
-        engine.connect().unwrap();
-        engine.take_outgoing();
-        let connack: &[u8] = if engine.mqtt_version() == 5 {
-            &[0x20, 3, 0, 0, 0]
-        } else {
-            &[0x20, 2, 0, 0]
-        };
-        let events = engine.handle_incoming(connack);
-        assert!(engine.is_connected(), "{events:?}");
+        let events = test_support::connect(engine, vec![]);
         assert!(matches!(events.as_slice(), [MqttEvent::Connected(_)]));
     }
 
