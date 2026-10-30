@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //! Additive, checked C API. The JSON contract is documented in C_API.md.
 //! All pointers must be valid for their stated lengths. Out parameters must be
 //! writable and must not alias inputs. Engine handles must remain alive for each

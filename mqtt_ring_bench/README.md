@@ -266,4 +266,4 @@ sysctl -w net.ipv4.tcp_wmem="1024 2048 4096"
 
 ## License
 
-MPL-2.0
+Apache-2.0

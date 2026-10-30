@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 use super::*;
 
 #[cfg_attr(feature = "uniffi-bindings", uniffi::export)]

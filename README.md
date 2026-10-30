@@ -2,7 +2,7 @@
 
 [![CI](https://github.com/emqx/flowsdk/actions/workflows/ci.yml/badge.svg)](https://github.com/emqx/flowsdk/actions/workflows/ci.yml)
 [![codecov](https://codecov.io/gh/emqx/flowsdk/branch/main/graph/badge.svg?token=7VJHFC3JSE)](https://codecov.io/gh/emqx/flowsdk)
-[![License: MPL 2.0](https://img.shields.io/badge/License-MPL_2.0-brightgreen.svg)](https://opensource.org/licenses/MPL-2.0)
+[![License: Apache-2.0](https://img.shields.io/badge/License-Apache_2.0-brightgreen.svg)](https://opensource.org/licenses/Apache-2.0)
 
 **FlowSDK** is a Rust messaging SDK for MQTT 3.1.1 and 5.0, built around a reusable protocol engine. It gives applications control over how messaging fits into their runtime, how much work they accept, and when an operation is complete.
 
@@ -58,4 +58,4 @@ Both demonstrate QoS 1 and 2 delivery and graceful disconnect. Append `1` or `2`
 
 ## License
 
-FlowSDK is licensed under the [Mozilla Public License 2.0](LICENSE).
+FlowSDK is licensed under the [Apache License 2.0](LICENSE).

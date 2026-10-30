@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //! Self-contained MQTT 5 publish/subscribe with QoS 1 and QoS 2 over local TCP.
 //! Run: cargo run --example no_io_pubsub -- localhost:1883 [1|2]
 //! With no QoS argument, runs both. The application owns I/O; the engine owns MQTT.

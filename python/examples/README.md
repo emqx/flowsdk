@@ -134,7 +134,7 @@ await client.connect("broker.emqx.io", 14567, server_name="broker.emqx.io")
 
 ## License
 
-Mozilla Public License 2.0
+Apache License 2.0
 
 ## MQTT 5 options
 

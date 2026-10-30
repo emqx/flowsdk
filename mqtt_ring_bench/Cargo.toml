@@ -2,7 +2,7 @@
 name = "mqtt_ring_bench"
 version = "0.1.0"
 edition = "2021"
-license = "MPL-2.0"
+license = "Apache-2.0"
 description = "High-connection-count MQTT benchmarking tool using io_uring and sans-I/O client"
 
 [features]

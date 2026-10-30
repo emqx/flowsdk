@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //! Run: cargo run --example tokio_async_mqtt_client_example -- [host:port]
 
 use flowsdk::mqtt_client::client::{

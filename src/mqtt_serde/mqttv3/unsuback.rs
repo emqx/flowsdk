@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 use crate::mqtt_serde::mqttv3::packet_id_ack::v3_packet_id_ack;
 

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 // FlowSDK QUIC MQTT client example (macOS / Linux)
 //
 // Usage:

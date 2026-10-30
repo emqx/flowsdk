@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 /// Generates a v3.1.1 "simple acknowledgement" packet: a struct with a single
 /// `message_id: u16` field, no payload, and a fixed-header-only wire format.
