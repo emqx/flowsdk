@@ -38,12 +38,14 @@ jobs:
         package: [flowsdk, flowsdk_ffi]
         partition: ['1/2', '2/2']
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
         with:
           tool: cargo-hack@0.6.44
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: features-${{ matrix.package }}-${{ matrix.partition }}
       - name: Install OpenSSL
@@ -80,7 +82,7 @@ jobs:
           mkdir -p reports/feature-gates
           cargo tree -p "$PACKAGE" -e normal,features --no-default-features > reports/feature-gates/minimal-tree.txt
           cargo tree -p "$PACKAGE" -e normal,features --all-features > reports/feature-gates/all-tree.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: feature-compile-${{ matrix.os }}-${{ matrix.package }}-${{ strategy.job-index }}
@@ -125,11 +127,13 @@ jobs:
           - name: transports-openssl
             features: strict-protocol-compliance,tls,rustls-tls,quic-openssl,durable-session
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
       - name: Install OpenSSL
         run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev pkg-config
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: feature-runtime-${{ matrix.name }}
       - name: Resolve workspace dependencies
@@ -146,7 +150,7 @@ jobs:
           cargo tree "${args[@]}" -e normal,features > reports/feature-gates/tree.txt
           cargo check "${args[@]}" --all-targets 2>&1 | tee reports/feature-gates/targets.log
           cargo test "${args[@]}" --lib --tests 2>&1 | tee reports/feature-gates/tests.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: feature-runtime-${{ matrix.name }}
@@ -157,12 +161,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-      - uses: taiki-e/install-action@v2
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
         with:
           tool: cargo-hack@0.6.44
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           workspaces: tests/no_std -> target
           key: portable-features
@@ -173,7 +179,7 @@ jobs:
           mkdir -p reports/feature-gates
           cargo hack test --manifest-path tests/no_std/Cargo.toml --locked \
             --feature-powerset --keep-going 2>&1 | tee reports/feature-gates/portable.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: feature-portable
@@ -188,14 +194,16 @@ jobs:
       matrix:
         partition: ['1/2', '2/2']
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
       - name: Install OpenSSL
         run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev pkg-config
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
         with:
           tool: cargo-hack@0.6.44
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: ffi-powerset-${{ matrix.partition }}
       - name: Resolve workspace dependencies
@@ -215,7 +223,7 @@ jobs:
           mkdir -p reports/feature-gates
           cargo tree -p flowsdk_ffi -e normal,features --no-default-features > reports/feature-gates/minimal-tree.txt
           cargo tree -p flowsdk_ffi -e normal,features --all-features > reports/feature-gates/all-tree.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: feature-ffi-${{ strategy.job-index }}
@@ -226,11 +234,13 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
       - name: Install OpenSSL
         run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev pkg-config
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: feature-contracts
       - name: Check API, dependency, and C export gates
@@ -239,7 +249,7 @@ jobs:
           set -o pipefail
           mkdir -p reports/feature-gates
           python3 scripts/check_feature_contracts.py 2>&1 | tee reports/feature-gates/contracts.log
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: feature-contracts
@@ -250,18 +260,20 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
+        with:
+          toolchain: stable
       - name: Install OpenSSL
         run: sudo apt-get update -qq && sudo apt-get install -y libssl-dev pkg-config
-      - uses: arduino/setup-protoc@v3
+      - uses: arduino/setup-protoc@c65c819552d16ad3c9b72d9dfd5ba5237b9c906b # v3.0.0
         with:
           version: '25.x'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: taiki-e/install-action@v2
+      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
         with:
           tool: cargo-hack@0.6.44
-      - uses: Swatinem/rust-cache@v2
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: feature-workspace
       - name: Resolve workspace dependencies
@@ -285,7 +297,7 @@ jobs:
         run: |
           mkdir -p reports/feature-gates
           cargo tree --workspace -e normal,features --all-features > reports/feature-gates/tree.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: feature-workspace
