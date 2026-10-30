@@ -910,6 +910,8 @@ impl<T: TimePoint> MqttEngine<T> {
         loop {
             while let Some(packet) = self.outgoing_buffer.pop_front() {
                 if all_bytes.is_empty() {
+                    // Reuse the first packet's allocation instead of allocating
+                    // another buffer and copying its bytes.
                     all_bytes = packet;
                 } else {
                     all_bytes.extend(packet);
