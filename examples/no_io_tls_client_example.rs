@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //! MQTT_PEER=host:8883 MQTT_SERVER_NAME=host cargo run --features rustls-tls --example no_io_tls_client_example
 //! Optional MQTT_CA_FILE, MQTT_CERT_FILE/MQTT_KEY_FILE, MQTT_USERNAME/MQTT_PASSWORD.
 #[path = "support/no_io_loop.rs"]

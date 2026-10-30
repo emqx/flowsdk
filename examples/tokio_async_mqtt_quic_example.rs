@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 // QUIC-enabled async MQTT client example
 // Demonstrates using TokioAsyncMqttClient with QUIC transport

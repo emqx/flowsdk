@@ -1,4 +1,4 @@
-/* SPDX-License-Identifier: MPL-2.0
+/* SPDX-License-Identifier: Apache-2.0
  * Public FlowSDK C ABI. See ../C_API.md for checked calls and JSON v1.
  * QUIC symbols require the quic build feature. TLS constructors return
  * MQTT_UNSUPPORTED when TLS is disabled. Legacy layouts and tags are stable.

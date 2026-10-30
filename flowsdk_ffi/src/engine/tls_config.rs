@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 use super::{ffi_types::*, InsecureServerCertVerifier};
 use rustls::pki_types::CertificateDer;

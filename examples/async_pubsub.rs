@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 //! MQTT 5 publish/subscribe over TCP, with acknowledged QoS 1 and QoS 2 exchanges.
 //! Run: cargo run --example async_pubsub -- localhost:1883 [1|2]
 //! With no QoS argument, runs both. Start a local MQTT broker first.

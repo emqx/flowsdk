@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 // Each benchmark is a separate crate and uses a subset of these fixtures.
 #![allow(dead_code)]

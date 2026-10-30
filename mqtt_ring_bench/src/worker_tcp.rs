@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 use io_uring::opcode;
 use io_uring::types::{Fd, SubmitArgs, Timespec};

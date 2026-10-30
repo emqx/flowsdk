@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 
 #[cfg(feature = "quic")]
 use flowsdk::mqtt_client::engine::QuicMqttEngine;
