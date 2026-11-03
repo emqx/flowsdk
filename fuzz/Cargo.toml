@@ -9,6 +9,9 @@ edition = "2021"
 [package.metadata]
 cargo-fuzz = true
 
+[features]
+shared-payloads = ["flowsdk/shared-payloads"]
+
 [dependencies]
 libfuzzer-sys = "0.4"
 

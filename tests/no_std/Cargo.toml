@@ -10,7 +10,7 @@ resolver = "2"
 
 [dependencies]
 flowsdk = { path = "../..", default-features = false, features = ["alloc"] }
-bytes = { version = "1.12.1", default-features = false }
+bytes = { version = "1.12.1", optional = true, default-features = false }
 portable-atomic = { version = "1", optional = true, default-features = false, features = ["critical-section"] }
 
 [features]
@@ -18,7 +18,8 @@ default = []
 durable-session = ["flowsdk/durable-session"]
 strict-protocol-compliance = ["flowsdk/strict-protocol-compliance"]
 std = ["flowsdk/std"]
-portable-atomics = ["flowsdk/portable-atomics", "dep:portable-atomic"]
+shared-payloads = ["flowsdk/shared-payloads", "dep:bytes"]
+portable-atomics = ["shared-payloads", "flowsdk/portable-atomics", "dep:portable-atomic"]
 
 [[test]]
 name = "parser"

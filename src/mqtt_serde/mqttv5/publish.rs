@@ -12,7 +12,7 @@ use crate::mqtt_serde::parser;
 use crate::mqtt_serde::parser::{
     packet_type, parse_packet_id, parse_remaining_length, parse_topic_name, ParseError, ParseOk,
 };
-use bytes::Bytes;
+use crate::mqtt_serde::Payload;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -23,10 +23,10 @@ pub struct MqttPublish {
     pub dup: bool,
     pub retain: bool,
     pub packet_id: Option<u16>,
-    /// Immutable payload; packet clones share its backing allocation.
+    /// Owned bytes, or shared immutable bytes with `shared-payloads` enabled.
     #[serde(with = "crate::mqtt_serde::payload")]
     #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::mqtt_serde::payload::arbitrary))]
-    pub payload: Bytes,
+    pub payload: Payload,
     pub properties: Vec<Property>,
 }
 
@@ -35,7 +35,7 @@ impl MqttPublish {
         qos: u8,
         topic_name: String,
         packet_id: Option<u16>,
-        payload: impl Into<Bytes>,
+        payload: impl Into<Payload>,
         retain: bool,
         dup: bool,
     ) -> Self {
@@ -54,7 +54,7 @@ impl MqttPublish {
         qos: u8,
         topic_name: String,
         packet_id: Option<u16>,
-        payload: impl Into<Bytes>,
+        payload: impl Into<Payload>,
         retain: bool,
         dup: bool,
         properties: Vec<Property>,
@@ -253,10 +253,11 @@ impl MqttControlPacket for MqttPublish {
 
         // MQTT 5.0: 3.3.3 PUBLISH Payload
         let payload_len = packet_size - offset;
-        let payload = Bytes::copy_from_slice(
+        let payload = Payload::from(
             buffer
                 .get(offset..offset + payload_len)
-                .ok_or(ParseError::BufferTooShort)?,
+                .ok_or(ParseError::BufferTooShort)?
+                .to_vec(),
         );
         offset += payload_len;
 

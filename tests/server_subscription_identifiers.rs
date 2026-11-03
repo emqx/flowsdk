@@ -62,7 +62,7 @@ fn decode_publications(packets: Vec<MqttPacket>) -> Vec<MqttPublish> {
                 ParseOk::Packet(MqttPacket::Publish5(publish), used) => {
                     assert_eq!(used, bytes.len());
                     assert_eq!(publish.topic_name, "sensors/temp");
-                    assert_eq!(publish.payload.as_ref(), b"payload");
+                    assert_eq!(&publish.payload[..], b"payload");
                     assert!(publish
                         .properties
                         .contains(&Property::ContentType("text/plain".into())));

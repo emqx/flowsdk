@@ -8,7 +8,9 @@ use flowsdk::{
     mqtt_serde::{control_packet::MqttPacket, mqttv3::publish::MqttPublish},
     time::Timestamp,
 };
-use flowsdk_no_std_tests::{ack, bytes_smoke, connack, connected, options, protocol_smoke, time};
+use flowsdk_no_std_tests::{
+    ack, connack, connected, options, owned_payload_smoke, protocol_smoke, time,
+};
 
 #[test]
 fn qos_handshakes_all_versions() {
@@ -16,8 +18,14 @@ fn qos_handshakes_all_versions() {
 }
 
 #[test]
+fn owned_payload_allocation_moves() {
+    owned_payload_smoke();
+}
+
+#[cfg(feature = "shared-payloads")]
+#[test]
 fn shared_bytes_lifetime() {
-    bytes_smoke();
+    flowsdk_no_std_tests::bytes_smoke();
 }
 
 #[test]

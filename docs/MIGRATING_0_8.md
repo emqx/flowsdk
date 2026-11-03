@@ -1,10 +1,51 @@
 # Migrating Rust publish payloads to 0.8
 
-FlowSDK 0.8 is a source-breaking Rust release. `PublishCommand::payload` and
-the MQTT 3.1.1/5 `MqttPublish::payload` fields now hold `bytes::Bytes`. This also
-affects `MqttMessage`, the MQTT 5 publish type used by receive callbacks.
-The fields are immutable shared buffers. Cloning commands, packets, inflight
-entries, or in-memory session checkpoints shares their payload allocation.
+FlowSDK 0.8 makes shared payload storage opt-in. `mqtt_serde::Payload`, used by
+`PublishCommand::payload` and both MQTT PUBLISH packet types, is `Vec<u8>` by
+default and `bytes::Bytes` with `shared-payloads`. This also affects `MqttMessage`,
+the MQTT 5 publish type used by receive callbacks. Shared mode clones handles
+through commands, packets, inflight state, and in-memory session checkpoints;
+owned mode clones independent vectors.
+
+## Select the storage configuration
+
+An owned-only `no_std + alloc` application can use:
+
+```toml
+[dependencies]
+flowsdk = { version = "0.8", default-features = false, features = ["alloc"] }
+```
+
+This configuration does not depend on `bytes`, `portable-atomic`, or
+`critical-section`. It builds on `thumbv6m-none-eabi` (Cortex-M0, no pointer
+atomics), including with `strict-protocol-compliance` and `durable-session`.
+The application supplies its normal allocator, clock, and I/O; no atomic
+emulation or critical-section provider is required by the SDK.
+
+Applications such as VeloFlux opt into sharing separately:
+
+```toml
+[dependencies]
+flowsdk = { version = "0.8", features = ["shared-payloads"] }
+bytes = "1.12.1"
+```
+
+For shared storage without `std`, disable defaults and enable `alloc,shared-payloads`
+on a target with pointer atomics. `portable-atomics` remains a separate optional
+choice for shared storage on targets without them; that choice requires an
+application-supplied critical-section provider. Neither `std` nor the default
+features implicitly enables `shared-payloads`. Cargo features are additive, so
+another dependency enabling it changes the storage type for the whole build.
+
+The public parser buffers follow the same selection: leveled parser input,
+`RawBodyPacket::remaining`, and `HeadersParsedPacket::raw_payload` use `Payload`.
+`MqttParser::buffer_mut()` returns `ParserBuffer` (`Vec<u8>` by default,
+`BytesMut` with sharing). Owned parsing compacts vectors; shared parsing retains
+buffer views. Code that previously passed `Bytes` into leveled parsers must enable
+`shared-payloads`, or pass vectors instead. These parser API changes, the generic
+publish constructors, and the shared-mode field changes are versioned in 0.8.
+
+The remainder of this guide describes **shared mode**.
 
 ## Publish without a replacement payload copy
 
@@ -28,8 +69,8 @@ Sharing may allocate reference-count metadata; it does not allocate or copy a
 replacement payload. Topic names and properties still have their own allocations.
 
 `PublishCommand::new`, `simple`, and `with_priority`, and the PUBLISH packet
-constructors accept `impl Into<Bytes>`. Passing an existing `Vec<u8>` moves its
-allocation, including vectors with spare capacity. Passing `Bytes` retains its
+constructors accept `impl Into<Payload>` (`Bytes` in shared mode). Passing an
+existing `Vec<u8>` moves its allocation, including vectors with spare capacity. Passing `Bytes` retains its
 storage. A redundant `.into()` at a generic constructor call may now need to be
 removed, or an unconstrained `.collect()` annotated as `.collect::<Vec<u8>>()`.
 
@@ -43,9 +84,9 @@ owned storage; use a command to pass an existing shared handle.
 ## Update field access
 
 * Struct literals and assignments: use `payload: data.into()` for a `Vec`.
-* Read bytes with `&packet.payload` or `packet.payload.as_ref()`.
-* Replace `payload.as_slice()` with `payload.as_ref()`.
-* Compare against byte arrays using `payload.as_ref() == b"value"`.
+* Read bytes with `&packet.payload[..]`, which works in both modes.
+* Replace `payload.as_slice()` with `&payload[..]` for code supporting both modes.
+* Compare against byte arrays using `&payload[..] == b"value"`.
 * For mutation, construct a new payload or use `BytesMut` and `.freeze()`.
   `payload.to_vec()` explicitly copies when independent mutable storage is needed.
 * To move into an API requiring a vector, use `Vec::<u8>::from(payload)`.
@@ -76,19 +117,19 @@ explicitly when compacting a long-lived slice is worth a copy.
 
 ## Portability, persistence, and bindings
 
-* `Bytes` was already an alloc-only dependency. The change adds no `std`
-  requirement. Targets without pointer atomics still use `portable-atomics` and
-  an application-provided critical-section implementation, as before.
+* `shared-payloads` adds no `std` requirement. The owned-only core has no
+  atomics dependency; see the configurations above.
 * Payload serde adapters preserve the former `Vec<u8>` sequence representation,
   including numeric byte arrays in JSON. The durable checkpoint schema remains
   version 1. Serialization writes payload bytes; deserialization creates new
-  storage. In-memory snapshots share handles with the engine.
+  storage. In-memory snapshots share handles with the engine in shared mode and
+  clone vectors in owned mode; both modes use the same checkpoint schema.
 * Fuzzing derives generate a `Vec<u8>` and transfer it into `Bytes`, retaining
   the arbitrary-byte input coverage without requiring `Bytes: Arbitrary`.
 * C and UniFFI records retain their byte-vector interfaces. Swift, Kotlin, and
   Python callers do not change. Core, FFI, and Python package versions advance
   together to 0.8.0 to match the existing release workflow. Conversion to FFI
-  events consumes `Bytes` into the required vector. C input pointers still
+  events consumes the payload into the required vector in either mode. C input pointers still
   require an owned copy at the language boundary.
 * Protobuf schemas remain unchanged; the proxy converts between protobuf vectors
   and MQTT shared payloads at its boundary.

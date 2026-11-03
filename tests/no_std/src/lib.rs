@@ -94,6 +94,7 @@ fn smoke_client(version: u8, now: Timestamp) -> Box<PortableNoIoMqttClient> {
 }
 
 /// Force heap-backed shared Bytes, including refcount increments and final drop.
+#[cfg(feature = "shared-payloads")]
 pub fn bytes_smoke() {
     let mut data = Vec::new();
     data.extend_from_slice(&[7; 64]);
@@ -108,5 +109,23 @@ pub fn bytes_smoke() {
     drop(clone);
     assert_eq!(slice.as_ref(), &[7; 8]);
     drop(slice);
-    assert_eq!(packet.payload.as_ref(), &[7; 8]);
+    assert_eq!(&packet.payload[..], &[7; 8]);
+}
+
+/// Owned payloads move into packets without replacing their allocation.
+pub fn owned_payload_smoke() {
+    for version in [4, 5] {
+        let mut data = Vec::with_capacity(128);
+        data.extend_from_slice(&[7; 64]);
+        let ptr = data.as_ptr();
+        let command = PublishCommand::simple("owned", data, 1, false);
+        assert_eq!(command.payload.as_ptr(), ptr);
+        let payload = if version == 4 {
+            command.into_mqttv3_publish().payload
+        } else {
+            command.into_mqtt_publish().payload
+        };
+        assert_eq!(payload.as_ptr(), ptr);
+        assert_eq!(&payload[..], &[7; 64]);
+    }
 }

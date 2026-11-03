@@ -19,6 +19,11 @@
 
 The same building blocks also support the workspace's [MQTT/gRPC proxies](mqtt_grpc_duality/) and [io_uring benchmark](mqtt_ring_bench/). FlowSDK is designed to fit messaging into the application architecture you choose.
 
+For an owned-only `no_std + alloc` core, use `default-features = false` and
+`features = ["alloc"]`; it supports targets without pointer atomics. Enable
+`shared-payloads` separately to retain `bytes::Bytes` through publish queues and
+replay. See the [storage configurations and 0.8 migration guide](docs/MIGRATING_0_8.md).
+
 ## Supported languages
 
 The FFI bindings call the Rust protocol engine directly, keeping protocol behavior consistent across languages. Each binding adapts the shared core to its language's types and runtime.

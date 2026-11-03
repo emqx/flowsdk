@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
-use bytes::Bytes;
+use crate::mqtt_serde::Payload;
 use serde::{Deserialize, Serialize};
 
 use crate::mqtt_serde::mqttv5::{
@@ -15,9 +15,9 @@ use crate::mqtt_serde::mqttv5::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishCommand {
     pub topic_name: String,
-    /// Immutable payload shared by command, packet and retransmission clones.
+    /// Owned bytes, or shared immutable bytes with `shared-payloads` enabled.
     #[serde(with = "crate::mqtt_serde::payload")]
-    pub payload: Bytes,
+    pub payload: Payload,
     pub qos: u8,
     pub retain: bool,
     pub dup: bool,
@@ -31,7 +31,7 @@ impl PublishCommand {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         topic_name: String,
-        payload: impl Into<Bytes>,
+        payload: impl Into<Payload>,
         qos: u8,
         retain: bool,
         dup: bool,
@@ -53,7 +53,7 @@ impl PublishCommand {
 
     pub fn simple(
         topic: impl Into<String>,
-        payload: impl Into<Bytes>,
+        payload: impl Into<Payload>,
         qos: u8,
         retain: bool,
     ) -> Self {
@@ -74,6 +74,7 @@ impl PublishCommand {
     /// Shared, sliced and static buffers keep their backing storage, including
     /// while the application retains another handle. Encoding still copies the
     /// visible bytes to the wire buffer. A slice can retain a larger allocation.
+    #[cfg(feature = "shared-payloads")]
     pub fn from_bytes(
         topic: impl Into<String>,
         payload: bytes::Bytes,
@@ -85,7 +86,7 @@ impl PublishCommand {
 
     pub fn with_priority(
         topic: impl Into<String>,
-        payload: impl Into<Bytes>,
+        payload: impl Into<Payload>,
         qos: u8,
         retain: bool,
         priority: u8,
@@ -182,7 +183,7 @@ impl PublishCommand {
 #[derive(Debug, Clone)]
 pub struct PublishCommandBuilder {
     topic_name: Option<String>,
-    payload: Bytes,
+    payload: Payload,
     qos: u8,
     retain: bool,
     dup: bool,
@@ -212,7 +213,7 @@ impl PublishCommandBuilder {
     pub fn new() -> Self {
         Self {
             topic_name: None,
-            payload: Bytes::new(),
+            payload: Payload::new(),
             qos: 0,
             retain: false,
             dup: false,
@@ -230,14 +231,15 @@ impl PublishCommandBuilder {
     /// Set a payload using the legacy vector conversion.
     ///
     /// A `Vec<u8>` transfers its allocation; borrowed inputs are copied. Use
-    /// [`Self::payload_bytes`] to preserve shared `Bytes` without copying.
+    /// `payload_bytes` (with `shared-payloads`) to retain shared bytes without copying.
     pub fn payload(mut self, payload: impl Into<Vec<u8>>) -> Self {
-        self.payload = Bytes::from(payload.into());
+        self.payload = Payload::from(payload.into());
         self
     }
 
     /// Retain a shared payload without copying its bytes.
-    pub fn payload_bytes(mut self, payload: Bytes) -> Self {
+    #[cfg(feature = "shared-payloads")]
+    pub fn payload_bytes(mut self, payload: bytes::Bytes) -> Self {
         self.payload = payload;
         self
     }
@@ -509,6 +511,29 @@ mod tests {
     use crate::mqtt_serde::control_packet::MqttControlPacket;
 
     #[test]
+    fn payload_serde_preserves_legacy_sequence_shape() {
+        // This is the 0.7 command representation, including non-UTF-8 payload bytes.
+        let legacy = serde_json::json!({
+            "topic_name": "t", "payload": [0, 255, 128], "qos": 1,
+            "retain": false, "dup": false, "packet_id": 7,
+            "properties": [], "priority": 128
+        });
+        let command: PublishCommand = serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&command).unwrap(), legacy);
+        for packet in [
+            crate::mqtt_serde::control_packet::MqttPacket::Publish3(command.to_mqttv3_publish()),
+            crate::mqtt_serde::control_packet::MqttPacket::Publish5(command.into_mqtt_publish()),
+        ] {
+            let json = serde_json::to_value(&packet).unwrap();
+            assert_eq!(json["payload"], serde_json::json!([0, 255, 128]));
+            let decoded: crate::mqtt_serde::control_packet::MqttPacket =
+                serde_json::from_value(json).unwrap();
+            assert_eq!(decoded.to_bytes().unwrap(), packet.to_bytes().unwrap());
+        }
+    }
+
+    #[cfg(feature = "shared-payloads")]
+    #[test]
     fn publish_from_bytes_reuses_unique_allocation() {
         let mut payload = Vec::with_capacity(8192);
         payload.extend_from_slice(&[42; 4096]);
@@ -522,6 +547,7 @@ mod tests {
         assert!(command.retain);
     }
 
+    #[cfg(feature = "shared-payloads")]
     #[test]
     fn publish_from_bytes_preserves_shared_sliced_and_static_contents() {
         let original = bytes::Bytes::from(vec![0, 1, 2, 3, 4, 5]);
@@ -532,13 +558,13 @@ mod tests {
         assert_eq!(command.payload.as_ptr(), original.as_ptr());
         let slice_ptr = slice.as_ptr();
         let command = PublishCommand::from_bytes("topic", slice, 0, false);
-        assert_eq!(command.payload.as_ref(), &[1, 2, 3, 4]);
+        assert_eq!(&command.payload[..], &[1, 2, 3, 4]);
         assert_eq!(command.payload.as_ptr(), slice_ptr);
         drop(original);
-        assert_eq!(command.payload.as_ref(), &[1, 2, 3, 4]);
+        assert_eq!(&command.payload[..], &[1, 2, 3, 4]);
         let command =
             PublishCommand::from_bytes("topic", bytes::Bytes::from_static(b"static"), 0, false);
-        assert_eq!(command.payload.as_ref(), b"static");
+        assert_eq!(&command.payload[..], b"static");
         assert_eq!(command.payload.as_ptr(), b"static".as_ptr());
     }
 
@@ -606,7 +632,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(cmd.topic_name, "sensors/temp");
-        assert_eq!(cmd.payload.as_ref(), b"23.5");
+        assert_eq!(&cmd.payload[..], b"23.5");
         assert_eq!(cmd.qos, 1);
         assert!(!cmd.retain);
         assert!(!cmd.dup);
@@ -801,7 +827,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(cmd.topic_name, "sensors/temperature/room1");
-        assert_eq!(cmd.payload.as_ref(), b"23.5");
+        assert_eq!(&cmd.payload[..], b"23.5");
         assert_eq!(cmd.qos, 2);
         assert!(cmd.retain);
         assert_eq!(cmd.packet_id, Some(456));
@@ -838,7 +864,7 @@ mod tests {
             .payload(b"test" as &[u8])
             .build()
             .unwrap();
-        assert_eq!(cmd1.payload.as_ref(), b"test");
+        assert_eq!(&cmd1.payload[..], b"test");
 
         // Test with Vec<u8>
         let cmd2 = PublishCommand::builder()

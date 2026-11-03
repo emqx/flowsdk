@@ -181,7 +181,7 @@ fn retained_publication_is_replayed_to_new_subscription() {
     let sent = publications(&mut session);
     assert_eq!(sent.len(), 1);
     assert_eq!(sent[0].topic_name, "sensors/temp");
-    assert_eq!(sent[0].payload.as_ref(), b"payload");
+    assert_eq!(&sent[0].payload[..], b"payload");
     assert!(sent[0].retain);
     assert!(!sent[0].dup);
 }
@@ -368,7 +368,7 @@ fn retained_messages_are_replaced_and_deleted_by_empty_payload() {
     subscribe(&mut session, "sensors/#", 0);
     let replay = publications(&mut session);
     assert_eq!(replay.len(), 1);
-    assert_eq!(replay[0].payload.as_ref(), b"latest");
+    assert_eq!(&replay[0].payload[..], b"latest");
 
     let mut deletion = publication("sensors/temp", 0, 0);
     deletion.retain = true;
