@@ -200,7 +200,7 @@ fn publish(id: u16) -> MqttPacket {
         retain: false,
         topic_name: "t".into(),
         message_id: Some(id),
-        payload: vec![1],
+        payload: vec![1].into(),
     })
 }
 

@@ -50,6 +50,7 @@ Both demonstrate QoS 1 and 2 delivery and graceful disconnect. Append `1` or `2`
 ## Learn more
 
 - [Tokio client guide](docs/TOKIO_ASYNC_CLIENT_API_GUIDE.md) — managed I/O, operation completion, and lifecycle.
+- [Rust 0.8 migration](docs/MIGRATING_0_8.md) — shared publish payloads and public field changes.
 - [Sans-I/O guide](docs/NO_IO_CLIENT.md) — integrate the engine with your own networking and event loop.
 - [Python guide](python/package/README.md) — async clients and direct engine access.
 - [Protocol validation](docs/PROTOCOL_COMPLIANCE.md) and [remaining work](docs/TODO.md) — current scope and limitations.

@@ -277,7 +277,7 @@ mod tests {
             retain: false,
             topic_name: "test".to_string(),
             packet_id: Some(pid),
-            payload: vec![],
+            payload: vec![].into(),
             properties: vec![],
         })
     }

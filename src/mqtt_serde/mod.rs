@@ -10,6 +10,7 @@ pub mod control_packet;
 pub mod mqttv3;
 pub mod mqttv5;
 pub mod parser;
+pub(crate) mod payload;
 #[cfg(feature = "strict-protocol-compliance")]
 mod validation;
 

@@ -235,7 +235,7 @@ fn disk_restart_replays_each_outgoing_qos_stage_with_same_id() {
             };
             assert_eq!(packet.packet_id, Some(id));
             assert!(packet.dup);
-            assert_eq!(packet.payload, [0, 255]);
+            assert_eq!(packet.payload.as_ref(), [0, 255]);
         }
     }
 }

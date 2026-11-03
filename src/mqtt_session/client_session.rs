@@ -159,7 +159,7 @@ mod tests {
             retain: false,
             topic_name: "test/topic".to_string(),
             packet_id: Some(packet_id),
-            payload: b"hello".to_vec(),
+            payload: b"hello".to_vec().into(),
             properties: Vec::new(),
         }
     }
@@ -171,7 +171,7 @@ mod tests {
             retain: false,
             topic_name: "test/topic".to_string(),
             packet_id: Some(packet_id),
-            payload: b"hello".to_vec(),
+            payload: b"hello".to_vec().into(),
             properties: Vec::new(),
         }
     }
@@ -183,7 +183,7 @@ mod tests {
             retain: false,
             topic_name: "test/topic".to_string(),
             packet_id: None,
-            payload: b"hello".to_vec(),
+            payload: b"hello".to_vec().into(),
             properties: Vec::new(),
         }
     }

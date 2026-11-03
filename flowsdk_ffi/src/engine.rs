@@ -376,7 +376,7 @@ fn map_event(event: MqttEvent) -> Option<MqttEventFFI> {
         MqttEvent::MessageReceived(msg) => Some(MqttEventFFI::MessageReceived(MqttMessageFFI {
             stream_id: None,
             topic: msg.topic_name,
-            payload: msg.payload,
+            payload: msg.payload.into(),
             qos: msg.qos,
             retain: msg.retain,
             dup: msg.dup,

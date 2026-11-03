@@ -4,6 +4,7 @@ use alloc::string::String;
 use alloc::vec;
 use alloc::vec::Vec;
 
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 use crate::mqtt_serde::mqttv5::{
@@ -14,7 +15,9 @@ use crate::mqtt_serde::mqttv5::{
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishCommand {
     pub topic_name: String,
-    pub payload: Vec<u8>,
+    /// Immutable payload shared by command, packet and retransmission clones.
+    #[serde(with = "crate::mqtt_serde::payload")]
+    pub payload: Bytes,
     pub qos: u8,
     pub retain: bool,
     pub dup: bool,
@@ -28,7 +31,7 @@ impl PublishCommand {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
         topic_name: String,
-        payload: Vec<u8>,
+        payload: impl Into<Bytes>,
         qos: u8,
         retain: bool,
         dup: bool,
@@ -38,7 +41,7 @@ impl PublishCommand {
     ) -> Self {
         Self {
             topic_name,
-            payload,
+            payload: payload.into(),
             qos,
             retain,
             dup,
@@ -48,7 +51,12 @@ impl PublishCommand {
         }
     }
 
-    pub fn simple(topic: impl Into<String>, payload: Vec<u8>, qos: u8, retain: bool) -> Self {
+    pub fn simple(
+        topic: impl Into<String>,
+        payload: impl Into<Bytes>,
+        qos: u8,
+        retain: bool,
+    ) -> Self {
         Self::new(
             topic.into(),
             payload,
@@ -61,24 +69,23 @@ impl PublishCommand {
         )
     }
 
-    /// Create a command from an owned byte buffer.
+    /// Create a command retaining an immutable byte buffer without copying it.
     ///
-    /// Conversion can reuse the allocation of uniquely owned, Vec-backed
-    /// [`bytes::Bytes`]. Shared and static buffers are copied because the command
-    /// retains a `Vec<u8>` payload. This avoids an unconditional `Bytes::to_vec`
-    /// copy without changing the existing public payload type.
+    /// Shared, sliced and static buffers keep their backing storage, including
+    /// while the application retains another handle. Encoding still copies the
+    /// visible bytes to the wire buffer. A slice can retain a larger allocation.
     pub fn from_bytes(
         topic: impl Into<String>,
         payload: bytes::Bytes,
         qos: u8,
         retain: bool,
     ) -> Self {
-        Self::simple(topic, payload.into(), qos, retain)
+        Self::simple(topic, payload, qos, retain)
     }
 
     pub fn with_priority(
         topic: impl Into<String>,
-        payload: Vec<u8>,
+        payload: impl Into<Bytes>,
         qos: u8,
         retain: bool,
         priority: u8,
@@ -175,7 +182,7 @@ impl PublishCommand {
 #[derive(Debug, Clone)]
 pub struct PublishCommandBuilder {
     topic_name: Option<String>,
-    payload: Vec<u8>,
+    payload: Bytes,
     qos: u8,
     retain: bool,
     dup: bool,
@@ -205,7 +212,7 @@ impl PublishCommandBuilder {
     pub fn new() -> Self {
         Self {
             topic_name: None,
-            payload: Vec::new(),
+            payload: Bytes::new(),
             qos: 0,
             retain: false,
             dup: false,
@@ -220,8 +227,18 @@ impl PublishCommandBuilder {
         self
     }
 
+    /// Set a payload using the legacy vector conversion.
+    ///
+    /// A `Vec<u8>` transfers its allocation; borrowed inputs are copied. Use
+    /// [`Self::payload_bytes`] to preserve shared `Bytes` without copying.
     pub fn payload(mut self, payload: impl Into<Vec<u8>>) -> Self {
-        self.payload = payload.into();
+        self.payload = Bytes::from(payload.into());
+        self
+    }
+
+    /// Retain a shared payload without copying its bytes.
+    pub fn payload_bytes(mut self, payload: Bytes) -> Self {
+        self.payload = payload;
         self
     }
 
@@ -510,17 +527,19 @@ mod tests {
         let original = bytes::Bytes::from(vec![0, 1, 2, 3, 4, 5]);
         let shared = original.clone();
         let slice = original.slice(1..5);
-        let mut command = PublishCommand::from_bytes("topic", shared, 0, false);
+        let command = PublishCommand::from_bytes("topic", shared, 0, false);
         assert_eq!(command.payload, original.as_ref());
-        command.payload[1] = 99;
-        assert_eq!(original.as_ref(), &[0, 1, 2, 3, 4, 5]);
-        let mut command = PublishCommand::from_bytes("topic", slice, 0, false);
-        assert_eq!(command.payload, &[1, 2, 3, 4]);
-        command.payload[0] = 99;
-        assert_eq!(original.as_ref(), &[0, 1, 2, 3, 4, 5]);
+        assert_eq!(command.payload.as_ptr(), original.as_ptr());
+        let slice_ptr = slice.as_ptr();
+        let command = PublishCommand::from_bytes("topic", slice, 0, false);
+        assert_eq!(command.payload.as_ref(), &[1, 2, 3, 4]);
+        assert_eq!(command.payload.as_ptr(), slice_ptr);
+        drop(original);
+        assert_eq!(command.payload.as_ref(), &[1, 2, 3, 4]);
         let command =
             PublishCommand::from_bytes("topic", bytes::Bytes::from_static(b"static"), 0, false);
-        assert_eq!(command.payload, b"static");
+        assert_eq!(command.payload.as_ref(), b"static");
+        assert_eq!(command.payload.as_ptr(), b"static".as_ptr());
     }
 
     #[test]
@@ -587,7 +606,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(cmd.topic_name, "sensors/temp");
-        assert_eq!(cmd.payload, b"23.5");
+        assert_eq!(cmd.payload.as_ref(), b"23.5");
         assert_eq!(cmd.qos, 1);
         assert!(!cmd.retain);
         assert!(!cmd.dup);
@@ -782,7 +801,7 @@ mod tests {
             .unwrap();
 
         assert_eq!(cmd.topic_name, "sensors/temperature/room1");
-        assert_eq!(cmd.payload, b"23.5");
+        assert_eq!(cmd.payload.as_ref(), b"23.5");
         assert_eq!(cmd.qos, 2);
         assert!(cmd.retain);
         assert_eq!(cmd.packet_id, Some(456));
@@ -819,7 +838,7 @@ mod tests {
             .payload(b"test" as &[u8])
             .build()
             .unwrap();
-        assert_eq!(cmd1.payload, b"test");
+        assert_eq!(cmd1.payload.as_ref(), b"test");
 
         // Test with Vec<u8>
         let cmd2 = PublishCommand::builder()

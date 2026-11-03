@@ -100,8 +100,13 @@ pub fn bytes_smoke() {
     let bytes = bytes::Bytes::from(data);
     let clone = bytes.clone();
     let slice = clone.slice(4..12);
+    let command = PublishCommand::from_bytes("shared", slice.clone(), 1, false);
+    assert_eq!(command.payload.as_ptr(), slice.as_ptr());
+    let packet = command.into_mqtt_publish();
+    assert_eq!(packet.payload.as_ptr(), slice.as_ptr());
     drop(bytes);
     drop(clone);
     assert_eq!(slice.as_ref(), &[7; 8]);
     drop(slice);
+    assert_eq!(packet.payload.as_ref(), &[7; 8]);
 }
