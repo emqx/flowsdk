@@ -166,7 +166,7 @@ pub struct MqttClientOptions {
     pub connect_properties: Vec<Property>,
 
     /// Internal parser buffer size in bytes.
-    /// Controls the initial capacity of the MQTT packet parser's BytesMut buffer.
+    /// Controls the initial capacity of the MQTT packet parser's buffer.
     /// - Default: 16384 (16KB)
     /// - For high-connection-count scenarios with small packets, use 1500 (1 MTU)
     ///   to reduce per-connection memory overhead.

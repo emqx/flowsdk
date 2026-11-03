@@ -2,7 +2,9 @@
 
 use super::test_support::connect;
 use super::*;
+#[cfg(feature = "shared-payloads")]
 use crate::mqtt_client::payload_tests::tracked_payload;
+
 use crate::mqtt_serde::parser::ParseOk;
 
 fn packets(mut bytes: &[u8], version: u8) -> Vec<MqttPacket> {
@@ -249,10 +251,12 @@ fn response_failure_discards_transient_encoding_before_reconnect() {
     assert_eq!(engine.state.queued_bytes, 0);
 }
 
+#[cfg(feature = "shared-payloads")]
 fn ack(kind: u8, id: u16) -> [u8; 4] {
     [kind, 2, (id >> 8) as u8, id as u8]
 }
 
+#[cfg(feature = "shared-payloads")]
 fn complete(engine: &mut MqttEngine, qos: u8, id: u16) {
     let mut events = engine.handle_incoming(&ack(if qos == 1 { 0x40 } else { 0x50 }, id));
     if qos == 2 {
@@ -262,6 +266,7 @@ fn complete(engine: &mut MqttEngine, qos: u8, id: u16) {
     assert!(events.iter().any(|event| matches!(event, MqttEvent::Published(result) if result.packet_id == Some(id) && result.is_success())));
 }
 
+#[cfg(feature = "shared-payloads")]
 #[test]
 fn shared_payload_retained_through_queue_inflight_and_released_after_ack() {
     for version in [4, 5] {
@@ -315,6 +320,7 @@ fn shared_payload_retained_through_queue_inflight_and_released_after_ack() {
     }
 }
 
+#[cfg(feature = "shared-payloads")]
 #[test]
 fn shared_payload_encoded_publish_keeps_app_handle_and_releases_sdk_handle() {
     for version in [4, 5] {
@@ -349,6 +355,7 @@ fn shared_payload_encoded_publish_keeps_app_handle_and_releases_sdk_handle() {
     }
 }
 
+#[cfg(feature = "shared-payloads")]
 #[test]
 fn shared_payload_reconnect_replay_waiting_for_quota_keeps_original_storage() {
     for version in [4, 5] {
@@ -428,6 +435,7 @@ fn shared_payload_reconnect_replay_waiting_for_quota_keeps_original_storage() {
     }
 }
 
+#[cfg(feature = "shared-payloads")]
 #[test]
 fn shared_payload_rejection_and_engine_drop_release_storage() {
     for version in [4, 5] {
@@ -466,6 +474,7 @@ fn shared_payload_rejection_and_engine_drop_release_storage() {
     }
 }
 
+#[cfg(feature = "shared-payloads")]
 #[test]
 fn shared_payload_static_and_unique_slices_keep_pointer_and_wire_contents() {
     static PAYLOAD: [u8; 64] = [42; 64];
@@ -504,6 +513,7 @@ fn shared_payload_static_and_unique_slices_keep_pointer_and_wire_contents() {
     }
 }
 
+#[cfg(feature = "shared-payloads")]
 #[test]
 fn shared_payload_negative_ack_releases_storage() {
     for qos in [1, 2] {
@@ -532,6 +542,7 @@ fn shared_payload_negative_ack_releases_storage() {
 }
 
 #[cfg(feature = "durable-session")]
+#[cfg(feature = "shared-payloads")]
 #[test]
 fn shared_payload_checkpoint_shares_storage_and_keeps_v1_schema() {
     for version in [4, 5] {

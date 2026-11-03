@@ -4,7 +4,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
-use bytes::Bytes;
+use crate::mqtt_serde::Payload;
 use serde::{Deserialize, Serialize};
 
 use crate::mqtt_serde::base_data::{TwoByteInteger, Utf8String};
@@ -26,10 +26,10 @@ pub struct MqttPublish {
     pub topic_name: String,
     /// Packet Identifier is only present for QoS levels 1 and 2.
     pub message_id: Option<u16>,
-    /// Immutable payload; packet clones share its backing allocation.
+    /// Owned bytes, or shared immutable bytes with `shared-payloads` enabled.
     #[serde(with = "crate::mqtt_serde::payload")]
     #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::mqtt_serde::payload::arbitrary))]
-    pub payload: Bytes,
+    pub payload: Payload,
 }
 
 impl MqttPublish {
@@ -37,7 +37,7 @@ impl MqttPublish {
     pub fn new(
         topic_name: String,
         qos: u8,
-        payload: impl Into<Bytes>,
+        payload: impl Into<Payload>,
         message_id: Option<u16>,
         retain: bool,
         dup: bool,
@@ -151,7 +151,7 @@ impl MqttControlPacket for MqttPublish {
         };
 
         // Payload
-        let payload = Bytes::copy_from_slice(&buffer[offset..total_len]);
+        let payload = Payload::from(buffer[offset..total_len].to_vec());
 
         crate::mqtt_serde::parser::validated_packet(
             MqttPacket::Publish3(MqttPublish {

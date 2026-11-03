@@ -10,7 +10,7 @@ pub mod error;
 pub mod inflight;
 pub mod no_io_client;
 pub mod opts;
-#[cfg(all(test, feature = "std"))]
+#[cfg(all(test, feature = "std", feature = "shared-payloads"))]
 mod payload_tests;
 #[cfg(feature = "protocol-testing")]
 pub mod raw_packet;

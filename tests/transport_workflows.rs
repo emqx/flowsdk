@@ -92,7 +92,7 @@ async fn tokio_quic_client_completes_mqtt_commands_after_rebinding() {
                                 vec![0x90, 4, (p.packet_id >> 8) as u8, p.packet_id as u8, 0, 1]
                             }
                             MqttPacket::Publish5(p) => {
-                                assert_eq!(p.payload.as_ref(), b"payload");
+                                assert_eq!(&p.payload[..], b"payload");
                                 let id = p.packet_id.unwrap();
                                 vec![0x40, 2, (id >> 8) as u8, id as u8]
                             }

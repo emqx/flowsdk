@@ -8,13 +8,21 @@ use crate::mqtt_serde::parser::leveled::{
     ParseLevel, ParsedPacket,
 };
 use crate::mqtt_serde::parser::{parse_utf8_string, parse_vbi, ParseError, ParseOk};
-use bytes::{Buf, BytesMut};
+use crate::mqtt_serde::Payload;
+#[cfg(feature = "shared-payloads")]
+use bytes::Buf;
+
+/// Mutable parser storage. Uses `BytesMut` with `shared-payloads`, otherwise `Vec`.
+#[cfg(feature = "shared-payloads")]
+pub type ParserBuffer = bytes::BytesMut;
+#[cfg(not(feature = "shared-payloads"))]
+pub type ParserBuffer = alloc::vec::Vec<u8>;
 
 /// A stateful parser for a stream of MQTT data.
 /// It internally buffers data from a stream and yields complete packets.
 #[derive(Debug)]
 pub struct MqttParser {
-    buffer: BytesMut,
+    buffer: ParserBuffer,
     // 0 means undefined for new, 4 means MQTT v3.1.1, 5 means MQTT v5.0
     mqtt_version: u8,
     parse_level: ParseLevel,
@@ -41,7 +49,7 @@ impl MqttParser {
     /// Creates a new, empty parser.
     pub fn new(buffer_size: usize, mqtt_version: u8) -> Self {
         MqttParser {
-            buffer: BytesMut::with_capacity(buffer_size),
+            buffer: ParserBuffer::with_capacity(buffer_size),
             mqtt_version,
             parse_level: ParseLevel::Full,
         }
@@ -50,7 +58,7 @@ impl MqttParser {
     /// Creates a new parser with the specified parse level.
     pub fn with_level(buffer_size: usize, mqtt_version: u8, parse_level: ParseLevel) -> Self {
         MqttParser {
-            buffer: BytesMut::with_capacity(buffer_size),
+            buffer: ParserBuffer::with_capacity(buffer_size),
             mqtt_version,
             parse_level,
         }
@@ -127,7 +135,7 @@ impl MqttParser {
         match MqttPacket::from_bytes_with_version(&self.buffer[..frame_len], self.mqtt_version) {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 // A full packet was parsed, advance the buffer
-                self.buffer.advance(consumed);
+                self.advance(consumed);
                 Ok(Some(packet))
             }
             Ok(ParseOk::Continue(_, _)) => {
@@ -160,7 +168,7 @@ impl MqttParser {
                 .map(|packet| packet.map(ParsedPacket::Full)),
             ParseLevel::TypeOnly => match parse_type_only(&self.buffer) {
                 Ok(LeveledParseOk::Packet(pkt, consumed)) => {
-                    self.buffer.advance(consumed);
+                    self.advance(consumed);
                     Ok(Some(pkt))
                 }
                 Ok(LeveledParseOk::Continue(_, _)) => Ok(None),
@@ -171,7 +179,7 @@ impl MqttParser {
                     Some(n) => n,
                     None => return Ok(None),
                 };
-                let packet_bytes = self.buffer.split_to(total_len).freeze();
+                let packet_bytes = self.take_frame(total_len);
                 match parse_raw_body(packet_bytes) {
                     Ok(LeveledParseOk::Packet(pkt, _)) => Ok(Some(pkt)),
                     Err(e) => Err(e),
@@ -187,7 +195,7 @@ impl MqttParser {
                     Some(n) => n,
                     None => return Ok(None),
                 };
-                let packet_bytes = self.buffer.split_to(total_len).freeze();
+                let packet_bytes = self.take_frame(total_len);
                 match parse_headers_only(packet_bytes, self.mqtt_version) {
                     Ok(LeveledParseOk::Packet(pkt, _)) => Ok(Some(pkt)),
                     Err(e) => Err(e),
@@ -197,7 +205,25 @@ impl MqttParser {
         }
     }
 
-    pub fn buffer_mut(&mut self) -> &mut BytesMut {
+    fn advance(&mut self, consumed: usize) {
+        #[cfg(feature = "shared-payloads")]
+        self.buffer.advance(consumed);
+        #[cfg(not(feature = "shared-payloads"))]
+        self.buffer.drain(..consumed);
+    }
+
+    fn take_frame(&mut self, len: usize) -> Payload {
+        #[cfg(feature = "shared-payloads")]
+        {
+            self.buffer.split_to(len).freeze()
+        }
+        #[cfg(not(feature = "shared-payloads"))]
+        {
+            self.buffer.drain(..len).collect()
+        }
+    }
+
+    pub fn buffer_mut(&mut self) -> &mut ParserBuffer {
         &mut self.buffer
     }
 }

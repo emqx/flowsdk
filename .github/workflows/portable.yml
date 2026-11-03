@@ -1,0 +1,48 @@
+name: Portable payload storage
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+permissions:
+   contents: read
+   
+jobs:
+  portable:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        payload_features: ['', 'shared-payloads']
+    steps:
+      - uses: actions/checkout@v4
+        
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          targets: thumbv6m-none-eabi
+      - name: Test alloc-only protocol and session behavior
+        run: |
+          cargo test --manifest-path tests/no_std/Cargo.toml --locked --no-default-features --features '${{ matrix.payload_features }}'
+          cargo test --manifest-path tests/no_std/Cargo.toml --locked --no-default-features --features 'strict-protocol-compliance,durable-session,${{ matrix.payload_features }}'
+      - name: Test parser levels, codecs, and ownership
+        run: cargo test -p flowsdk --no-default-features --features 'std,strict-protocol-compliance,durable-session,arbitrary,${{ matrix.payload_features }}' --lib
+      - name: Build owned core without pointer atomics or emulation
+        if: matrix.payload_features == ''
+        shell: bash
+        run: |
+          set -euo pipefail
+          if rustc --print cfg --target thumbv6m-none-eabi | grep -q '^target_has_atomic="ptr"$'; then
+            echo 'This check requires a target without pointer atomics.' >&2
+            exit 1
+          fi
+          cargo build --manifest-path tests/no_std/Cargo.toml --locked --no-default-features --target thumbv6m-none-eabi --lib
+          cargo build --manifest-path tests/no_std/Cargo.toml --locked --no-default-features --features strict-protocol-compliance,durable-session --target thumbv6m-none-eabi --lib
+          cargo tree --manifest-path tests/no_std/Cargo.toml --locked --no-default-features --features strict-protocol-compliance,durable-session --target thumbv6m-none-eabi --edges normal --prefix none > portable-dependencies.txt
+          if grep -E '^(bytes|portable-atomic|critical-section) ' portable-dependencies.txt; then
+            echo 'The owned core must not depend on shared buffers or atomic emulation.' >&2
+            exit 1
+          fi
+      - name: Smoke-test shared payload allocations
+        if: matrix.payload_features == 'shared-payloads'
+        run: cargo bench -p flowsdk --no-default-features --features std,shared-payloads --bench shared_payload -- --test

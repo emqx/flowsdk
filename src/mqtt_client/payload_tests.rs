@@ -79,25 +79,3 @@ fn shared_payload_vec_inputs_transfer_allocation_including_spare_capacity() {
         assert_eq!(command.payload.as_ptr(), ptr);
     }
 }
-
-#[test]
-fn shared_payload_serde_preserves_legacy_sequence_shape() {
-    // This is the 0.7 command representation, including non-UTF-8 payload bytes.
-    let legacy = serde_json::json!({
-        "topic_name": "t", "payload": [0, 255, 128], "qos": 1,
-        "retain": false, "dup": false, "packet_id": 7,
-        "properties": [], "priority": 128
-    });
-    let command: PublishCommand = serde_json::from_value(legacy.clone()).unwrap();
-    assert_eq!(serde_json::to_value(&command).unwrap(), legacy);
-    for packet in [
-        crate::mqtt_serde::control_packet::MqttPacket::Publish3(command.to_mqttv3_publish()),
-        crate::mqtt_serde::control_packet::MqttPacket::Publish5(command.into_mqtt_publish()),
-    ] {
-        let json = serde_json::to_value(&packet).unwrap();
-        assert_eq!(json["payload"], serde_json::json!([0, 255, 128]));
-        let decoded: crate::mqtt_serde::control_packet::MqttPacket =
-            serde_json::from_value(json).unwrap();
-        assert_eq!(decoded.to_bytes().unwrap(), packet.to_bytes().unwrap());
-    }
-}

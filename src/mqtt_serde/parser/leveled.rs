@@ -12,7 +12,7 @@ use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
 
-use bytes::Bytes;
+use crate::mqtt_serde::{payload::into_range, Payload};
 
 use crate::mqtt_serde::control_packet::{ControlPacketType, MqttPacket};
 use crate::mqtt_serde::mqttv5::common::properties::Property;
@@ -88,7 +88,7 @@ pub struct RawBodyPacket {
     pub packet_type: ControlPacketType,
     pub flags: u8,
     /// The remaining bytes after the fixed header (variable header + payload).
-    pub remaining: Bytes,
+    pub remaining: Payload,
 }
 
 /// Level 1 result: variable header parsed, payload raw.
@@ -101,7 +101,7 @@ pub struct HeadersParsedPacket {
     pub variable_header: VariableHeader,
     /// Raw payload bytes (not interpreted). For packets with no payload
     /// (PINGREQ, PINGRESP, etc.) this will be empty.
-    pub raw_payload: Bytes,
+    pub raw_payload: Payload,
 }
 
 /// Parsed variable header data for Level 1 parsing.
@@ -270,8 +270,9 @@ pub fn parse_type_only(buffer: &[u8]) -> Result<LeveledParseOk, ParseError> {
 
 // ── Level 2: RawBody ───────────────────────────────────────────────────
 
-/// Parse the fixed header, return remaining bytes as a zero-copy view.
-pub fn parse_raw_body(buffer: Bytes) -> Result<LeveledParseOk, ParseError> {
+/// Parse the fixed header and retain the remaining bytes.
+/// With `shared-payloads`, the result is a view into the original allocation.
+pub fn parse_raw_body(buffer: Payload) -> Result<LeveledParseOk, ParseError> {
     if buffer.is_empty() {
         return Err(ParseError::BufferEmpty);
     }
@@ -293,7 +294,7 @@ pub fn parse_raw_body(buffer: Bytes) -> Result<LeveledParseOk, ParseError> {
         return Ok(LeveledParseOk::Continue(total_len - buffer.len(), 0));
     }
 
-    let remaining = buffer.slice(remaining_start..total_len);
+    let remaining = into_range(buffer, remaining_start..total_len);
 
     Ok(LeveledParseOk::Packet(
         ParsedPacket::RawBody(RawBodyPacket {
@@ -307,8 +308,9 @@ pub fn parse_raw_body(buffer: Bytes) -> Result<LeveledParseOk, ParseError> {
 
 // ── Level 1: HeadersParsed ─────────────────────────────────────────────
 
-/// Parse variable headers, keep payload as a zero-copy `Bytes` view.
-pub fn parse_headers_only(buffer: Bytes, mqtt_version: u8) -> Result<LeveledParseOk, ParseError> {
+/// Parse variable headers and retain the payload.
+/// With `shared-payloads`, the result is a view into the original allocation.
+pub fn parse_headers_only(buffer: Payload, mqtt_version: u8) -> Result<LeveledParseOk, ParseError> {
     match mqtt_version {
         3 | 4 => parse_headers_only_v3(buffer),
         5 => parse_headers_only_v5(buffer),
@@ -316,7 +318,7 @@ pub fn parse_headers_only(buffer: Bytes, mqtt_version: u8) -> Result<LeveledPars
     }
 }
 
-fn parse_headers_only_v5(buffer: Bytes) -> Result<LeveledParseOk, ParseError> {
+fn parse_headers_only_v5(buffer: Payload) -> Result<LeveledParseOk, ParseError> {
     if buffer.is_empty() {
         return Err(ParseError::BufferEmpty);
     }
@@ -357,7 +359,7 @@ fn parse_headers_only_v5(buffer: Bytes) -> Result<LeveledParseOk, ParseError> {
         ControlPacketType::PINGREQ | ControlPacketType::PINGRESP => (VariableHeader::Empty, 0),
     };
 
-    let raw_payload = buffer.slice((fixed_hdr_len + vhdr_consumed)..total_len);
+    let raw_payload = into_range(buffer, (fixed_hdr_len + vhdr_consumed)..total_len);
 
     Ok(LeveledParseOk::Packet(
         ParsedPacket::HeadersParsed(HeadersParsedPacket {
@@ -371,7 +373,7 @@ fn parse_headers_only_v5(buffer: Bytes) -> Result<LeveledParseOk, ParseError> {
     ))
 }
 
-fn parse_headers_only_v3(buffer: Bytes) -> Result<LeveledParseOk, ParseError> {
+fn parse_headers_only_v3(buffer: Payload) -> Result<LeveledParseOk, ParseError> {
     if buffer.is_empty() {
         return Err(ParseError::BufferEmpty);
     }
@@ -424,7 +426,7 @@ fn parse_headers_only_v3(buffer: Bytes) -> Result<LeveledParseOk, ParseError> {
         }
     };
 
-    let raw_payload = buffer.slice((fixed_hdr_len + vhdr_consumed)..total_len);
+    let raw_payload = into_range(buffer, (fixed_hdr_len + vhdr_consumed)..total_len);
 
     Ok(LeveledParseOk::Packet(
         ParsedPacket::HeadersParsed(HeadersParsedPacket {
@@ -944,7 +946,7 @@ mod tests {
             false,
             false,
         );
-        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        let bytes = Payload::from(publish.to_bytes().unwrap());
         let vbi_len = {
             let (_, vbi) = parse_remaining_length(&bytes[1..]).unwrap();
             vbi
@@ -964,7 +966,7 @@ mod tests {
     #[test]
     fn test_raw_body_pingreq() {
         // PINGREQ is 0xC0, 0x00 (no remaining data)
-        let bytes = Bytes::from_static(&[0xC0, 0x00]);
+        let bytes = Payload::from(&[0xC0, 0x00][..]);
         match parse_raw_body(bytes).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::RawBody(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PINGREQ);
@@ -987,7 +989,7 @@ mod tests {
             false,
             false,
         );
-        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        let bytes = Payload::from(publish.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PUBLISH);
@@ -1022,7 +1024,7 @@ mod tests {
             true,
             false,
         );
-        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        let bytes = Payload::from(publish.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, bytes.len());
@@ -1057,7 +1059,7 @@ mod tests {
             false,
             false,
         );
-        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        let bytes = Payload::from(publish.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, bytes.len());
@@ -1082,7 +1084,7 @@ mod tests {
 
     #[test]
     fn test_headers_parsed_pingreq_v5() {
-        let bytes = Bytes::from_static(&[0xC0, 0x00]);
+        let bytes = Payload::from(&[0xC0, 0x00][..]);
         match parse_headers_only(bytes, 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PINGREQ);
@@ -1106,7 +1108,7 @@ mod tests {
             true,
             true,
         );
-        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        let bytes = Payload::from(publish.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v5(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
@@ -1141,7 +1143,7 @@ mod tests {
             false,
             true,
         );
-        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        let bytes = Payload::from(publish.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v3(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
@@ -1264,7 +1266,7 @@ mod tests {
     #[test]
     fn test_raw_body_empty_buffer() {
         assert!(matches!(
-            parse_raw_body(Bytes::new()),
+            parse_raw_body(Payload::new()),
             Err(ParseError::BufferEmpty)
         ));
     }
@@ -1272,7 +1274,7 @@ mod tests {
     #[test]
     fn test_headers_only_empty_buffer_v5() {
         assert!(matches!(
-            parse_headers_only(Bytes::new(), 5),
+            parse_headers_only(Payload::new(), 5),
             Err(ParseError::BufferEmpty)
         ));
     }
@@ -1280,14 +1282,14 @@ mod tests {
     #[test]
     fn test_headers_only_empty_buffer_v3() {
         assert!(matches!(
-            parse_headers_only(Bytes::new(), 4),
+            parse_headers_only(Payload::new(), 4),
             Err(ParseError::BufferEmpty)
         ));
     }
 
     #[test]
     fn test_headers_only_invalid_version() {
-        let bytes = Bytes::from_static(&[0xC0, 0x00]);
+        let bytes = Payload::from(&[0xC0, 0x00][..]);
         assert!(matches!(
             parse_headers_only(bytes, 6),
             Err(ParseError::InvalidPacketType)
@@ -1302,7 +1304,7 @@ mod tests {
 
     #[test]
     fn test_raw_body_single_byte_continue() {
-        match parse_raw_body(Bytes::from_static(&[0x30])).unwrap() {
+        match parse_raw_body(Payload::from(&[0x30][..])).unwrap() {
             LeveledParseOk::Continue(_, _) => {}
             other => panic!("Expected Continue, got {:?}", other),
         }
@@ -1313,7 +1315,7 @@ mod tests {
         // Build an AUTH packet (v5 only), try to parse as v3
         use crate::mqtt_serde::mqttv5::auth::MqttAuth;
         let auth = MqttAuth::new(0x00, Vec::new());
-        let bytes = Bytes::from(auth.to_bytes().unwrap());
+        let bytes = Payload::from(auth.to_bytes().unwrap());
         match parse_headers_only(bytes, 4) {
             Err(ParseError::ParseError(msg)) => {
                 assert!(msg.contains("AUTH"));
@@ -1330,7 +1332,7 @@ mod tests {
         use crate::mqtt_serde::mqttv5::connack::MqttConnAck;
         let connack =
             MqttConnAck::new(true, 0x00, Some(vec![Property::SessionExpiryInterval(300)]));
-        let bytes = Bytes::from(connack.to_bytes().unwrap());
+        let bytes = Payload::from(connack.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::CONNACK);
@@ -1357,7 +1359,7 @@ mod tests {
     fn test_headers_parsed_connack_v5_no_props() {
         use crate::mqtt_serde::mqttv5::connack::MqttConnAck;
         let connack = MqttConnAck::new(false, 0x86, None);
-        let bytes = Bytes::from(connack.to_bytes().unwrap());
+        let bytes = Payload::from(connack.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, bytes.len());
@@ -1392,7 +1394,7 @@ mod tests {
             true,
             Vec::new(),
         );
-        let bytes = Bytes::from(connect.to_bytes().unwrap());
+        let bytes = Payload::from(connect.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::CONNECT);
@@ -1429,7 +1431,7 @@ mod tests {
             vec![TopicSubscription::new_simple("a/b".to_string(), 1)],
             Vec::new(),
         );
-        let bytes = Bytes::from(sub.to_bytes().unwrap());
+        let bytes = Payload::from(sub.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::SUBSCRIBE);
@@ -1455,7 +1457,7 @@ mod tests {
     fn test_headers_parsed_suback_v5() {
         use crate::mqtt_serde::mqttv5::suback::MqttSubAck;
         let suback = MqttSubAck::new(10, vec![0x00, 0x01], Vec::new());
-        let bytes = Bytes::from(suback.to_bytes().unwrap());
+        let bytes = Payload::from(suback.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::SUBACK);
@@ -1483,7 +1485,7 @@ mod tests {
     fn test_headers_parsed_unsubscribe_v5() {
         use crate::mqtt_serde::mqttv5::unsubscribe::MqttUnsubscribe;
         let unsub = MqttUnsubscribe::new(20, vec!["x/y".to_string()], Vec::new());
-        let bytes = Bytes::from(unsub.to_bytes().unwrap());
+        let bytes = Payload::from(unsub.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::UNSUBSCRIBE);
@@ -1503,7 +1505,7 @@ mod tests {
     fn test_headers_parsed_unsuback_v5() {
         use crate::mqtt_serde::mqttv5::unsuback::MqttUnsubAck;
         let unsuback = MqttUnsubAck::new(20, vec![0x00], Vec::new());
-        let bytes = Bytes::from(unsuback.to_bytes().unwrap());
+        let bytes = Payload::from(unsuback.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::UNSUBACK);
@@ -1525,7 +1527,7 @@ mod tests {
     fn test_headers_parsed_puback_v5() {
         use crate::mqtt_serde::mqttv5::puback::MqttPubAck;
         let puback = MqttPubAck::new(100, 0x00, Vec::new());
-        let bytes = Bytes::from(puback.to_bytes().unwrap());
+        let bytes = Payload::from(puback.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PUBACK);
@@ -1552,7 +1554,7 @@ mod tests {
     fn test_headers_parsed_pubrec_v5() {
         use crate::mqtt_serde::mqttv5::pubrec::MqttPubRec;
         let pubrec = MqttPubRec::new(101, 0x10, Vec::new());
-        let bytes = Bytes::from(pubrec.to_bytes().unwrap());
+        let bytes = Payload::from(pubrec.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, bytes.len());
@@ -1576,7 +1578,7 @@ mod tests {
     fn test_headers_parsed_pubrel_v5() {
         use crate::mqtt_serde::mqttv5::pubrel::MqttPubRel;
         let pubrel = MqttPubRel::new(102, 0x00, Vec::new());
-        let bytes = Bytes::from(pubrel.to_bytes().unwrap());
+        let bytes = Payload::from(pubrel.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, bytes.len());
@@ -1600,7 +1602,7 @@ mod tests {
     fn test_headers_parsed_pubcomp_v5() {
         use crate::mqtt_serde::mqttv5::pubcomp::MqttPubComp;
         let pubcomp = MqttPubComp::new(103, 0x00, Vec::new());
-        let bytes = Bytes::from(pubcomp.to_bytes().unwrap());
+        let bytes = Payload::from(pubcomp.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, bytes.len());
@@ -1626,7 +1628,7 @@ mod tests {
     fn test_headers_parsed_disconnect_v5() {
         use crate::mqtt_serde::mqttv5::disconnect::MqttDisconnect;
         let disc = MqttDisconnect::new(0x04, vec![Property::SessionExpiryInterval(0)]);
-        let bytes = Bytes::from(disc.to_bytes().unwrap());
+        let bytes = Payload::from(disc.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::DISCONNECT);
@@ -1650,7 +1652,7 @@ mod tests {
     fn test_headers_parsed_disconnect_v5_empty_remaining() {
         // DISCONNECT with remaining_len == 0: default RC 0x00, no properties
         // Fixed header: 0xE0 (DISCONNECT), 0x00 (remaining length 0)
-        let bytes = Bytes::from_static(&[0xE0, 0x00]);
+        let bytes = Payload::from(&[0xE0, 0x00][..]);
         match parse_headers_only(bytes, 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::DISCONNECT);
@@ -1677,7 +1679,7 @@ mod tests {
         use crate::mqtt_serde::mqttv5::auth::MqttAuth;
         let auth =
             MqttAuth::new_with_auth_data(0x18, "SCRAM-SHA-1".to_string(), b"challenge".to_vec());
-        let bytes = Bytes::from(auth.to_bytes().unwrap());
+        let bytes = Payload::from(auth.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::AUTH);
@@ -1701,7 +1703,7 @@ mod tests {
     fn test_headers_parsed_auth_v5_empty_remaining() {
         // AUTH with remaining_len == 0: default RC 0x00, no properties
         // Fixed header: 0xF0 (AUTH), 0x00 (remaining length 0)
-        let bytes = Bytes::from_static(&[0xF0, 0x00]);
+        let bytes = Payload::from(&[0xF0, 0x00][..]);
         match parse_headers_only(bytes, 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::AUTH);
@@ -1727,7 +1729,7 @@ mod tests {
     fn test_headers_parsed_puback_v5_minimal() {
         // PUBACK with only packet_id (remaining_len == 2): RC defaults to 0x00
         // 0x40 = PUBACK, 0x02 = remaining length 2, 0x00 0x01 = packet_id 1
-        let bytes = Bytes::from_static(&[0x40, 0x02, 0x00, 0x01]);
+        let bytes = Payload::from(&[0x40, 0x02, 0x00, 0x01][..]);
         match parse_headers_only(bytes, 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, 4);
@@ -1752,7 +1754,7 @@ mod tests {
     fn test_headers_parsed_puback_v5_rc_only() {
         // PUBACK with packet_id + reason_code but no property length
         // 0x40 = PUBACK, 0x03 = remaining 3, 0x00 0x01 = packet_id, 0x10 = RC
-        let bytes = Bytes::from_static(&[0x40, 0x03, 0x00, 0x01, 0x10]);
+        let bytes = Payload::from(&[0x40, 0x03, 0x00, 0x01, 0x10][..]);
         match parse_headers_only(bytes, 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), _) => {
                 match &pkt.variable_header {
@@ -1778,7 +1780,7 @@ mod tests {
     fn test_headers_parsed_connect_v3() {
         use crate::mqtt_serde::mqttv3::connect::MqttConnect;
         let connect = MqttConnect::new("test-v3".to_string(), 30, true);
-        let bytes = Bytes::from(connect.to_bytes().unwrap());
+        let bytes = Payload::from(connect.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::CONNECT);
@@ -1807,7 +1809,7 @@ mod tests {
     fn test_headers_parsed_connack_v3() {
         use crate::mqtt_serde::mqttv3::connack::MqttConnAck;
         let connack = MqttConnAck::new(true, 0x00);
-        let bytes = Bytes::from(connack.to_bytes().unwrap());
+        let bytes = Payload::from(connack.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::CONNACK);
@@ -1831,7 +1833,7 @@ mod tests {
     fn test_headers_parsed_puback_v3() {
         use crate::mqtt_serde::mqttv3::puback::MqttPubAck;
         let puback = MqttPubAck::new(42);
-        let bytes = Bytes::from(puback.to_bytes().unwrap());
+        let bytes = Payload::from(puback.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PUBACK);
@@ -1857,7 +1859,7 @@ mod tests {
                 qos: 1,
             }],
         );
-        let bytes = Bytes::from(sub.to_bytes().unwrap());
+        let bytes = Payload::from(sub.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::SUBSCRIBE);
@@ -1879,7 +1881,7 @@ mod tests {
     fn test_headers_parsed_suback_v3() {
         use crate::mqtt_serde::mqttv3::suback::MqttSubAck;
         let suback = MqttSubAck::new(5, vec![0x00, 0x01]);
-        let bytes = Bytes::from(suback.to_bytes().unwrap());
+        let bytes = Payload::from(suback.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::SUBACK);
@@ -1900,7 +1902,7 @@ mod tests {
     fn test_headers_parsed_unsubscribe_v3() {
         use crate::mqtt_serde::mqttv3::unsubscribe::MqttUnsubscribe;
         let unsub = MqttUnsubscribe::new(7, vec!["x/y".to_string()]);
-        let bytes = Bytes::from(unsub.to_bytes().unwrap());
+        let bytes = Payload::from(unsub.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::UNSUBSCRIBE);
@@ -1920,7 +1922,7 @@ mod tests {
     fn test_headers_parsed_unsuback_v3() {
         use crate::mqtt_serde::mqttv3::unsuback::MqttUnsubAck;
         let unsuback = MqttUnsubAck::new(7);
-        let bytes = Bytes::from(unsuback.to_bytes().unwrap());
+        let bytes = Payload::from(unsuback.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::UNSUBACK);
@@ -1940,7 +1942,7 @@ mod tests {
     fn test_headers_parsed_disconnect_v3() {
         use crate::mqtt_serde::mqttv3::disconnect::MqttDisconnect;
         let disc = MqttDisconnect::new();
-        let bytes = Bytes::from(disc.to_bytes().unwrap());
+        let bytes = Payload::from(disc.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::DISCONNECT);
@@ -1955,7 +1957,7 @@ mod tests {
     #[test]
     fn test_headers_parsed_pingresp_v3() {
         // PINGRESP: 0xD0, 0x00
-        let bytes = Bytes::from_static(&[0xD0, 0x00]);
+        let bytes = Payload::from(&[0xD0, 0x00][..]);
         match parse_headers_only(bytes, 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PINGRESP);
@@ -1970,7 +1972,7 @@ mod tests {
     fn test_headers_parsed_pubrel_v3() {
         use crate::mqtt_serde::mqttv3::pubrel::MqttPubRel;
         let pubrel = MqttPubRel::new(55);
-        let bytes = Bytes::from(pubrel.to_bytes().unwrap());
+        let bytes = Payload::from(pubrel.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PUBREL);
@@ -1992,7 +1994,7 @@ mod tests {
     fn test_consumed_consistency_connack_v5() {
         use crate::mqtt_serde::mqttv5::connack::MqttConnAck;
         let connack = MqttConnAck::new(false, 0x00, None);
-        let bytes = Bytes::from(connack.to_bytes().unwrap());
+        let bytes = Payload::from(connack.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v5(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
@@ -2024,7 +2026,7 @@ mod tests {
             vec![TopicSubscription::new_simple("t/1".to_string(), 2)],
             Vec::new(),
         );
-        let bytes = Bytes::from(sub.to_bytes().unwrap());
+        let bytes = Payload::from(sub.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v5(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
@@ -2052,7 +2054,7 @@ mod tests {
     fn test_consumed_consistency_disconnect_v5() {
         use crate::mqtt_serde::mqttv5::disconnect::MqttDisconnect;
         let disc = MqttDisconnect::new(0x00, vec![Property::SessionExpiryInterval(60)]);
-        let bytes = Bytes::from(disc.to_bytes().unwrap());
+        let bytes = Payload::from(disc.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v5(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
@@ -2083,7 +2085,7 @@ mod tests {
             0x18,
             vec![Property::AuthenticationMethod("PLAIN".to_string())],
         );
-        let bytes = Bytes::from(auth.to_bytes().unwrap());
+        let bytes = Payload::from(auth.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v5(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
@@ -2113,7 +2115,7 @@ mod tests {
     fn test_consumed_consistency_connack_v3() {
         use crate::mqtt_serde::mqttv3::connack::MqttConnAck;
         let connack = MqttConnAck::new(false, 0x00);
-        let bytes = Bytes::from(connack.to_bytes().unwrap());
+        let bytes = Payload::from(connack.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v3(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
@@ -2147,7 +2149,7 @@ mod tests {
                 qos: 0,
             }],
         );
-        let bytes = Bytes::from(sub.to_bytes().unwrap());
+        let bytes = Payload::from(sub.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v3(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
@@ -2173,7 +2175,7 @@ mod tests {
             true, // retain
             true, // dup
         );
-        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        let bytes = Payload::from(publish.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, bytes.len());
@@ -2206,7 +2208,7 @@ mod tests {
     fn test_headers_parsed_publish_v5_empty_payload() {
         let publish =
             publishv5::MqttPublish::new(0, "status".to_string(), None, vec![], false, false);
-        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        let bytes = Payload::from(publish.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, bytes.len());
@@ -2222,7 +2224,7 @@ mod tests {
     fn test_headers_parsed_pubrec_v3() {
         use crate::mqtt_serde::mqttv3::pubrec::MqttPubRec;
         let pubrec = MqttPubRec::new(88);
-        let bytes = Bytes::from(pubrec.to_bytes().unwrap());
+        let bytes = Payload::from(pubrec.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PUBREC);
@@ -2242,7 +2244,7 @@ mod tests {
     fn test_headers_parsed_pubcomp_v3() {
         use crate::mqtt_serde::mqttv3::pubcomp::MqttPubComp;
         let pubcomp = MqttPubComp::new(88);
-        let bytes = Bytes::from(pubcomp.to_bytes().unwrap());
+        let bytes = Payload::from(pubcomp.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PUBCOMP);
@@ -2263,7 +2265,7 @@ mod tests {
     #[test]
     fn test_headers_parsed_v3_with_version_3() {
         // parse_headers_only accepts both version 3 and 4
-        let bytes = Bytes::from_static(&[0xC0, 0x00]); // PINGREQ
+        let bytes = Payload::from(&[0xC0, 0x00][..]); // PINGREQ
         match parse_headers_only(bytes, 3).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PINGREQ);
@@ -2279,7 +2281,7 @@ mod tests {
     #[test]
     fn test_headers_parsed_disconnect_v5_rc_only() {
         // Fixed header: 0xE0 (DISCONNECT), 0x01 (remaining 1), 0x04 (RC)
-        let bytes = Bytes::from_static(&[0xE0, 0x01, 0x04]);
+        let bytes = Payload::from(&[0xE0, 0x01, 0x04][..]);
         match parse_headers_only(bytes, 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, 3);
@@ -2303,7 +2305,7 @@ mod tests {
     #[test]
     fn test_headers_parsed_auth_v5_rc_only() {
         // Fixed header: 0xF0 (AUTH), 0x01 (remaining 1), 0x18 (Continue Auth)
-        let bytes = Bytes::from_static(&[0xF0, 0x01, 0x18]);
+        let bytes = Payload::from(&[0xF0, 0x01, 0x18][..]);
         match parse_headers_only(bytes, 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, 3);
@@ -2328,7 +2330,7 @@ mod tests {
     fn test_headers_parsed_publish_v3_qos0() {
         let publish =
             publishv3::MqttPublish::new("t".to_string(), 0, vec![1, 2, 3], None, false, false);
-        let bytes = Bytes::from(publish.to_bytes().unwrap());
+        let bytes = Payload::from(publish.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 4).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, bytes.len());
@@ -2353,7 +2355,7 @@ mod tests {
     fn test_consumed_consistency_connect_v5() {
         use crate::mqtt_serde::mqttv5::connect::MqttConnect;
         let connect = MqttConnect::new("cid".to_string(), None, None, None, 60, true, Vec::new());
-        let bytes = Bytes::from(connect.to_bytes().unwrap());
+        let bytes = Payload::from(connect.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v5(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
@@ -2383,7 +2385,7 @@ mod tests {
     fn test_consumed_consistency_connect_v3() {
         use crate::mqtt_serde::mqttv3::connect::MqttConnect;
         let connect = MqttConnect::new("cid".to_string(), 30, true);
-        let bytes = Bytes::from(connect.to_bytes().unwrap());
+        let bytes = Payload::from(connect.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v3(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
@@ -2413,7 +2415,7 @@ mod tests {
     fn test_consumed_consistency_puback_v5() {
         use crate::mqtt_serde::mqttv5::puback::MqttPubAck;
         let puback = MqttPubAck::new(1, 0x00, Vec::new());
-        let bytes = Bytes::from(puback.to_bytes().unwrap());
+        let bytes = Payload::from(puback.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v5(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
@@ -2443,7 +2445,7 @@ mod tests {
     fn test_consumed_consistency_puback_v3() {
         use crate::mqtt_serde::mqttv3::puback::MqttPubAck;
         let puback = MqttPubAck::new(42);
-        let bytes = Bytes::from(puback.to_bytes().unwrap());
+        let bytes = Payload::from(puback.to_bytes().unwrap());
 
         let consumed_l0 = match MqttPacket::from_bytes_v3(&bytes).unwrap() {
             crate::mqtt_serde::parser::ParseOk::Packet(_, c) => c,
@@ -2471,7 +2473,7 @@ mod tests {
 
     #[test]
     fn test_headers_parsed_pingresp_v5() {
-        let bytes = Bytes::from_static(&[0xD0, 0x00]);
+        let bytes = Payload::from(&[0xD0, 0x00][..]);
         match parse_headers_only(bytes, 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::PINGRESP);
@@ -2497,7 +2499,7 @@ mod tests {
                 Property::TopicAliasMaximum(10),
             ]),
         );
-        let bytes = Bytes::from(connack.to_bytes().unwrap());
+        let bytes = Payload::from(connack.to_bytes().unwrap());
         match parse_headers_only(bytes.clone(), 5).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::HeadersParsed(pkt), consumed) => {
                 assert_eq!(consumed, bytes.len());
@@ -2521,7 +2523,7 @@ mod tests {
     fn test_raw_body_connack_v5() {
         use crate::mqtt_serde::mqttv5::connack::MqttConnAck;
         let connack = MqttConnAck::new(false, 0x00, None);
-        let bytes = Bytes::from(connack.to_bytes().unwrap());
+        let bytes = Payload::from(connack.to_bytes().unwrap());
         match parse_raw_body(bytes.clone()).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::RawBody(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::CONNACK);
@@ -2536,7 +2538,7 @@ mod tests {
     #[test]
     fn test_raw_body_disconnect_v5() {
         // Empty DISCONNECT (remaining_len=0)
-        let bytes = Bytes::from_static(&[0xE0, 0x00]);
+        let bytes = Payload::from(&[0xE0, 0x00][..]);
         match parse_raw_body(bytes).unwrap() {
             LeveledParseOk::Packet(ParsedPacket::RawBody(pkt), consumed) => {
                 assert_eq!(pkt.packet_type, ControlPacketType::DISCONNECT);

@@ -763,6 +763,10 @@ the admission queue and rejects requests that have not yet been admitted.
 
 #### Sharing Existing Payload Buffers (0.8)
 
+Enable `flowsdk`'s `shared-payloads` Cargo feature to use this API. Without it,
+payloads use owned `Vec<u8>` storage, including in the alloc-only core on targets
+without pointer atomics. See the [0.8 configuration guide](MIGRATING_0_8.md).
+
 `PublishCommand::from_bytes(topic, payload, qos, retain)` accepts an owned
 `bytes::Bytes` and keeps its backing storage through command queues, packets,
 inflight state, and reconnect replay. Shared, sliced, static, and uniquely owned

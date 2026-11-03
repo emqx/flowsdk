@@ -17,7 +17,7 @@ cargo +stable bench -p flowsdk --bench leveled_parser
 # Encoding only, across MQTT versions and packet fixtures (25 cases)
 cargo +stable bench -p flowsdk --bench codec -- '^codec/(v3_1_1|v5)/encode/'
 
-# All suites (Criterion's default warm-up, sampling, and measurement settings)
+# General suites (Criterion's default warm-up, sampling, and measurement settings)
 cargo +stable bench -p flowsdk --bench codec --bench parser --bench leveled_parser --bench queues --bench engine
 
 # Filter to one case; benchmark IDs are regular expressions
@@ -32,7 +32,10 @@ cargo +stable bench -p flowsdk --bench codec --bench parser --bench leveled_pars
   --no-default-features --features std,strict-protocol-compliance -- --test
 ```
 
-HTML reports are in `target/criterion/report/index.html`.
+HTML reports are in `target/criterion/report/index.html`. These commands use owned
+payload/parser buffers by default. Add `--features shared-payloads` to measure
+shared storage; in the direct leveled suite, the input clone then shares storage
+instead of copying a vector. Keep the feature set the same when comparing revisions.
 
 
 ## Coverage and units
@@ -62,9 +65,9 @@ cargo +stable bench -p flowsdk --bench parser -- --baseline before
 ## Shared publish payloads
 
 ```bash
-cargo bench -p flowsdk --bench shared_payload
+cargo bench -p flowsdk --features shared-payloads --bench shared_payload
 # Short local comparison; use the defaults for more stable timing estimates.
-cargo bench -p flowsdk --bench shared_payload -- --sample-size 10 --warm-up-time 0.1 --measurement-time 0.2
+cargo bench -p flowsdk --features shared-payloads --bench shared_payload -- --sample-size 10 --warm-up-time 0.1 --measurement-time 0.2
 ```
 
 The suite compares 4 KiB vectors, uniquely owned `Bytes`, shared `Bytes`, static
@@ -95,7 +98,8 @@ tradeoff visible.
 ### Local measurements, 2026-11-03
 
 Measured on aarch64 macOS 15.7 with `rustc 1.98.0-nightly (14210df0e 2026-05-31)`,
-default crate features and the optimized bench profile. The final run used 30
+the shared payload implementation (now selected with `shared-payloads`) and
+the optimized bench profile. The final run used 30
 samples, 0.2 s warm-up and 0.5 s measurement per case, with other build/test jobs
 stopped. These are local measurements, not throughput guarantees.
 
@@ -139,9 +143,11 @@ allocation and replacement-copy reductions are deterministic across both runs.
   and shutdown with pending commands. Core wire/lifecycle/reliability suites pass.
 * 41 FFI tests and 4 protobuf conversion tests pass; UniFFI records remain vectors.
   54 Rust doctests pass. Language-specific Swift/Kotlin/Python runners were not run.
-* The no-std host harness passes with alloc-only SDK builds, strict validation
-  both on and off, durable checkpoints, and the `portable-atomics` feature. These
-  are host checks, not a new bare-metal target run. Both fuzz targets compile.
+* The no-std host harness passes with owned and shared storage, strict validation
+  both on and off, and durable checkpoints. The owned-only library also builds for
+  `thumbv6m-none-eabi` without `bytes`, atomic emulation, or a critical-section
+  provider. CI checks this target and dependency graph. Both fuzz targets compile
+  in owned and shared modes (`--features shared-payloads` selects the latter).
 * Two native TLS tests fail on this macOS host with “The extended key usage is not
   valid”: `native_and_rustls_clients_use_custom_ca_and_complete_disconnect` and
   `tls_backends_verify_custom_roots_and_exchange_binary_data`. Both failures were

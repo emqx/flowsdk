@@ -222,7 +222,7 @@ fn assert_delivered(observed: &Observation) {
             .iter()
             .filter(|event| matches!(event,
                 MqttEvent::MessageReceived(message)
-                    if message.packet_id == Some(PEER_ID) && message.payload.as_ref() == b"payload"
+                    if message.packet_id == Some(PEER_ID) && &message.payload[..] == b"payload"
             ))
             .count(),
         1,
@@ -576,13 +576,13 @@ mod mqtt311 {
                 p.qos == 1
                     && p.dup
                     && p.message_id == Some(id)
-                    && p.payload.as_ref() == b"retained work"
+                    && &p.payload[..] == b"retained work"
             }
             (OutboundStage::Qos2Publish, MqttPacket::Publish3(p)) => {
                 p.qos == 2
                     && p.dup
                     && p.message_id == Some(id)
-                    && p.payload.as_ref() == b"retained work"
+                    && &p.payload[..] == b"retained work"
             }
             (OutboundStage::PubRel, MqttPacket::PubRel3(p)) => p.message_id == id,
             _ => false,

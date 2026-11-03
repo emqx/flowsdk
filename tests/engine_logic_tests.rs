@@ -214,7 +214,7 @@ fn test_v3_qos1_retransmission_after_reconnect() {
         ParseOk::Packet(MqttPacket::Publish3(p), _) => {
             assert!(p.dup);
             assert_eq!(p.topic_name, "topic");
-            assert_eq!(p.payload.as_ref(), b"payload");
+            assert_eq!(&p.payload[..], b"payload");
             assert_eq!(p.qos, 1);
             assert_eq!(p.message_id, Some(pid));
         }
@@ -307,7 +307,7 @@ fn test_v5_qos1_retransmission_after_reconnect() {
         ParseOk::Packet(MqttPacket::Publish5(p), _) => {
             assert!(p.dup);
             assert_eq!(p.topic_name, "topic");
-            assert_eq!(p.payload.as_ref(), b"payload");
+            assert_eq!(&p.payload[..], b"payload");
             assert_eq!(p.qos, 1);
             assert_eq!(p.packet_id, Some(pid));
         }
@@ -383,7 +383,7 @@ fn test_qos2_full_handshake() {
     match MqttPacket::from_bytes_with_version(&outgoing, 5).unwrap() {
         ParseOk::Packet(MqttPacket::Publish5(p), _) => {
             assert_eq!(p.topic_name, "t");
-            assert_eq!(p.payload.as_ref(), b"p");
+            assert_eq!(&p.payload[..], b"p");
             assert_eq!(p.qos, 2);
             assert_eq!(p.packet_id, Some(pid));
         }
@@ -590,7 +590,7 @@ fn test_incoming_publish_qos1() {
     match &events[1] {
         MqttEvent::MessageReceived(p) => {
             assert_eq!(p.topic_name, "t");
-            assert_eq!(p.payload.as_ref(), b"data");
+            assert_eq!(&p.payload[..], b"data");
             assert_eq!(p.qos, 1);
             assert_eq!(p.packet_id, Some(100));
         }

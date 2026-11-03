@@ -22,7 +22,7 @@ tokio = { version = "1.0", optional = true, features = ["sync", "time", "io-util
 tonic-prost = { version = "0.14.1", optional = true }
 serde = { version = "1.0.218", default-features = false, features = ["derive"] }
 hex = { version = "0.4", default-features = false }
-bytes = { version = "1.12.1", default-features = false, features = ["serde"] }
+bytes = { version = "1.12.1", optional = true, default-features = false }
 tokio-stream = { version = "0.1", optional = true }
 arbitrary = { version = "1", optional = true, features = ["derive"] }
 serde_json = { version = "1.0", optional = true }
@@ -48,9 +48,12 @@ tokio-rustls = { version = "0.26", optional = true }
 [features]
 default = ["std", "strict-protocol-compliance", "tls", "async-client"]
 alloc = ["serde/alloc", "hex/alloc"]
-std = ["alloc", "serde/std", "bytes/std", "hex/std", "dep:serde_json"]
+std = ["alloc", "serde/std", "bytes?/std", "hex/std", "dep:serde_json"]
+# Opt in to shared publish/parser storage. The alloc-only core otherwise uses Vec.
+shared-payloads = ["alloc", "dep:bytes"]
+# Optional emulation for shared storage on targets without native pointer atomics.
 # The application selects and supplies a compatible critical-section provider.
-portable-atomics = ["bytes/extra-platforms"]
+portable-atomics = ["shared-payloads", "bytes/extra-platforms"]
 # Application-owned session checkpoints for persistence across process restarts (opt-in).
 durable-session = []
 # TLS/SSL transport support
@@ -64,7 +67,7 @@ quic = ["quic-proto", "dep:quinn", "async-client"]
 # NOTE: do not enable quic and quic-openssl at the same time.
 quic-openssl = ["quic", "quic-proto-openssl", "dep:quinn-openssl"]
 # Sans-I/O QUIC protocol engine — ring crypto (no tokio runtime required)
-quic-proto = ["std", "dep:quinn-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
+quic-proto = ["std", "dep:bytes", "dep:quinn-proto", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
 # Sans-I/O QUIC protocol engine — OpenSSL crypto (for release-small builds)
 quic-proto-openssl = ["quic-proto", "dep:quinn-proto-openssl", "dep:rustls-openssl"]
 # Rustls-based TLS over TCP (mqtts://) transport support
@@ -137,7 +140,7 @@ harness = false
 [[bench]]
 name = "shared_payload"
 harness = false
-required-features = ["std"]
+required-features = ["std", "shared-payloads"]
 
 [[example]]
 name = "durable_session"

@@ -1054,7 +1054,7 @@ fn publish_command(
 #[cfg(test)]
 mod batch_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "shared-payloads"))]
 mod payload_tests;
 
 #[cfg(test)]

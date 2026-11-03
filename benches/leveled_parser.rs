@@ -2,7 +2,6 @@
 
 mod common;
 
-use bytes::Bytes;
 use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use flowsdk::mqtt_serde::control_packet::MqttPacket;
 use flowsdk::mqtt_serde::mqttv5::common::properties::Property;
@@ -11,10 +10,11 @@ use flowsdk::mqtt_serde::parser::leveled::{
     VariableHeader,
 };
 use flowsdk::mqtt_serde::parser::{parse_remaining_length, ParseOk};
+use flowsdk::mqtt_serde::Payload;
 use std::hint::black_box;
 
 /// Verify the direct APIs before timing, including the bytes retained by each level.
-fn validate(packet: &MqttPacket, frame: &Bytes, version: u8) {
+fn validate(packet: &MqttPacket, frame: &Payload, version: u8) {
     match MqttPacket::from_bytes_with_version(frame, version).unwrap() {
         ParseOk::Packet(decoded, consumed) => {
             assert_eq!(&decoded, packet);
@@ -74,11 +74,11 @@ fn validate(packet: &MqttPacket, frame: &Bytes, version: u8) {
                     }
                     _ => panic!("wrong PUBLISH header variant"),
                 };
-                assert_eq!(header.raw_payload.as_ref(), payload.as_ref());
+                assert_eq!(&header.raw_payload[..], &payload[..]);
             }
             (ParseLevel::RawBody, ParsedPacket::RawBody(raw)) => {
                 assert_eq!(raw.flags, frame[0] & 0x0f);
-                assert_eq!(raw.remaining.as_ref(), &frame[1 + vbi_len..]);
+                assert_eq!(&raw.remaining[..], &frame[1 + vbi_len..]);
             }
             (ParseLevel::TypeOnly, ParsedPacket::TypeOnly(header)) => {
                 assert_eq!(header.flags, frame[0] & 0x0f)
@@ -114,7 +114,7 @@ fn leveled_parser(c: &mut Criterion) {
         let fixtures: Vec<_> = fixtures
             .into_iter()
             .map(|(name, size, packet)| {
-                let frame = Bytes::from(common::encode_checked(&packet, version));
+                let frame = Payload::from(common::encode_checked(&packet, version));
                 validate(&packet, &frame, version);
                 (name, size, frame)
             })
@@ -130,8 +130,8 @@ fn leveled_parser(c: &mut Criterion) {
             for (case, size, frame) in &fixtures {
                 group.throughput(Throughput::Bytes(frame.len() as u64));
                 group.bench_with_input(BenchmarkId::new(*case, size), frame, |b, frame| {
-                    // Match outside the measured loop. Bytes-taking APIs include a
-                    // shared Bytes clone, and every case includes result destruction.
+                    // Match outside the measured loop. Buffer-taking APIs include a
+                    // clone (shared with shared-payloads), and all cases drop the result.
                     match level {
                         ParseLevel::Full => b.iter(|| {
                             black_box(
