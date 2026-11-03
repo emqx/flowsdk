@@ -435,7 +435,7 @@ mod tests {
             topic_name: "test/topic".to_string(),
             packet_id: None,
             properties: Vec::new(),
-            payload: Vec::new(),
+            payload: Vec::new().into(),
         });
         assert_eq!(packet.packet_type(), ControlPacketType::PUBLISH);
     }
@@ -589,7 +589,7 @@ mod tests {
             retain: false,
             topic_name: "test/topic".to_string(),
             message_id: None,
-            payload: Vec::new(),
+            payload: Vec::new().into(),
         });
         assert_eq!(packet.packet_type(), ControlPacketType::PUBLISH);
     }
@@ -722,7 +722,7 @@ mod tests {
             topic_name: "test".to_string(),
             packet_id: None,
             properties: Vec::new(),
-            payload: Vec::new(),
+            payload: Vec::new().into(),
         });
         let v3 = MqttPacket::Publish3(publishv3::MqttPublish {
             dup: false,
@@ -730,7 +730,7 @@ mod tests {
             retain: false,
             topic_name: "test".to_string(),
             message_id: None,
-            payload: Vec::new(),
+            payload: Vec::new().into(),
         });
         assert_eq!(v5.packet_type(), v3.packet_type());
     }

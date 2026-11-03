@@ -1055,6 +1055,9 @@ fn publish_command(
 mod batch_tests;
 
 #[cfg(test)]
+mod payload_tests;
+
+#[cfg(test)]
 mod admission_tests;
 
 #[cfg(test)]

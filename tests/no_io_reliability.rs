@@ -521,7 +521,7 @@ mod initial_authentication_commands {
                 assert!(client.is_connected(), "{events:#?}");
                 assert!(
                     matches!(packets(&client.take_outgoing()).as_slice(), [MqttPacket::Publish5(p)]
-                        if p.qos == qos && p.payload == b"payload")
+                        if p.qos == qos && p.payload.as_ref() == b"payload")
                 );
             }
         }
@@ -1244,7 +1244,9 @@ fn expired_session_reports_failures_and_keeps_accepted_unsent_publications() {
     assert!(events
         .iter()
         .any(|e| matches!(e, MqttEvent::OperationFailed { packet_id, .. } if *packet_id == first)));
-    assert!(matches!(drain(&mut client).as_slice(), [MqttPacket::Publish5(p)] if p.payload == [2]));
+    assert!(
+        matches!(drain(&mut client).as_slice(), [MqttPacket::Publish5(p)] if p.payload.as_ref() == [2])
+    );
 }
 
 #[test]
@@ -1412,14 +1414,14 @@ fn reconnect_does_not_reuse_aliases_in_unsent_publications() {
     command.properties.push(Property::TopicAlias(1));
     client.publish(command.clone()).unwrap();
     drain(&mut client);
-    command.payload = vec![2];
+    command.payload = vec![2].into();
     client.publish(command).unwrap();
     client.handle_connection_lost();
     client.connect().unwrap();
     drain(&mut client);
     client.handle_incoming(&connack(false, vec![]));
     assert!(
-        matches!(drain(&mut client).as_slice(), [MqttPacket::Publish5(p)] if p.payload == [2] && p.properties.is_empty())
+        matches!(drain(&mut client).as_slice(), [MqttPacket::Publish5(p)] if p.payload.as_ref() == [2] && p.properties.is_empty())
     );
 }
 

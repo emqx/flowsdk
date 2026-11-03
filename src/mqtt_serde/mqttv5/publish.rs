@@ -12,6 +12,7 @@ use crate::mqtt_serde::parser;
 use crate::mqtt_serde::parser::{
     packet_type, parse_packet_id, parse_remaining_length, parse_topic_name, ParseError, ParseOk,
 };
+use bytes::Bytes;
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -22,7 +23,10 @@ pub struct MqttPublish {
     pub dup: bool,
     pub retain: bool,
     pub packet_id: Option<u16>,
-    pub payload: Vec<u8>,
+    /// Immutable payload; packet clones share its backing allocation.
+    #[serde(with = "crate::mqtt_serde::payload")]
+    #[cfg_attr(feature = "arbitrary", arbitrary(with = crate::mqtt_serde::payload::arbitrary))]
+    pub payload: Bytes,
     pub properties: Vec<Property>,
 }
 
@@ -31,14 +35,14 @@ impl MqttPublish {
         qos: u8,
         topic_name: String,
         packet_id: Option<u16>,
-        payload: Vec<u8>,
+        payload: impl Into<Bytes>,
         retain: bool,
         dup: bool,
     ) -> Self {
         MqttPublish {
             topic_name,
             packet_id,
-            payload,
+            payload: payload.into(),
             qos,
             dup,
             retain,
@@ -50,7 +54,7 @@ impl MqttPublish {
         qos: u8,
         topic_name: String,
         packet_id: Option<u16>,
-        payload: Vec<u8>,
+        payload: impl Into<Bytes>,
         retain: bool,
         dup: bool,
         properties: Vec<Property>,
@@ -58,7 +62,7 @@ impl MqttPublish {
         MqttPublish {
             topic_name,
             packet_id,
-            payload,
+            payload: payload.into(),
             qos,
             dup,
             retain,
@@ -127,7 +131,7 @@ impl MqttControlPacket for MqttPublish {
     }
 
     fn payload(&self) -> Result<Vec<u8>, parser::ParseError> {
-        Ok(self.payload.clone())
+        Ok(self.payload.to_vec())
     }
 
     fn encode_to_buffer(&self, bytes: &mut Vec<u8>) -> Result<(), ParseError> {
@@ -249,10 +253,11 @@ impl MqttControlPacket for MqttPublish {
 
         // MQTT 5.0: 3.3.3 PUBLISH Payload
         let payload_len = packet_size - offset;
-        let payload = buffer
-            .get(offset..offset + payload_len)
-            .ok_or(ParseError::BufferTooShort)?
-            .to_vec();
+        let payload = Bytes::copy_from_slice(
+            buffer
+                .get(offset..offset + payload_len)
+                .ok_or(ParseError::BufferTooShort)?,
+        );
         offset += payload_len;
 
         if offset != packet_size {

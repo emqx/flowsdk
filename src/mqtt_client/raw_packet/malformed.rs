@@ -105,7 +105,7 @@ impl MalformedPacketGenerator {
         let mut publish = MqttPublish::new(0, "test".to_string(), None, vec![], false, false);
         publish.topic_name = "test".to_string();
         publish.qos = 0;
-        publish.payload = vec![];
+        publish.payload = vec![].into();
 
         let mut builder = RawPacketBuilder::from_packet(MqttPacket::Publish5(publish))?;
 
@@ -137,7 +137,7 @@ impl MalformedPacketGenerator {
         publish.topic_name = "test".to_string();
         publish.qos = 1;
         publish.packet_id = Some(1);
-        publish.payload = vec![];
+        publish.payload = vec![].into();
 
         let mut builder = RawPacketBuilder::from_packet(MqttPacket::Publish5(publish))?;
 

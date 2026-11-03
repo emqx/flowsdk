@@ -761,12 +761,14 @@ times out or drops the future after enqueueing, the publish can still proceed;
 do not retry on the assumption that cancellation retracted it. Shutdown closes
 the admission queue and rejects requests that have not yet been admitted.
 
-#### Moving Existing Payload Buffers
+#### Sharing Existing Payload Buffers (0.8)
 
 `PublishCommand::from_bytes(topic, payload, qos, retain)` accepts an owned
-`bytes::Bytes`. It reclaims a uniquely owned, Vec-backed allocation where possible.
-Shared or static buffers require a copy into the command's existing `Vec<u8>`;
-this API does not provide shared-buffer storage throughout the engine.
+`bytes::Bytes` and keeps its backing storage through command queues, packets,
+inflight state, and reconnect replay. Shared, sliced, static, and uniquely owned
+buffers do not need a replacement payload allocation, even when the application
+retains another handle for retries. Encoding still writes the payload into a wire
+buffer. A small slice retains its entire backing allocation.
 
 ```rust
 use bytes::Bytes;
@@ -784,9 +786,15 @@ async fn submit(
 
 The engine consumes commands using `into_mqtt_publish` / `into_mqttv3_publish`,
 moving the topic, payload, and MQTT 5 properties. The borrowed `to_*` conversions
-remain available and continue to clone. Owned receive batches similarly let an
-adapter move `message.topic_name` and use `Bytes::from(message.payload)` without
-copying the payload into its downstream channel.
+remain available: they clone metadata and share the payload. Owned receive batches
+let an adapter move `message.topic_name` and `message.payload` into its downstream
+channel. `PublishCommand::builder().payload_bytes(payload)` also preserves a shared
+buffer; the existing `.payload(...)` builder method accepts inputs convertible to
+`Vec<u8>` and may copy borrowed or shared input.
+
+The public command and PUBLISH packet `payload` fields changed from `Vec<u8>` to
+`Bytes` in 0.8. See [the migration guide](MIGRATING_0_8.md) for struct literals,
+mutation, serialization, memory accounting, and binding compatibility.
 
 ---
 

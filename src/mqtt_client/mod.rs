@@ -10,6 +10,8 @@ pub mod error;
 pub mod inflight;
 pub mod no_io_client;
 pub mod opts;
+#[cfg(all(test, feature = "std"))]
+mod payload_tests;
 #[cfg(feature = "protocol-testing")]
 pub mod raw_packet;
 #[cfg(feature = "rustls-tls")]

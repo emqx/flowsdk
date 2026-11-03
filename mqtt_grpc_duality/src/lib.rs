@@ -466,7 +466,7 @@ impl From<MqttPublish> for mqttv5pb::Publish {
     fn from(publish: MqttPublish) -> Self {
         mqttv5pb::Publish {
             topic: publish.topic_name,
-            payload: publish.payload,
+            payload: publish.payload.into(),
             qos: publish.qos as i32,
             retain: publish.retain,
             dup: publish.dup,
@@ -749,7 +749,7 @@ impl From<MqttPublishV3> for mqttv3pb::Publish {
     fn from(publish: MqttPublishV3) -> Self {
         mqttv3pb::Publish {
             topic: publish.topic_name,
-            payload: publish.payload,
+            payload: publish.payload.into(),
             qos: publish.qos as i32,
             retain: publish.retain,
             dup: publish.dup,
@@ -885,7 +885,7 @@ impl From<mqttv3pb::Publish> for MqttPublishV3 {
     fn from(publish: mqttv3pb::Publish) -> Self {
         MqttPublishV3 {
             topic_name: publish.topic,
-            payload: publish.payload,
+            payload: publish.payload.into(),
             qos: publish.qos as u8,
             retain: publish.retain,
             dup: publish.dup,

@@ -1,6 +1,6 @@
 [package]
 name = "flowsdk"
-version = "0.7.0"
+version = "0.8.0"
 edition = "2021"
 rust-version = "1.85"
 description = "Safety-first, realistic, behavior-predictable messaging SDK for MQTT and more."
@@ -133,6 +133,11 @@ harness = false
 [[bench]]
 name = "engine"
 harness = false
+
+[[bench]]
+name = "shared_payload"
+harness = false
+required-features = ["std"]
 
 [[example]]
 name = "durable_session"

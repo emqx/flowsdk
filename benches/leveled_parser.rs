@@ -74,7 +74,7 @@ fn validate(packet: &MqttPacket, frame: &Bytes, version: u8) {
                     }
                     _ => panic!("wrong PUBLISH header variant"),
                 };
-                assert_eq!(header.raw_payload.as_ref(), payload.as_slice());
+                assert_eq!(header.raw_payload.as_ref(), payload.as_ref());
             }
             (ParseLevel::RawBody, ParsedPacket::RawBody(raw)) => {
                 assert_eq!(raw.flags, frame[0] & 0x0f);

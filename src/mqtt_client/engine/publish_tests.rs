@@ -2,6 +2,7 @@
 
 use super::test_support::connect;
 use super::*;
+use crate::mqtt_client::payload_tests::tracked_payload;
 use crate::mqtt_serde::parser::ParseOk;
 
 fn packets(mut bytes: &[u8], version: u8) -> Vec<MqttPacket> {
@@ -246,4 +247,329 @@ fn response_failure_discards_transient_encoding_before_reconnect() {
         matches!(output.as_slice(), [MqttPacket::Publish5(packet)] if packet.topic_name == "canonical" && packet.properties.is_empty())
     );
     assert_eq!(engine.state.queued_bytes, 0);
+}
+
+fn ack(kind: u8, id: u16) -> [u8; 4] {
+    [kind, 2, (id >> 8) as u8, id as u8]
+}
+
+fn complete(engine: &mut MqttEngine, qos: u8, id: u16) {
+    let mut events = engine.handle_incoming(&ack(if qos == 1 { 0x40 } else { 0x50 }, id));
+    if qos == 2 {
+        assert_eq!(engine.take_outgoing(), ack(0x62, id));
+        events = engine.handle_incoming(&ack(0x70, id));
+    }
+    assert!(events.iter().any(|event| matches!(event, MqttEvent::Published(result) if result.packet_id == Some(id) && result.is_success())));
+}
+
+#[test]
+fn shared_payload_retained_through_queue_inflight_and_released_after_ack() {
+    for version in [4, 5] {
+        for qos in [0, 1, 2] {
+            let mut engine = MqttEngine::new(
+                MqttClientOptions::builder()
+                    .mqtt_version(version)
+                    .max_outgoing_packet_count(1)
+                    .build(),
+            );
+            connect(&mut engine, vec![]);
+            engine
+                .publish(PublishCommand::simple("block", vec![0], 0, false))
+                .unwrap();
+            let (backing, weak) = tracked_payload(65536);
+            let application = backing.slice(17..4113);
+            drop(backing);
+            let ptr = application.as_ptr();
+            let id = engine
+                .publish(PublishCommand::from_bytes(
+                    "shared",
+                    application.clone(),
+                    qos,
+                    false,
+                ))
+                .unwrap();
+            let (_, queued) = engine.priority_queue.peek().unwrap();
+            assert_eq!(publication(queued).1.as_ptr(), ptr);
+            assert_eq!(engine.state.queued_bytes, queued.to_bytes().unwrap().len());
+            let wire = packets(&engine.take_outgoing(), version);
+            assert_eq!(publication(&wire[1]).1, &[42; 4096]);
+            assert_eq!(engine.state.queued_bytes, 0);
+            if let Some(id) = id {
+                assert_eq!(
+                    publication(&engine.inflight_queue.get(id).unwrap().packet)
+                        .1
+                        .as_ptr(),
+                    ptr
+                );
+                drop(application);
+                assert!(weak.upgrade().is_some());
+                complete(&mut engine, qos, id);
+                assert!(engine.inflight_queue.get(id).is_none());
+                assert!(!engine.state.reserved.contains(&id));
+            } else {
+                drop(application);
+            }
+            // Parsed wire output owns different storage and cannot mask a leak.
+            assert!(weak.upgrade().is_none(), "version={version} qos={qos}");
+        }
+    }
+}
+
+#[test]
+fn shared_payload_encoded_publish_keeps_app_handle_and_releases_sdk_handle() {
+    for version in [4, 5] {
+        for qos in [0, 1, 2] {
+            let mut engine =
+                MqttEngine::new(MqttClientOptions::builder().mqtt_version(version).build());
+            connect(&mut engine, vec![]);
+            let application = bytes::Bytes::from(vec![42; 4096]);
+            let (id, wire) = engine
+                .publish_encoded(
+                    PublishCommand::from_bytes("shared", application.clone(), qos, false),
+                    None,
+                )
+                .unwrap();
+            assert_eq!(
+                publication(&packets(&wire, version)[0]).1,
+                application.as_ref()
+            );
+            if let Some(id) = id {
+                assert!(!application.is_unique());
+                assert_eq!(
+                    publication(&engine.inflight_queue.get(id).unwrap().packet)
+                        .1
+                        .as_ptr(),
+                    application.as_ptr()
+                );
+                complete(&mut engine, qos, id);
+            }
+            assert!(application.is_unique());
+            assert_eq!(application.as_ref(), &[42; 4096]);
+        }
+    }
+}
+
+#[test]
+fn shared_payload_reconnect_replay_waiting_for_quota_keeps_original_storage() {
+    for version in [4, 5] {
+        for qos in [1, 2] {
+            let mut engine = MqttEngine::new(
+                MqttClientOptions::builder()
+                    .mqtt_version(version)
+                    .clean_start(false)
+                    .receive_maximum(2)
+                    .build(),
+            );
+            connect(&mut engine, vec![]);
+            let first = engine
+                .publish(PublishCommand::simple("first", vec![1], 1, false))
+                .unwrap()
+                .unwrap();
+            let (application, weak) = tracked_payload(4096);
+            let ptr = application.as_ptr();
+            let second = engine
+                .publish(PublishCommand::from_bytes(
+                    "second",
+                    application.clone(),
+                    qos,
+                    false,
+                ))
+                .unwrap()
+                .unwrap();
+            engine.take_outgoing();
+            engine.handle_connection_lost();
+            engine.connect().unwrap();
+            engine.take_outgoing();
+            assert_eq!(
+                publication(
+                    &engine
+                        .previous_inflight
+                        .iter()
+                        .find(|(id, _)| *id == second)
+                        .unwrap()
+                        .1
+                )
+                .1
+                .as_ptr(),
+                ptr
+            );
+            engine.inflight_queue.update_receive_maximum(1);
+            let events = engine.handle_incoming(if version == 5 {
+                &[0x20, 3, 1, 0, 0]
+            } else {
+                &[0x20, 2, 1, 0]
+            });
+            assert!(events.iter().any(
+                |event| matches!(event, MqttEvent::Connected(result) if result.session_present)
+            ));
+            assert_eq!(engine.session_replay.len(), 1);
+            assert_eq!(
+                publication(&engine.session_replay.front().unwrap().1)
+                    .1
+                    .as_ptr(),
+                ptr
+            );
+            engine.take_outgoing();
+            complete(&mut engine, 1, first);
+            let replay = packets(&engine.take_outgoing(), version);
+            assert_eq!(publication(&replay[0]).1, application.as_ref());
+            assert!(engine.session_replay.is_empty());
+            assert_eq!(
+                publication(&engine.inflight_queue.get(second).unwrap().packet)
+                    .1
+                    .as_ptr(),
+                ptr
+            );
+            drop(application);
+            assert!(weak.upgrade().is_some());
+            complete(&mut engine, qos, second);
+            assert!(weak.upgrade().is_none());
+        }
+    }
+}
+
+#[test]
+fn shared_payload_rejection_and_engine_drop_release_storage() {
+    for version in [4, 5] {
+        for qos in [0, 1, 2] {
+            let mut engine = MqttEngine::new(
+                MqttClientOptions::builder()
+                    .mqtt_version(version)
+                    .max_outgoing_packet_count(1)
+                    .build(),
+            );
+            connect(&mut engine, vec![]);
+            let (payload, weak) = tracked_payload(4096);
+            assert!(engine
+                .publish(PublishCommand::from_bytes("invalid/#", payload, qos, false))
+                .is_err());
+            assert!(weak.upgrade().is_none());
+            let (payload, first) = tracked_payload(4096);
+            engine
+                .publish(PublishCommand::from_bytes("first", payload, qos, false))
+                .unwrap();
+            let (payload, queued) = tracked_payload(4096);
+            engine
+                .publish(PublishCommand::from_bytes("queued", payload, qos, false))
+                .unwrap();
+            let (payload, rejected) = tracked_payload(4096);
+            assert!(matches!(
+                engine.publish(PublishCommand::from_bytes("rejected", payload, qos, false)),
+                Err(MqttClientError::BufferFull { .. })
+            ));
+            assert!(rejected.upgrade().is_none());
+            assert!(queued.upgrade().is_some());
+            drop(engine);
+            assert!(first.upgrade().is_none());
+            assert!(queued.upgrade().is_none());
+        }
+    }
+}
+
+#[test]
+fn shared_payload_static_and_unique_slices_keep_pointer_and_wire_contents() {
+    static PAYLOAD: [u8; 64] = [42; 64];
+    for version in [4, 5] {
+        for qos in [0, 1, 2] {
+            for sliced in [false, true] {
+                let payload = if sliced {
+                    let backing = bytes::Bytes::from(vec![42; 65536]);
+                    let slice = backing.slice(17..81);
+                    drop(backing);
+                    assert!(slice.is_unique());
+                    slice
+                } else {
+                    bytes::Bytes::from_static(&PAYLOAD)
+                };
+                let ptr = payload.as_ptr();
+                let command = PublishCommand::from_bytes("t", payload, qos, false);
+                assert_eq!(command.payload.as_ptr(), ptr);
+                let mut engine =
+                    MqttEngine::new(MqttClientOptions::builder().mqtt_version(version).build());
+                connect(&mut engine, vec![]);
+                let id = engine.publish(command).unwrap();
+                let output = packets(&engine.take_outgoing(), version);
+                assert_eq!(publication(&output[0]).1, &PAYLOAD);
+                if let Some(id) = id {
+                    assert_eq!(
+                        publication(&engine.inflight_queue.get(id).unwrap().packet)
+                            .1
+                            .as_ptr(),
+                        ptr
+                    );
+                    complete(&mut engine, qos, id);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn shared_payload_negative_ack_releases_storage() {
+    for qos in [1, 2] {
+        let mut engine = MqttEngine::new(MqttClientOptions::default());
+        connect(&mut engine, vec![]);
+        let (payload, weak) = tracked_payload(4096);
+        let id = engine
+            .publish(PublishCommand::from_bytes("t", payload, qos, false))
+            .unwrap()
+            .unwrap();
+        engine.take_outgoing();
+        let events = engine.handle_incoming(&[
+            if qos == 1 { 0x40 } else { 0x50 },
+            4,
+            (id >> 8) as u8,
+            id as u8,
+            0x80,
+            0,
+        ]);
+        assert!(events
+            .iter()
+            .any(|event| matches!(event, MqttEvent::Published(result) if !result.is_success())));
+        assert!(weak.upgrade().is_none());
+        assert!(!engine.state.reserved.contains(&id));
+    }
+}
+
+#[cfg(feature = "durable-session")]
+#[test]
+fn shared_payload_checkpoint_shares_storage_and_keeps_v1_schema() {
+    for version in [4, 5] {
+        let mut engine = MqttEngine::new(
+            MqttClientOptions::builder()
+                .mqtt_version(version)
+                .client_id("checkpoint")
+                .clean_start(false)
+                .build(),
+        );
+        connect(&mut engine, vec![]);
+        let (payload, weak) = tracked_payload(4096);
+        let ptr = payload.as_ptr();
+        let id = engine
+            .publish(PublishCommand::from_bytes("shared", payload, 1, false))
+            .unwrap()
+            .unwrap();
+        engine.take_outgoing();
+        let snapshot = engine.snapshot_session().unwrap();
+        assert_eq!(publication(&snapshot.outbound[0].1).1.as_ptr(), ptr);
+        let json = serde_json::to_value(&snapshot).unwrap();
+        assert_eq!(json["version"], 1);
+        let restored = serde_json::from_value(json).unwrap();
+        let mut restored_engine = MqttEngine::new(
+            MqttClientOptions::builder()
+                .mqtt_version(version)
+                .client_id("checkpoint")
+                .clean_start(false)
+                .build(),
+        );
+        restored_engine.restore_session_state(restored).unwrap();
+        assert_eq!(
+            publication(&restored_engine.previous_inflight[0].1).1,
+            &[42; 4096]
+        );
+        complete(&mut engine, 1, id);
+        assert!(weak.upgrade().is_some());
+        drop(snapshot);
+        assert!(weak.upgrade().is_none());
+    }
 }
