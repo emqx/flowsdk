@@ -23,6 +23,8 @@ pub type ParserBuffer = alloc::vec::Vec<u8>;
 #[derive(Debug)]
 pub struct MqttParser {
     buffer: ParserBuffer,
+    #[cfg(not(feature = "shared-payloads"))]
+    read_offset: usize,
     // 0 means undefined for new, 4 means MQTT v3.1.1, 5 means MQTT v5.0
     mqtt_version: u8,
     parse_level: ParseLevel,
@@ -50,6 +52,8 @@ impl MqttParser {
     pub fn new(buffer_size: usize, mqtt_version: u8) -> Self {
         MqttParser {
             buffer: ParserBuffer::with_capacity(buffer_size),
+            #[cfg(not(feature = "shared-payloads"))]
+            read_offset: 0,
             mqtt_version,
             parse_level: ParseLevel::Full,
         }
@@ -59,6 +63,8 @@ impl MqttParser {
     pub fn with_level(buffer_size: usize, mqtt_version: u8, parse_level: ParseLevel) -> Self {
         MqttParser {
             buffer: ParserBuffer::with_capacity(buffer_size),
+            #[cfg(not(feature = "shared-payloads"))]
+            read_offset: 0,
             mqtt_version,
             parse_level,
         }
@@ -82,33 +88,40 @@ impl MqttParser {
             return Ok(self.mqtt_version);
         }
 
+        let buffer = self.buffer();
         // precheck if it's a CONNECT packet
-        if self.buffer[offset] != 0x10 {
+        if buffer[offset] != 0x10 {
             return Err(ParseError::ParseError(
                 "Expected CONNECT packet to determine MQTT version".to_string(),
             ));
         }
         offset += 1;
 
-        let (_len, consumed) = parse_vbi(&self.buffer[offset..])?;
+        let (_len, consumed) = parse_vbi(&buffer[offset..])?;
         offset += consumed;
 
-        let (_protocol_name, consumed) = parse_utf8_string(&self.buffer[offset..])?;
+        let (_protocol_name, consumed) = parse_utf8_string(&buffer[offset..])?;
 
         let vsn_offset = offset + consumed;
-        if self.buffer.len() < vsn_offset + 1 {
+        if buffer.len() < vsn_offset + 1 {
             return Err(ParseError::More(
-                vsn_offset + 1 - self.buffer.len(),
+                vsn_offset + 1 - buffer.len(),
                 "MQTT version".to_string(),
             ));
         }
 
-        self.mqtt_version = self.buffer[vsn_offset];
+        self.mqtt_version = buffer[vsn_offset];
         Ok(self.mqtt_version)
     }
 
     /// Appends new data from the stream to the internal buffer.
     pub fn feed(&mut self, data: &[u8]) {
+        // Move unread bytes only when at least as many consumed bytes are reclaimed.
+        // This amortizes compaction across packets, even with small repeated feeds.
+        #[cfg(not(feature = "shared-payloads"))]
+        if self.read_offset != 0 && self.read_offset >= self.buffer().len() {
+            self.compact();
+        }
         self.buffer.extend_from_slice(data);
     }
 
@@ -125,14 +138,14 @@ impl MqttParser {
             "MQTT version must be set before parsing packets"
         );
 
-        if self.buffer.is_empty() {
+        if self.buffer().is_empty() {
             return Ok(None);
         }
 
-        let Some(frame_len) = packet_frame_len(&self.buffer)? else {
+        let Some(frame_len) = packet_frame_len(self.buffer())? else {
             return Ok(None);
         };
-        match MqttPacket::from_bytes_with_version(&self.buffer[..frame_len], self.mqtt_version) {
+        match MqttPacket::from_bytes_with_version(&self.buffer()[..frame_len], self.mqtt_version) {
             Ok(ParseOk::Packet(packet, consumed)) => {
                 // A full packet was parsed, advance the buffer
                 self.advance(consumed);
@@ -158,7 +171,7 @@ impl MqttParser {
     /// For Level 0 (`Full`), this is equivalent to wrapping `next_packet()` in `ParsedPacket::Full`.
     /// Higher levels skip progressively more parsing for better throughput.
     pub fn next_parsed(&mut self) -> Result<Option<ParsedPacket>, ParseError> {
-        if self.buffer.is_empty() {
+        if self.buffer().is_empty() {
             return Ok(None);
         }
 
@@ -166,7 +179,7 @@ impl MqttParser {
             ParseLevel::Full => self
                 .next_packet()
                 .map(|packet| packet.map(ParsedPacket::Full)),
-            ParseLevel::TypeOnly => match parse_type_only(&self.buffer) {
+            ParseLevel::TypeOnly => match parse_type_only(self.buffer()) {
                 Ok(LeveledParseOk::Packet(pkt, consumed)) => {
                     self.advance(consumed);
                     Ok(Some(pkt))
@@ -175,7 +188,7 @@ impl MqttParser {
                 Err(e) => Err(e),
             },
             ParseLevel::RawBody => {
-                let total_len = match packet_frame_len(&self.buffer)? {
+                let total_len = match packet_frame_len(self.buffer())? {
                     Some(n) => n,
                     None => return Ok(None),
                 };
@@ -191,7 +204,7 @@ impl MqttParser {
                     self.mqtt_version != 0,
                     "MQTT version must be set before parsing packets"
                 );
-                let total_len = match packet_frame_len(&self.buffer)? {
+                let total_len = match packet_frame_len(self.buffer())? {
                     Some(n) => n,
                     None => return Ok(None),
                 };
@@ -209,7 +222,14 @@ impl MqttParser {
         #[cfg(feature = "shared-payloads")]
         self.buffer.advance(consumed);
         #[cfg(not(feature = "shared-payloads"))]
-        self.buffer.drain(..consumed);
+        {
+            assert!(consumed <= self.buffer().len());
+            self.read_offset += consumed;
+            if self.read_offset == self.buffer.len() {
+                self.buffer.clear();
+                self.read_offset = 0;
+            }
+        }
     }
 
     fn take_frame(&mut self, len: usize) -> Payload {
@@ -219,11 +239,39 @@ impl MqttParser {
         }
         #[cfg(not(feature = "shared-payloads"))]
         {
-            self.buffer.drain(..len).collect()
+            let frame = self.buffer()[..len].to_vec();
+            self.advance(len);
+            frame
         }
     }
 
+    /// Returns the unread bytes without compacting the internal buffer.
+    pub fn buffer(&self) -> &[u8] {
+        #[cfg(feature = "shared-payloads")]
+        {
+            &self.buffer
+        }
+        #[cfg(not(feature = "shared-payloads"))]
+        {
+            &self.buffer[self.read_offset..]
+        }
+    }
+
+    #[cfg(not(feature = "shared-payloads"))]
+    fn compact(&mut self) {
+        if self.read_offset != 0 {
+            let unread_len = self.buffer().len();
+            self.buffer.copy_within(self.read_offset.., 0);
+            self.buffer.truncate(unread_len);
+            self.read_offset = 0;
+        }
+    }
+
+    /// Returns mutable unread storage, compacting consumed bytes first if needed.
+    /// Prefer [`Self::buffer`] for inspection to avoid forcing compaction.
     pub fn buffer_mut(&mut self) -> &mut ParserBuffer {
+        #[cfg(not(feature = "shared-payloads"))]
+        self.compact();
         &mut self.buffer
     }
 }
@@ -303,6 +351,100 @@ mod tests {
     use crate::mqtt_serde::control_packet::{ControlPacketType, MqttControlPacket};
     use crate::mqtt_serde::mqttv5::publishv5;
     use crate::mqtt_serde::parser::leveled::{ParseLevel, ParsedPacket, VariableHeader};
+
+    #[test]
+    fn test_batch_consumption_does_not_move_unread_bytes() {
+        let packets = [0xC0, 0x00].repeat(1024);
+        for level in [
+            ParseLevel::Full,
+            ParseLevel::HeadersParsed,
+            ParseLevel::RawBody,
+            ParseLevel::TypeOnly,
+        ] {
+            let mut parser = MqttParser::with_level(packets.len(), 5, level);
+            parser.feed(&packets);
+            let start = parser.buffer().as_ptr() as usize;
+            for consumed in (0..packets.len()).step_by(2) {
+                // Reading and parsing a packet must not shift the rest of the batch.
+                assert_eq!(parser.buffer().as_ptr() as usize, start + consumed);
+                assert_eq!(parser.buffer(), &packets[consumed..]);
+                let packet = parser.next_parsed().unwrap().unwrap();
+                assert_eq!(packet.packet_type(), ControlPacketType::PINGREQ);
+            }
+            assert!(parser.buffer().is_empty());
+            assert!(parser.next_parsed().unwrap().is_none());
+            parser.feed(&[0xD0, 0x00]);
+            assert_eq!(
+                parser.next_parsed().unwrap().unwrap().packet_type(),
+                ControlPacketType::PINGRESP
+            );
+        }
+    }
+
+    #[test]
+    fn test_fragmented_tail_after_consumed_batch() {
+        for level in [
+            ParseLevel::Full,
+            ParseLevel::HeadersParsed,
+            ParseLevel::RawBody,
+            ParseLevel::TypeOnly,
+        ] {
+            let mut parser = MqttParser::with_level(64, 5, level);
+            // Three complete packets followed by half of the next fixed header.
+            parser.feed(&[0xC0, 0, 0xC0, 0, 0xC0, 0, 0xD0]);
+            for _ in 0..3 {
+                assert!(parser.next_parsed().unwrap().is_some());
+            }
+            assert_eq!(parser.buffer(), &[0xD0]);
+            assert!(parser.next_parsed().unwrap().is_none());
+            parser.feed(&[0, 0xC0, 0]);
+            assert_eq!(parser.buffer(), &[0xD0, 0, 0xC0, 0]);
+            assert_eq!(
+                parser.next_parsed().unwrap().unwrap().packet_type(),
+                ControlPacketType::PINGRESP
+            );
+            assert_eq!(
+                parser.next_parsed().unwrap().unwrap().packet_type(),
+                ControlPacketType::PINGREQ
+            );
+            assert!(parser.buffer().is_empty());
+        }
+    }
+
+    #[test]
+    fn test_mutable_buffer_exposes_only_unread_bytes() {
+        let mut parser = MqttParser::new(64, 5);
+        parser.feed(&[0xC0, 0, 0xD0, 0]);
+        assert!(parser.next_packet().unwrap().is_some());
+        assert_eq!(&parser.buffer_mut()[..], &[0xD0, 0]);
+        parser.buffer_mut().extend_from_slice(&[0xC0, 0]);
+        assert_eq!(parser.buffer(), &[0xD0, 0, 0xC0, 0]);
+        assert!(parser.next_packet().unwrap().is_some());
+        parser.buffer_mut().clear();
+        parser.feed(&[0xD0, 0]);
+        assert_eq!(
+            parser.next_packet().unwrap().unwrap().packet_type(),
+            ControlPacketType::PINGRESP
+        );
+        assert!(parser.buffer().is_empty());
+    }
+
+    #[test]
+    fn test_version_detection_uses_unread_offset() {
+        use crate::mqtt_serde::mqttv5::connect::MqttConnect;
+        let connect = MqttConnect::new("c".to_string(), None, None, None, 60, true, Vec::new());
+        let connect_bytes = connect.to_bytes().unwrap();
+        for offset in [0, 2] {
+            let mut parser = MqttParser::with_level(64, 0, ParseLevel::TypeOnly);
+            parser.feed(&[0xC0, 0]);
+            if offset != 0 {
+                parser.feed(&[0xC0, 0]);
+            }
+            parser.feed(&connect_bytes);
+            assert!(parser.next_parsed().unwrap().is_some());
+            assert_eq!(parser.set_mqtt_vsn(offset).unwrap(), 5);
+        }
+    }
 
     // ── MqttParser construction ────────────────────────────────────────
 
