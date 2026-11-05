@@ -542,7 +542,7 @@ impl<T: TimePoint> MqttEngine<T> {
             return self.take_events();
         }
         if let Some(capacity) = self.options.max_incoming_buffer_bytes {
-            if self.parser.buffer_mut().len().saturating_add(data.len()) > capacity {
+            if self.parser.buffer().len().saturating_add(data.len()) > capacity {
                 self.fail_connection(MqttClientError::BufferFull {
                     buffer_type: "incoming bytes".into(),
                     capacity,
@@ -557,8 +557,7 @@ impl<T: TimePoint> MqttEngine<T> {
             if !self.state.responses.is_empty() || self.state.input_closed {
                 break;
             }
-            if let Err(error) = Self::validate_input_buffer(&self.options, self.parser.buffer_mut())
-            {
+            if let Err(error) = Self::validate_input_buffer(&self.options, self.parser.buffer()) {
                 self.fail_connection(error);
                 break;
             }
@@ -3382,7 +3381,7 @@ impl QuicMqttEngine {
                                                 .max_incoming_buffer_bytes
                                                 .is_some_and(|limit| {
                                                     ds.parser
-                                                        .buffer_mut()
+                                                        .buffer()
                                                         .len()
                                                         .saturating_add(chunk.bytes.len())
                                                         > limit
@@ -3745,7 +3744,7 @@ impl QuicMqttEngine {
             if let Some(ds) = data_streams.get_mut(&stream_id) {
                 if let Err(error) = MqttEngine::<Instant>::validate_input_buffer(
                     mqtt_engine.options(),
-                    ds.parser.buffer_mut(),
+                    ds.parser.buffer(),
                 ) {
                     mqtt_engine.fail_connection(error);
                     events.extend(mqtt_engine.take_events());
@@ -3761,7 +3760,7 @@ impl QuicMqttEngine {
             if let Some(capacity) = mqtt_engine.options.max_outgoing_buffer_bytes {
                 let first = data_streams
                     .get_mut(&stream_id)
-                    .and_then(|ds| ds.parser.buffer_mut().first().copied());
+                    .and_then(|ds| ds.parser.buffer().first().copied());
                 let needs_response = first.is_some_and(|byte| {
                     matches!(byte >> 4, 5 | 6)
                         || (byte >> 4 == 3 && byte & 6 != 0 && mqtt_engine.options.auto_ack)
