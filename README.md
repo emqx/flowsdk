@@ -17,7 +17,7 @@
 - **Same Rust core, same protocol behavior across languages.** Native Rust APIs and foreign function interface (FFI) bindings share the MQTT implementation for validation, QoS, acknowledgements, and session recovery. TCP, TLS, and QUIC use that same core, with lower-level QUIC APIs for stream control.
 - **Test protocol behavior without a network.** Feed bytes and advance time to exercise fragmented input, backpressure, deadlines, and recovery without a live broker. The protocol engine is available independently of the networking client.
 
-The same building blocks also support the workspace's [MQTT/gRPC proxies](mqtt_grpc_duality/) and [io_uring benchmark](mqtt_ring_bench/). FlowSDK is designed to fit messaging into the application architecture you choose.
+The same building blocks also support the workspace's [MQTT/gRPC proxies](mqtt_grpc_duality/) and the standalone `mqtt_ring_bench` io_uring benchmark. FlowSDK is designed to fit messaging into the application architecture you choose.
 
 For an owned-only `no_std + alloc` core, use `default-features = false` and
 `features = ["alloc"]`; it supports targets without pointer atomics. Enable

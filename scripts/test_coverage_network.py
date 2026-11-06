@@ -4,7 +4,6 @@ import asyncio
 import contextlib
 import os
 from pathlib import Path
-import re
 import socket
 import subprocess
 import sys
@@ -113,59 +112,6 @@ class NetworkTests(unittest.IsolatedAsyncioTestCase):
                 (await client.unsubscribe(topic)).raise_for_status()
             finally:
                 await client.disconnect()
-
-    def benchmark_command(self, *extra):
-        return [str(BIN / "mqtt_ring_bench"), "--host", "127.0.0.1",
-            "--port", str(self.port), "--clients", "2", "--messages", "4",
-            "--workers", "1", "--interval", "1", "--ifaddr", "127.0.0.1",
-            "--shutdown-mode", "graceful", *extra]
-
-    def assert_stat(self, output, label, expected):
-        found = re.search(r"^\s*" + re.escape(label) + r":\s*(\d+)\s*$", output, re.M)
-        self.assertIsNotNone(found, output)
-        self.assertEqual(int(found.group(1)), expected, output)
-
-    async def test_benchmark_publishes_all_versions_and_qos(self):
-        for version in (3, 5):
-            for qos in (0, 1, 2):
-                with self.subTest(version=version, qos=qos), process(self.benchmark_command(
-                        "--mqtt-version", str(version), "--qos", str(qos))) as (child, output):
-                    await asyncio.to_thread(child.wait, timeout=20)
-                    output.seek(0)
-                    text = output.read()
-                    self.assertEqual(child.returncode, 0, text)
-                    self.assert_stat(text, "Total Sent", 8)
-                    if qos:
-                        self.assert_stat(text, "Total Acked", 8)
-                    self.assert_stat(text, "Errors", 0)
-
-    async def test_benchmark_receives_subscribed_messages(self):
-        topic = "coverage/bench/" + uuid.uuid4().hex
-        with process(self.benchmark_command("--action", "sub", "--qos", "2",
-                "--topic", topic)) as (child, output):
-            deadline = time.monotonic() + 10
-            while time.monotonic() < deadline:
-                # Read without moving the file offset shared with the child.
-                snapshot = os.pread(output.fileno(), os.fstat(output.fileno()).st_size, 0)
-                if b"Subscribed: 2/2" in snapshot:
-                    break
-                self.assertIsNone(child.poll(), "Subscriber exited early")
-                await asyncio.sleep(0.05)
-            else:
-                self.fail("Benchmark did not subscribe")
-            client = flowsdk.FlowMqttClient(client_id="benchmark-publisher")
-            try:
-                await client.connect("127.0.0.1", self.port)
-                for _ in range(4):
-                    await client.publish(topic, b"delivery", qos=2)
-                await asyncio.to_thread(child.wait, timeout=20)
-            finally:
-                await client.disconnect()
-            output.seek(0)
-            text = output.read()
-            self.assertEqual(child.returncode, 0, text)
-            self.assert_stat(text, "Total Received", 8)
-            self.assert_stat(text, "Errors", 0)
 
 
 if __name__ == "__main__":

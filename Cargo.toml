@@ -12,7 +12,7 @@ categories = ["network-programming", "asynchronous"]
 
 [workspace]
 resolver = "2"
-members = [".", "mqtt_grpc_duality", "flowsdk_ffi", "mqtt_ring_bench"]
+members = [".", "mqtt_grpc_duality", "flowsdk_ffi"]
 exclude = ["fuzz", "release-small", "tests/no_std"]
 
 [dependencies]
