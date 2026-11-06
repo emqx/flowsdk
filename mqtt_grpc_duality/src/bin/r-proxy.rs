@@ -318,7 +318,7 @@ async fn start_streaming_loop(
                             }
 
                             // Continue parsing more packets from the same buffer
-                            if parser.buffer_mut().is_empty() {
+                            if parser.buffer().is_empty() {
                                 break; // No more data to parse, exit inner loop
                             }
                         }
