@@ -2,8 +2,8 @@
 
 The `flowsdk` crate uses [Criterion](https://github.com/criterion-rs/criterion.rs)
 on stable Rust. All six suites run in memory without a broker, sockets, an async
-runtime, or certificates. For broker and connection load testing, see
-[`mqtt_ring_bench`](../mqtt_ring_bench/README.md).
+runtime, or certificates. For broker and connection load testing, use the
+standalone `mqtt_ring_bench` crate, maintained outside this workspace.
 
 ## Run
 

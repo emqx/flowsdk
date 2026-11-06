@@ -251,7 +251,6 @@ jobs:
         cargo build --release --package mqtt-grpc-proxy --target ${{ matrix.target }}
         # Packaging includes every example, including those behind feature gates.
         cargo build --release --package flowsdk --examples --no-default-features --features quic,rustls-tls,durable-session --target ${{ matrix.target }}
-        cargo build --release --package mqtt_ring_bench --features quic --target ${{ matrix.target }}
 
     - name: Create release package (Unix)
       if: runner.os != 'Windows'
@@ -266,7 +265,6 @@ jobs:
           cargo metadata --no-deps --format-version 1 \
             | jq -r '.packages[] | select(.name == "flowsdk") | .targets[] | select(.kind | index("example")) | .name' \
             | xargs -r -I{} cp target/${{ matrix.target }}/release/examples/{} release-package/examples/
-          cp target/${{ matrix.target }}/release/mqtt_ring_bench release-package/
         fi
         tar -czf flowsdk-${{ needs.create-release.outputs.version }}-${{ matrix.asset_name_suffix }}.tar.gz -C release-package .
 

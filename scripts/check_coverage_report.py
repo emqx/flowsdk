@@ -11,7 +11,6 @@ REQUIRED_SOURCES = (
     "src/mqtt_client/no_io_client.rs",
     "flowsdk_ffi/src/engine.rs",
     "mqtt_grpc_duality/src/lib.rs",
-    "mqtt_ring_bench/src/main.rs",
 )
 
 # These explicit-time wrappers are exercised by the separate portable suite.
