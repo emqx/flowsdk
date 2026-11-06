@@ -318,7 +318,7 @@
 <a href=#318 id=318 data-nosnippet>318</a>                            }
 <a href=#319 id=319 data-nosnippet>319</a>
 <a href=#320 id=320 data-nosnippet>320</a>                            <span class="comment">// Continue parsing more packets from the same buffer
-<a href=#321 id=321 data-nosnippet>321</a>                            </span><span class="kw">if </span>parser.buffer_mut().is_empty() {
+<a href=#321 id=321 data-nosnippet>321</a>                            </span><span class="kw">if </span>parser.buffer().is_empty() {
 <a href=#322 id=322 data-nosnippet>322</a>                                <span class="kw">break</span>; <span class="comment">// No more data to parse, exit inner loop
 <a href=#323 id=323 data-nosnippet>323</a>                            </span>}
 <a href=#324 id=324 data-nosnippet>324</a>                        }

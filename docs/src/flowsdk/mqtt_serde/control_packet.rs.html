@@ -435,7 +435,7 @@
 <a href=#435 id=435 data-nosnippet>435</a>            topic_name: <span class="string">"test/topic"</span>.to_string(),
 <a href=#436 id=436 data-nosnippet>436</a>            packet_id: <span class="prelude-val">None</span>,
 <a href=#437 id=437 data-nosnippet>437</a>            properties: Vec::new(),
-<a href=#438 id=438 data-nosnippet>438</a>            payload: Vec::new(),
+<a href=#438 id=438 data-nosnippet>438</a>            payload: Vec::new().into(),
 <a href=#439 id=439 data-nosnippet>439</a>        });
 <a href=#440 id=440 data-nosnippet>440</a>        <span class="macro">assert_eq!</span>(packet.packet_type(), ControlPacketType::PUBLISH);
 <a href=#441 id=441 data-nosnippet>441</a>    }
@@ -589,7 +589,7 @@
 <a href=#589 id=589 data-nosnippet>589</a>            retain: <span class="bool-val">false</span>,
 <a href=#590 id=590 data-nosnippet>590</a>            topic_name: <span class="string">"test/topic"</span>.to_string(),
 <a href=#591 id=591 data-nosnippet>591</a>            message_id: <span class="prelude-val">None</span>,
-<a href=#592 id=592 data-nosnippet>592</a>            payload: Vec::new(),
+<a href=#592 id=592 data-nosnippet>592</a>            payload: Vec::new().into(),
 <a href=#593 id=593 data-nosnippet>593</a>        });
 <a href=#594 id=594 data-nosnippet>594</a>        <span class="macro">assert_eq!</span>(packet.packet_type(), ControlPacketType::PUBLISH);
 <a href=#595 id=595 data-nosnippet>595</a>    }
@@ -722,7 +722,7 @@
 <a href=#722 id=722 data-nosnippet>722</a>            topic_name: <span class="string">"test"</span>.to_string(),
 <a href=#723 id=723 data-nosnippet>723</a>            packet_id: <span class="prelude-val">None</span>,
 <a href=#724 id=724 data-nosnippet>724</a>            properties: Vec::new(),
-<a href=#725 id=725 data-nosnippet>725</a>            payload: Vec::new(),
+<a href=#725 id=725 data-nosnippet>725</a>            payload: Vec::new().into(),
 <a href=#726 id=726 data-nosnippet>726</a>        });
 <a href=#727 id=727 data-nosnippet>727</a>        <span class="kw">let </span>v3 = MqttPacket::Publish3(publishv3::MqttPublish {
 <a href=#728 id=728 data-nosnippet>728</a>            dup: <span class="bool-val">false</span>,
@@ -730,7 +730,7 @@
 <a href=#730 id=730 data-nosnippet>730</a>            retain: <span class="bool-val">false</span>,
 <a href=#731 id=731 data-nosnippet>731</a>            topic_name: <span class="string">"test"</span>.to_string(),
 <a href=#732 id=732 data-nosnippet>732</a>            message_id: <span class="prelude-val">None</span>,
-<a href=#733 id=733 data-nosnippet>733</a>            payload: Vec::new(),
+<a href=#733 id=733 data-nosnippet>733</a>            payload: Vec::new().into(),
 <a href=#734 id=734 data-nosnippet>734</a>        });
 <a href=#735 id=735 data-nosnippet>735</a>        <span class="macro">assert_eq!</span>(v5.packet_type(), v3.packet_type());
 <a href=#736 id=736 data-nosnippet>736</a>    }

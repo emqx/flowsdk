@@ -105,7 +105,7 @@
 <a href=#105 id=105 data-nosnippet>105</a>        <span class="kw">let </span><span class="kw-2">mut </span>publish = MqttPublish::new(<span class="number">0</span>, <span class="string">"test"</span>.to_string(), <span class="prelude-val">None</span>, <span class="macro">vec!</span>[], <span class="bool-val">false</span>, <span class="bool-val">false</span>);
 <a href=#106 id=106 data-nosnippet>106</a>        publish.topic_name = <span class="string">"test"</span>.to_string();
 <a href=#107 id=107 data-nosnippet>107</a>        publish.qos = <span class="number">0</span>;
-<a href=#108 id=108 data-nosnippet>108</a>        publish.payload = <span class="macro">vec!</span>[];
+<a href=#108 id=108 data-nosnippet>108</a>        publish.payload = <span class="macro">vec!</span>[].into();
 <a href=#109 id=109 data-nosnippet>109</a>
 <a href=#110 id=110 data-nosnippet>110</a>        <span class="kw">let </span><span class="kw-2">mut </span>builder = RawPacketBuilder::from_packet(MqttPacket::Publish5(publish))<span class="question-mark">?</span>;
 <a href=#111 id=111 data-nosnippet>111</a>
@@ -137,7 +137,7 @@
 <a href=#137 id=137 data-nosnippet>137</a>        publish.topic_name = <span class="string">"test"</span>.to_string();
 <a href=#138 id=138 data-nosnippet>138</a>        publish.qos = <span class="number">1</span>;
 <a href=#139 id=139 data-nosnippet>139</a>        publish.packet_id = <span class="prelude-val">Some</span>(<span class="number">1</span>);
-<a href=#140 id=140 data-nosnippet>140</a>        publish.payload = <span class="macro">vec!</span>[];
+<a href=#140 id=140 data-nosnippet>140</a>        publish.payload = <span class="macro">vec!</span>[].into();
 <a href=#141 id=141 data-nosnippet>141</a>
 <a href=#142 id=142 data-nosnippet>142</a>        <span class="kw">let </span><span class="kw-2">mut </span>builder = RawPacketBuilder::from_packet(MqttPacket::Publish5(publish))<span class="question-mark">?</span>;
 <a href=#143 id=143 data-nosnippet>143</a>

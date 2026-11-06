@@ -466,7 +466,7 @@
 <a href=#466 id=466 data-nosnippet>466</a>    <span class="kw">fn </span>from(publish: MqttPublish) -&gt; <span class="self">Self </span>{
 <a href=#467 id=467 data-nosnippet>467</a>        mqttv5pb::Publish {
 <a href=#468 id=468 data-nosnippet>468</a>            topic: publish.topic_name,
-<a href=#469 id=469 data-nosnippet>469</a>            payload: publish.payload,
+<a href=#469 id=469 data-nosnippet>469</a>            payload: publish.payload.into(),
 <a href=#470 id=470 data-nosnippet>470</a>            qos: publish.qos <span class="kw">as </span>i32,
 <a href=#471 id=471 data-nosnippet>471</a>            retain: publish.retain,
 <a href=#472 id=472 data-nosnippet>472</a>            dup: publish.dup,
@@ -749,7 +749,7 @@
 <a href=#749 id=749 data-nosnippet>749</a>    <span class="kw">fn </span>from(publish: MqttPublishV3) -&gt; <span class="self">Self </span>{
 <a href=#750 id=750 data-nosnippet>750</a>        mqttv3pb::Publish {
 <a href=#751 id=751 data-nosnippet>751</a>            topic: publish.topic_name,
-<a href=#752 id=752 data-nosnippet>752</a>            payload: publish.payload,
+<a href=#752 id=752 data-nosnippet>752</a>            payload: publish.payload.into(),
 <a href=#753 id=753 data-nosnippet>753</a>            qos: publish.qos <span class="kw">as </span>i32,
 <a href=#754 id=754 data-nosnippet>754</a>            retain: publish.retain,
 <a href=#755 id=755 data-nosnippet>755</a>            dup: publish.dup,
@@ -885,7 +885,7 @@
 <a href=#885 id=885 data-nosnippet>885</a>    <span class="kw">fn </span>from(publish: mqttv3pb::Publish) -&gt; <span class="self">Self </span>{
 <a href=#886 id=886 data-nosnippet>886</a>        MqttPublishV3 {
 <a href=#887 id=887 data-nosnippet>887</a>            topic_name: publish.topic,
-<a href=#888 id=888 data-nosnippet>888</a>            payload: publish.payload,
+<a href=#888 id=888 data-nosnippet>888</a>            payload: publish.payload.into(),
 <a href=#889 id=889 data-nosnippet>889</a>            qos: publish.qos <span class="kw">as </span>u8,
 <a href=#890 id=890 data-nosnippet>890</a>            retain: publish.retain,
 <a href=#891 id=891 data-nosnippet>891</a>            dup: publish.dup,
