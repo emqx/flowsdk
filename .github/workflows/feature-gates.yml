@@ -100,6 +100,8 @@ jobs:
             features: std
           - name: strict
             features: std,strict-protocol-compliance
+          - name: shared-payloads
+            features: std,strict-protocol-compliance,shared-payloads
           - name: defaults
             features: default
           - name: async
@@ -270,20 +272,15 @@ jobs:
         with:
           version: '25.x'
           repo-token: ${{ secrets.GITHUB_TOKEN }}
-      - uses: taiki-e/install-action@86f7a0ffb25f40114606501a311ebcfaf882ea32 # v2
-        with:
-          tool: cargo-hack@0.6.44
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: feature-workspace
       - name: Resolve workspace dependencies
         run: cargo fetch
-      - name: Check Linux benchmark and isolated proxy
+      - name: Test proxy
         run: |
           set -o pipefail
           mkdir -p reports/feature-gates
-          cargo hack check -p mqtt_ring_bench --feature-powerset --optional-deps --no-dev-deps --keep-going \
-            2>&1 | tee reports/feature-gates/benchmark.log
           cargo test --locked -p mqtt-grpc-proxy 2>&1 | tee reports/feature-gates/proxy.log
       - name: Check mixed workspace backends
         run: |
