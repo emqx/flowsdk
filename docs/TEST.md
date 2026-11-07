@@ -71,10 +71,10 @@ new public features automatically enter the sweep.
 The core compile sweep always enables `alloc`, which FlowSDK requires. The contract
 check verifies the diagnostic when both `alloc` and `std` are absent. An isolated
 `tests/no_std` powerset tests portable operation with strict validation, persistence,
-`std`, and portable atomics toggled, without host workspace feature unification.
+`std`, shared payloads, and portable atomics toggled, without host workspace feature unification.
 
 Runtime jobs compile all targets and run library/integration tests under minimal host (`std`),
-strict, default, async-only, individual TLS and QUIC backends, mixed QUIC, persistence,
+strict, shared payloads, default, async-only, individual TLS and QUIC backends, mixed QUIC, persistence,
 and combined transport configurations. Ignored public-broker tests stay in the
 existing integration workflow; transport checks use local fixtures.
 
@@ -97,6 +97,10 @@ artifacts, checks normal dependency graphs, and inspects optional C/UniFFI expor
 Use `--offline` after fetching dependencies. `tests/crypto_provider.rs` runs in a
 separate executable without installing a global Rustls provider, so another test's
 initialization cannot conceal provider-selection failures.
+Local TLS and QUIC fixtures trust their generated certificate and verify its
+loopback IP subject alternative name, keeping certificate verification enabled.
+Dependency contracts also verify that owned `alloc`/`std` builds exclude `bytes`
+and atomic emulation, and that shared payloads do not enable transport dependencies.
 
 `quic-openssl` implies `quic` and selects the fork for the async transport;
 `quic-proto-openssl` implies `quic-proto` and selects the fork for the protocol engine.

@@ -1,4 +1,4 @@
-// SPDX-License-Identifier: MPL-2.0
+// SPDX-License-Identifier: Apache-2.0
 #![cfg(any(feature = "tls", feature = "rustls-tls", feature = "quic"))]
 
 fn identity() -> (
@@ -11,7 +11,10 @@ fn identity() -> (
         hash::MessageDigest,
         nid::Nid,
         pkey::PKey,
-        x509::{X509NameBuilder, X509},
+        x509::{
+            extension::{ExtendedKeyUsage, KeyUsage, SubjectAlternativeName},
+            X509NameBuilder, X509,
+        },
     };
     let key = PKey::from_ec_key(
         EcKey::generate(&EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap()).unwrap(),
@@ -29,6 +32,16 @@ fn identity() -> (
         .unwrap();
     cert.set_not_after(&Asn1Time::days_from_now(1).unwrap())
         .unwrap();
+    cert.append_extension(KeyUsage::new().digital_signature().build().unwrap())
+        .unwrap();
+    cert.append_extension(ExtendedKeyUsage::new().server_auth().build().unwrap())
+        .unwrap();
+    let san = SubjectAlternativeName::new()
+        .dns("localhost")
+        .ip("127.0.0.1")
+        .build(&cert.x509v3_context(None, None))
+        .unwrap();
+    cert.append_extension(san).unwrap();
     cert.sign(&key, MessageDigest::sha256()).unwrap();
     (key, cert.build())
 }
@@ -104,8 +117,9 @@ async fn enabled_tls_backends_exchange_data_with_a_local_server() {
         {
             use flowsdk::mqtt_client::transport::{tls::TlsConfig, TlsTransport};
             let config = TlsConfig::builder()
-                .danger_accept_invalid_certs(true)
-                .danger_accept_invalid_hostnames(true)
+                .add_root_certificate(
+                    native_tls::Certificate::from_der(&cert.to_der().unwrap()).unwrap(),
+                )
                 .build();
             exchange(
                 TlsTransport::connect_with_config(&address, &config)
@@ -118,8 +132,9 @@ async fn enabled_tls_backends_exchange_data_with_a_local_server() {
         {
             use flowsdk::mqtt_client::transport::{RustlsTlsConfig, RustlsTlsTransport};
             let config = RustlsTlsConfig::builder()
-                .danger_accept_invalid_certs(true)
-                .danger_accept_invalid_hostnames(true)
+                .use_system_roots(false)
+                .add_roots_from_pem(&cert.to_pem().unwrap())
+                .unwrap()
                 .build();
             exchange(
                 RustlsTlsTransport::connect_with_config(&address, config)
@@ -192,7 +207,7 @@ async fn quic_handshake_works_without_a_global_provider() {
         let mut transport = QuicTransport::connect_with_config(
             &address.to_string(),
             QuicConfig::builder()
-                .insecure_skip_verify(true)
+                .custom_roots(vec![cert.to_der().unwrap()])
                 .alpn(b"mqtt")
                 .build(),
         )

@@ -65,7 +65,7 @@ def check_rust_apis(directory, offline):
         "protocol-testing": "raw_packet::RawPacketBuilder",
         "durable-session": "ClientSessionState",
     }
-    for features in ["alloc", "arbitrary", *(f"alloc,{feature}" for feature in apis)]:
+    for features in ["alloc", "alloc,shared-payloads", "arbitrary", *(f"alloc,{feature}" for feature in apis)]:
         artifacts, enabled_features = build("flowsdk", features, offline)
         library = next(path for path in artifacts if path.suffix == ".rlib")
         dependencies = library.parent / "deps"
@@ -134,8 +134,9 @@ def main():
     if not missing_alloc.returncode or "FlowSDK requires the alloc or std feature" not in missing_alloc.stderr:
         raise RuntimeError(f"Expected the missing-alloc diagnostic:\n{missing_alloc.stderr}")
     core_only = transports | {"tonic", "prost", "tonic-prost", "tokio", "async-trait", "thiserror"}
-    check_dependencies("flowsdk", "alloc", core_only | {"serde_json"}, args.offline)
-    check_dependencies("flowsdk", "std", core_only, args.offline)
+    check_dependencies("flowsdk", "alloc", core_only | {"serde_json", "bytes", "portable-atomic", "critical-section"}, args.offline)
+    check_dependencies("flowsdk", "std", core_only | {"bytes", "portable-atomic", "critical-section"}, args.offline)
+    check_dependencies("flowsdk", "alloc,shared-payloads", core_only | {"serde_json", "portable-atomic", "critical-section"}, args.offline)
     check_dependencies("flowsdk", "default", {"quinn", "quinn-proto", "rustls", "tokio-rustls"}, args.offline)
     check_dependencies("flowsdk_ffi", "", transports | {"uniffi", "uniffi_macros"}, args.offline)
     with tempfile.TemporaryDirectory(prefix="flowsdk-feature-contracts-") as temporary:
