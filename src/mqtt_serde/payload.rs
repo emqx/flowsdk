@@ -24,12 +24,18 @@ pub(crate) fn serialize<S: Serializer>(
 }
 
 pub(crate) fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Payload, D::Error> {
-    Vec::<u8>::deserialize(deserializer).map(Payload::from)
+    let payload = Vec::<u8>::deserialize(deserializer)?;
+    #[cfg(feature = "shared-payloads")]
+    let payload = Payload::from(payload);
+    Ok(payload)
 }
 
 #[cfg(feature = "arbitrary")]
 pub(crate) fn arbitrary(u: &mut arbitrary::Unstructured<'_>) -> arbitrary::Result<Payload> {
-    u.arbitrary::<Vec<u8>>().map(Payload::from)
+    let payload = u.arbitrary::<Vec<u8>>()?;
+    #[cfg(feature = "shared-payloads")]
+    let payload = Payload::from(payload);
+    Ok(payload)
 }
 
 /// Retain a range of a consumed frame. Shared storage keeps a view; owned
