@@ -376,6 +376,8 @@ fn map_event(event: MqttEvent) -> Option<MqttEventFFI> {
         MqttEvent::MessageReceived(msg) => Some(MqttEventFFI::MessageReceived(MqttMessageFFI {
             stream_id: None,
             topic: msg.topic_name,
+            // Payload becomes Bytes when flowsdk/shared-payloads is enabled.
+            #[allow(clippy::useless_conversion)]
             payload: msg.payload.into(),
             qos: msg.qos,
             retain: msg.retain,

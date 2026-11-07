@@ -32,6 +32,7 @@ use flowsdk::mqtt_serde::mqttv5::suback::MqttSubAck;
 use flowsdk::mqtt_serde::mqttv5::subscribe::MqttSubscribe;
 use flowsdk::mqtt_serde::mqttv5::unsuback::MqttUnsubAck;
 use flowsdk::mqtt_serde::mqttv5::unsubscribe::MqttUnsubscribe;
+use flowsdk::mqtt_serde::Payload;
 
 // MQTT v3 imports
 use flowsdk::mqtt_serde::mqttv3::connack::MqttConnAck as MqttConnAckV3;
@@ -466,6 +467,8 @@ impl From<MqttPublish> for mqttv5pb::Publish {
     fn from(publish: MqttPublish) -> Self {
         mqttv5pb::Publish {
             topic: publish.topic_name,
+            // Payload becomes Bytes when flowsdk/shared-payloads is enabled.
+            #[allow(clippy::useless_conversion)]
             payload: publish.payload.into(),
             qos: publish.qos as i32,
             retain: publish.retain,
@@ -749,6 +752,8 @@ impl From<MqttPublishV3> for mqttv3pb::Publish {
     fn from(publish: MqttPublishV3) -> Self {
         mqttv3pb::Publish {
             topic: publish.topic_name,
+            // Payload becomes Bytes when flowsdk/shared-payloads is enabled.
+            #[allow(clippy::useless_conversion)]
             payload: publish.payload.into(),
             qos: publish.qos as i32,
             retain: publish.retain,
@@ -885,7 +890,7 @@ impl From<mqttv3pb::Publish> for MqttPublishV3 {
     fn from(publish: mqttv3pb::Publish) -> Self {
         MqttPublishV3 {
             topic_name: publish.topic,
-            payload: publish.payload.into(),
+            payload: Payload::from(publish.payload),
             qos: publish.qos as u8,
             retain: publish.retain,
             dup: publish.dup,
