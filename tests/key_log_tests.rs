@@ -53,11 +53,6 @@ fn rustls_tls_config_enable_key_log() {
 #[cfg(feature = "rustls-tls")]
 #[test]
 fn rustls_tls_config_key_log_builds_client_config() {
-    // rustls-tls enables this provider through tokio-rustls; ring is optional.
-    rustls::crypto::aws_lc_rs::default_provider()
-        .install_default()
-        .ok();
-
     use flowsdk::mqtt_client::transport::RustlsTlsConfig;
 
     let cfg = RustlsTlsConfig::builder()

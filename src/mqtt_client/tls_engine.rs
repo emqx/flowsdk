@@ -238,7 +238,6 @@ impl TlsMqttEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rustls::RootCertStore;
 
     #[test]
     fn test_tls_engine_creation() {
@@ -246,16 +245,12 @@ mod tests {
             .client_id("test_client")
             .build();
 
-        // rustls-tls enables tokio-rustls's aws-lc provider. Select it explicitly
-        // for this test without changing the process-global provider; other
-        // features may also enable ring. No handshake or platform roots are needed.
-        let config = ClientConfig::builder_with_provider(Arc::new(
-            rustls::crypto::aws_lc_rs::default_provider(),
-        ))
-        .with_safe_default_protocol_versions()
-        .unwrap()
-        .with_root_certificates(RootCertStore::empty())
-        .with_no_client_auth();
+        // No handshake or platform roots are needed to test engine construction.
+        let config = super::super::transport::RustlsTlsConfig::builder()
+            .use_system_roots(false)
+            .build()
+            .to_client_config()
+            .unwrap();
 
         let engine = TlsMqttEngine::new(options, "localhost", Arc::new(config));
         assert!(engine.is_ok());

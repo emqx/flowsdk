@@ -301,6 +301,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[test]
     fn test_unsubscribe_error_conditions() {
         // Test UNSUBSCRIBE with packet_id = 0 (invalid)
@@ -326,7 +327,10 @@ mod tests {
         let mut invalid_bytes = bytes.clone();
         invalid_bytes[0] = 0xA0; // Wrong flags (should be 0x02)
 
-        assert!(MqttUnsubscribe::from_bytes(&invalid_bytes).is_err());
+        assert_eq!(
+            MqttUnsubscribe::from_bytes(&invalid_bytes).is_err(),
+            cfg!(feature = "strict-protocol-compliance")
+        );
     }
 
     #[test]

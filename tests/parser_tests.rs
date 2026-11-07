@@ -404,16 +404,17 @@ mod mqttv3_stream_tests {
 
 // Error handling and edge cases
 #[test]
-#[cfg(feature = "strict-protocol-compliance")]
 fn test_parser_with_malformed_data() {
     let mut parser = MqttParser::new(1024, 5);
 
-    // Feed malformed packet (invalid packet type)
+    // AUTH packet with reserved flags, rejected when strict validation is enabled.
     let malformed_data = vec![0xff, 0x02, 0x00, 0x00];
     parser.feed(&malformed_data);
 
-    // Should return error
-    assert!(parser.next_packet().is_err());
+    assert_eq!(
+        parser.next_packet().is_err(),
+        cfg!(feature = "strict-protocol-compliance")
+    );
 }
 
 #[test]

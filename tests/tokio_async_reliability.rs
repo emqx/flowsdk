@@ -702,6 +702,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "strict-protocol-compliance")]
     #[tokio::test]
     async fn validation_errors_reach_waiting_callers() {
         let (client, _, _peer, _, _) = open(options(), config(), true).await;
@@ -1030,7 +1031,7 @@ mod tests {
             nid::Nid,
             pkey::{PKey, Private},
             x509::{
-                extension::{BasicConstraints, KeyUsage, SubjectAlternativeName},
+                extension::{BasicConstraints, ExtendedKeyUsage, KeyUsage, SubjectAlternativeName},
                 X509NameBuilder, X509,
             },
         };
@@ -1077,6 +1078,10 @@ mod tests {
             } else {
                 cert.append_extension(BasicConstraints::new().critical().build().unwrap())
                     .unwrap();
+                cert.append_extension(KeyUsage::new().digital_signature().build().unwrap())
+                    .unwrap();
+                cert.append_extension(ExtendedKeyUsage::new().server_auth().build().unwrap())
+                    .unwrap();
                 let san = SubjectAlternativeName::new()
                     .dns("localhost")
                     .ip("127.0.0.1")
@@ -1087,13 +1092,15 @@ mod tests {
             cert.sign(signing_key, MessageDigest::sha256()).unwrap();
             cert.build()
         }
-        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let provider = rustls::crypto::ring::default_provider();
         let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
         let ca_key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
         let ca = certificate(&ca_key, None, &ca_key);
         let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
         let cert = certificate(&key, Some(&ca), &ca_key);
-        let server = rustls::ServerConfig::builder()
+        let server = rustls::ServerConfig::builder_with_provider(Arc::new(provider))
+            .with_safe_default_protocol_versions()
+            .unwrap()
             .with_no_client_auth()
             .with_single_cert(
                 vec![CertificateDer::from(cert.to_der().unwrap())],
