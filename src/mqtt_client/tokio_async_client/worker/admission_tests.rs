@@ -85,6 +85,7 @@ async fn connected_worker(
     let client = TokioAsyncMqttClient {
         command_tx,
         admission_tx,
+        admission_budget: None,
         _config: config,
         worker: tokio::spawn(async { Ok(()) }),
     };
@@ -261,7 +262,9 @@ async fn cancelling_response_after_enqueue_does_not_retract_publish() {
         }
         // Dropping the future closes only its response receiver.
     };
-    assert!(command.response_tx.is_closed());
+    assert!(
+        matches!(&command, PublishAdmission::Single { response_tx, .. } if response_tx.is_closed())
+    );
     worker.admit(command);
     assert!(!worker.engine.take_outgoing().is_empty());
     assert!(worker.pending.publish.is_empty());
@@ -493,13 +496,14 @@ async fn shutdown_closes_admission_lane_and_rejects_queued_requests() {
     let (response_tx, response_rx) = oneshot::channel();
     client
         .admission_tx
-        .send(PublishAdmission {
+        .send(PublishAdmission::Single {
             command: PublishCommand::simple("out", vec![1], 0, false),
             response_tx,
+            _permit: None,
         })
         .await
         .unwrap();
-    worker.close_admissions();
+    worker.close_admissions().await.unwrap();
     assert!(matches!(
         response_rx.await.unwrap(),
         Err(MqttClientError::OperationCancelled { .. })

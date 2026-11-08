@@ -761,6 +761,133 @@ times out or drops the future after enqueueing, the publish can still proceed;
 do not retry on the assumption that cancellation retracted it. Shutdown closes
 the admission queue and rejects requests that have not yet been admitted.
 
+#### `publish_batch_admitted()` - Bounded Local Admission
+
+```rust
+pub async fn publish_batch_admitted(
+    &self,
+    commands: Vec<PublishCommand>,
+) -> Result<PublishBatchAdmission, PublishBatchAdmissionError>;
+```
+
+This submits independent MQTT PUBLISH commands in one admission request and
+receives one report. It does not merge payloads or application records. Each
+publication still undergoes the normal engine validation, encoding, queue,
+packet-identifier and negotiated-capability checks.
+
+Enable the API with explicit budgets before creating the client:
+
+```rust
+use flowsdk::mqtt_client::{PublishAdmissionConfig, TokioAsyncClientConfig};
+
+let config = TokioAsyncClientConfig::builder()
+    .publish_admission(PublishAdmissionConfig {
+        max_batch_messages: 32,
+        max_batch_bytes: 256 * 1024,
+        max_pending_messages: 128,
+        max_pending_bytes: 4 * 1024 * 1024,
+    })
+    .build();
+```
+
+All limits must be nonzero, and each maximum batch must fit the corresponding
+pending limit. Invalid configuration fails client creation before spawning its
+worker. `publish_admission: None` (the default) preserves the existing single
+admission behavior and rejects nonempty batches before submission. Empty batches
+always return an empty report locally.
+
+```rust
+use flowsdk::mqtt_client::{
+    PublishCommand, PublishBatchAdmissionError, TokioAsyncMqttClient,
+};
+
+async fn submit(client: &TokioAsyncMqttClient) -> Result<(), PublishBatchAdmissionError> {
+    let report = client.publish_batch_admitted(vec![
+        PublishCommand::simple("telemetry/a", vec![1, 2], 0, false),
+        PublishCommand::simple("telemetry/b", vec![3, 4], 1, false),
+    ]).await?;
+
+    for (index, result) in report.results.into_iter().enumerate() {
+        match result {
+            Ok(id) => println!("item {index} admitted, packet ID {id:?}"),
+            Err(error) => println!("item {index} not admitted: {error}"),
+        }
+    }
+    Ok(())
+}
+```
+
+`PublishBatchAdmission::results` has exactly one entry per input command, in
+input order. `Ok(None)` admits QoS 0 and `Ok(Some(id))` admits QoS 1/2. An inner
+error means that item was not admitted. The outer `Ok(report)` can contain any
+mix of accepted and rejected items, including only rejections. Local rejections
+are not duplicated as generic error callbacks.
+
+Processing is sequential and nontransactional. Earlier successes can consume
+capacity, reserve IDs, or establish topic aliases used by later items. An error
+neither rolls back earlier items nor skips later ones. There is no wait for
+socket I/O, broker ACKs or engine capacity between items; capacity failures are
+reported per item. Consequently a batch can encounter capacity failures that
+individual calls separated by socket progress would avoid. Acceptance is still
+local admission, not a write or broker-delivery guarantee.
+
+Single and batch requests share one FIFO admission lane, beginning at channel
+enqueue. Callers competing for budget credits have no FIFO reservation guarantee.
+A batch is one bounded, synchronous worker turn, so another admission or shutdown cannot interleave with
+its items. The worker returns to its scheduling loop after that request. This
+adds no ordering guarantee with the legacy command channel or over MQTT priority
+and replay scheduling. An accepted prefix of a batch is not rolled back.
+
+When configured, single and batch requests share pending count/byte credits.
+A batch reserves both dimensions together before obtaining a channel slot.
+Temporary exhaustion waits asynchronously; a request larger than its applicable
+limit fails before enqueueing. Cancellation releases any reservation. Channel
+closure wakes callers waiting for credits. A single publication is subject to
+pending limits, not the smaller per-batch limits. `command_queue_size` continues
+to bound request envelopes independently.
+
+Logical bytes are `size_of::<PublishCommand>()` per command, visible payload and
+topic bytes, `size_of::<Property>()` per property, and each property's dynamic
+string/binary contents. Accounting uses checked arithmetic and does not encode
+or copy payloads. Credits cover requests that have reserved capacity, including
+those waiting for a channel slot, queued requests, and the active request. They
+are released when processing finishes or a request is dropped. They do not bound
+caller-owned futures still waiting to reserve credits, result storage, spare
+allocation capacity, or the backing allocation retained by a small `Bytes` slice.
+Engine queues, inflight payloads and extracted transport buffers need their own
+limits; the admission budget is not a total-process-memory bound.
+
+`PublishBatchAdmissionError` distinguishes:
+
+* `NotSubmitted { error, commands }`: no item entered the admission channel; all
+  original commands are returned unchanged, including their payload ownership.
+* `OutcomeUnknown { error }`: the request entered the channel, but its report was
+  lost. Any subset may have been accepted. Retrying the entire batch can duplicate
+  publications.
+
+There is no implicit timeout. Dropping the caller future after enqueueing does
+not retract its publications, and a caller timeout cannot establish that nothing
+was submitted. Graceful shutdown rejects queued unprocessed batches with one
+`OperationCancelled` result per command. Closing drains outstanding channel
+reservations as well as already-enqueued requests, bounded by
+`default_operation_timeout_ms`. A stalled reservation can time out; transport
+cleanup still runs, but reports lost on timeout or abrupt termination have unknown
+outcomes.
+Per-item engine errors consume their commands, matching single admission; retain
+application retry state when needed. The `shared-payloads` feature makes retaining
+payload handles inexpensive without changing wire-encoding copies.
+
+The same batch path remains available while an event callback is backpressured.
+It performs no socket I/O or recursive callbacks there. A known failed transport
+rejects admission, and newly admitted output waits for callback completion before
+normal draining. Batch admission alone does not remove that transport constraint.
+
+The API and its budgets are gated by `async-client`; owned-only `no_std + alloc`
+continues to use the sans-I/O engine without Tokio or atomics. No sans-I/O batch
+helper is needed: call its synchronous `publish()` repeatedly before draining
+output. Applications such as VeloFlux must collect multiple pending deliveries to
+benefit; calling this method with one item preserves the per-request roundtrip.
+
 #### Sharing Existing Payload Buffers (0.8)
 
 Enable `flowsdk`'s `shared-payloads` Cargo feature to use this API. Without it,

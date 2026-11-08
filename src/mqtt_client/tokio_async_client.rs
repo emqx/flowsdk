@@ -30,7 +30,10 @@ use super::engine::{MqttEngine, MqttEvent, MqttMessage};
 use super::error::MqttClientError;
 use super::opts::MqttClientOptions;
 
+mod admission;
 mod worker;
+use admission::{AdmissionBudget, AdmissionPermit, PublishAdmission};
+pub use admission::{PublishAdmissionConfig, PublishBatchAdmission, PublishBatchAdmissionError};
 use worker::TokioClientWorker;
 
 type Response<T> = oneshot::Sender<Result<T, MqttClientError>>;
@@ -313,14 +316,6 @@ enum TokioClientCommand {
     SendPacket(MqttPacket),
 }
 
-/// A separate bounded lane keeps local publish admission available when event
-/// delivery backpressures the worker. It never waits for transport I/O or an ACK.
-#[derive(Debug)]
-struct PublishAdmission {
-    command: PublishCommand,
-    response_tx: Response<Option<u16>>,
-}
-
 /// Configuration for the tokio async client
 #[derive(Debug, Clone)]
 pub struct TokioAsyncClientConfig {
@@ -333,6 +328,9 @@ pub struct TokioAsyncClientConfig {
     pub max_reconnect_attempts: u32,
     /// Capacity of each independent legacy-command and local-admission queue.
     pub command_queue_size: usize,
+    /// Optional count/byte budgets for local admission and batch publishing.
+    /// None preserves the original single-admission behavior and disables batches.
+    pub publish_admission: Option<PublishAdmissionConfig>,
     /// Enable buffering of messages during disconnection
     pub buffer_messages: bool,
     /// Maximum size of message buffer
@@ -410,6 +408,7 @@ impl Default for TokioAsyncClientConfig {
             max_reconnect_delay_ms: 30000,
             max_reconnect_attempts: 0, // infinite
             command_queue_size: 1000,
+            publish_admission: None,
             buffer_messages: true,
             max_buffer_size: 1000,
             tcp_nodelay: true,
@@ -604,6 +603,12 @@ impl ConfigBuilder {
     /// Set queue size for pending commands
     pub fn command_queue_size(mut self, size: usize) -> Self {
         self.config.command_queue_size = size;
+        self
+    }
+
+    /// Enable bounded single/batch local admission with explicit input budgets.
+    pub fn publish_admission(mut self, limits: PublishAdmissionConfig) -> Self {
+        self.config.publish_admission = Some(limits);
         self
     }
 
@@ -960,6 +965,7 @@ pub struct TokioAsyncMqttClient {
     /// Command sender to worker task
     command_tx: mpsc::Sender<TokioClientCommand>,
     admission_tx: mpsc::Sender<PublishAdmission>,
+    admission_budget: Option<std::sync::Arc<AdmissionBudget>>,
     /// Client configuration
     _config: TokioAsyncClientConfig,
     worker: tokio::task::JoinHandle<Result<(), MqttClientError>>,
@@ -979,6 +985,8 @@ impl TokioAsyncMqttClient {
         let (command_tx, command_rx) = mpsc::channel(config.command_queue_size);
         let (admission_tx, admission_rx) = mpsc::channel(config.command_queue_size);
 
+        let admission_budget = config.publish_admission.clone().map(AdmissionBudget::new);
+
         // Spawn the worker task
         let worker = TokioClientWorker::new(
             mqtt_options,
@@ -992,6 +1000,7 @@ impl TokioAsyncMqttClient {
         Ok(TokioAsyncMqttClient {
             command_tx,
             admission_tx,
+            admission_budget,
             _config: config,
             worker,
         })
@@ -1146,17 +1155,112 @@ impl TokioAsyncMqttClient {
         &self,
         command: PublishCommand,
     ) -> Result<Option<u16>, MqttClientError> {
+        let permit = if self.admission_budget.is_some() {
+            self.reserve_admission(1, admission::command_bytes(&command)?)
+                .await?
+        } else {
+            None
+        };
         let (response_tx, response_rx) = oneshot::channel();
         self.admission_tx
-            .send(PublishAdmission {
+            .send(PublishAdmission::Single {
                 command,
                 response_tx,
+                _permit: permit,
             })
             .await
-            .map_err(|_| MqttClientError::ChannelClosed {
-                channel: "async client admission".into(),
-            })?;
+            .map_err(|_| admission::channel_closed())?;
         receive_response(response_rx).await
+    }
+
+    /// Admit several independent MQTT publications using one request and reply.
+    ///
+    /// Requires [`TokioAsyncClientConfig::publish_admission`] for nonempty batches.
+    /// Empty input succeeds locally. Results have exactly the input length and
+    /// order; inspect every item because acceptance is partial, not transactional.
+    /// Accepted commands can affect later commands' aliases, IDs and capacity.
+    /// Each rejection is local to that item and does not emit a duplicate error.
+    ///
+    /// Success means engine admission, not a socket write or broker ACK. The
+    /// worker never waits for engine capacity between items. A batch can therefore
+    /// encounter capacity errors that separate calls with intervening I/O do not.
+    /// Admission requests share one FIFO lane, but ordinary commands and MQTT
+    /// priority/replay scheduling have no additional ordering guarantee.
+    ///
+    /// Count and logical-byte credits bound reserved/queued/active requests, not commands
+    /// held in caller futures waiting for credits. Oversized requests fail before
+    /// submission and return the original commands. Shared payloads are moved,
+    /// never cloned into replacement storage by this operation.
+    ///
+    /// There is no implicit timeout. Dropping the future after enqueueing does
+    /// not cancel publications. A lost response yields `OutcomeUnknown`; a caller
+    /// timeout also cannot prove non-submission. Do not retry an entire uncertain
+    /// or partially accepted batch. Per-item rejections consume their commands.
+    pub async fn publish_batch_admitted(
+        &self,
+        commands: Vec<PublishCommand>,
+    ) -> Result<PublishBatchAdmission, PublishBatchAdmissionError> {
+        if commands.is_empty() {
+            return Ok(PublishBatchAdmission {
+                results: Vec::new(),
+            });
+        }
+        let bytes = self
+            ._config
+            .publish_admission
+            .as_ref()
+            .ok_or_else(|| MqttClientError::InvalidConfiguration {
+                field: "publish_admission".into(),
+                reason: "Batch admission requires explicit count and byte limits".into(),
+            })
+            .and_then(|limits| admission::batch_bytes(&commands, limits));
+        let bytes = match bytes {
+            Ok(bytes) => bytes,
+            Err(error) => return Err(PublishBatchAdmissionError::NotSubmitted { error, commands }),
+        };
+        let permit = match self.reserve_admission(commands.len(), bytes).await {
+            Ok(permit) => permit,
+            Err(error) => return Err(PublishBatchAdmissionError::NotSubmitted { error, commands }),
+        };
+        // Reserve a channel slot while ownership remains here: cancellation or
+        // channel closure before send cannot partially submit a batch.
+        let slot = match self.admission_tx.reserve().await {
+            Ok(slot) => slot,
+            Err(_) => {
+                return Err(PublishBatchAdmissionError::NotSubmitted {
+                    error: admission::channel_closed(),
+                    commands,
+                })
+            }
+        };
+        let (response_tx, response_rx) = oneshot::channel();
+        slot.send(PublishAdmission::Batch {
+            commands,
+            response_tx,
+            _permit: permit,
+        });
+        response_rx
+            .await
+            .map_err(|_| PublishBatchAdmissionError::OutcomeUnknown {
+                error: MqttClientError::ChannelClosed {
+                    channel: "async client batch admission response".into(),
+                },
+            })
+    }
+
+    async fn reserve_admission(
+        &self,
+        messages: usize,
+        bytes: usize,
+    ) -> Result<Option<AdmissionPermit>, MqttClientError> {
+        let Some(budget) = &self.admission_budget else {
+            return Ok(None);
+        };
+        tokio::select! {
+            biased;
+            _ = self.admission_tx.closed() => Err(admission::channel_closed()),
+            permit = budget.reserve(messages, bytes) => permit.map(Some),
+        }
     }
 
     /// Publish a message and wait for acknowledgment (QoS 1 = PUBACK, QoS 2 = PUBCOMP)
@@ -1410,7 +1514,9 @@ impl TokioAsyncMqttClient {
     }
 
     /// Attempt graceful disconnect and wait for the worker to terminate.
-    /// Transport I/O remains bounded by `default_operation_timeout_ms`.
+    /// Admission draining and each transport I/O operation are bounded by
+    /// `default_operation_timeout_ms`. A stalled admission sender can time out;
+    /// transport cleanup still runs, but its batch response may become unknown.
     pub async fn shutdown(self) -> io::Result<()> {
         let _ = self.send_command(TokioClientCommand::Shutdown).await;
         self.worker

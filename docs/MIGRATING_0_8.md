@@ -7,6 +7,27 @@ the MQTT 5 publish type used by receive callbacks. Shared mode clones handles
 through commands, packets, inflight state, and in-memory session checkpoints;
 owned mode clones independent vectors.
 
+## Optional batch admission configuration
+
+The Tokio client adds `publish_batch_admitted`, `PublishAdmissionConfig`,
+`PublishBatchAdmission`, and `PublishBatchAdmissionError`, re-exported from
+`flowsdk::mqtt_client` when `async-client` is enabled. Configure explicit message
+and logical-byte limits using `TokioAsyncClientConfig::builder().publish_admission(...)`.
+See the [batch admission contract](TOKIO_ASYNC_CLIENT_API_GUIDE.md#publish_batch_admitted---bounded-local-admission)
+for partial results, cancellation, ordering, and memory-accounting limits.
+
+`TokioAsyncClientConfig` has a new public field:
+
+```rust
+pub publish_admission: Option<PublishAdmissionConfig>
+```
+
+Its default is `None`, preserving single-publication admission behavior and
+disabling nonempty batches. Exhaustive config literals must add
+`publish_admission: None`; literals using `..Default::default()` and the builder
+need no compatibility update. This is a Rust source-compatibility change for
+exhaustive literals, not a new requirement on the sans-I/O/no_std core.
+
 ## Select the storage configuration
 
 An owned-only `no_std + alloc` application can use:

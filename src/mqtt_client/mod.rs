@@ -45,6 +45,7 @@ pub use opts::{MqttClientOptions, MqttClientOptionsBuilder, OperationTimeouts};
 pub use tls_engine::TlsMqttEngine;
 #[cfg(feature = "async-client")]
 pub use tokio_async_client::{
+    PublishAdmissionConfig, PublishBatchAdmission, PublishBatchAdmissionError,
     TokioAsyncClientConfig, TokioAsyncMqttClient, TokioMqttEvent, TokioMqttEventHandler,
 };
 #[cfg(feature = "quic")]
