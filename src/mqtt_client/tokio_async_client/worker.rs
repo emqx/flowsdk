@@ -223,6 +223,10 @@ pub(super) fn resolve_options(
     options: &mut MqttClientOptions,
     config: &TokioAsyncClientConfig,
 ) -> Result<(), MqttClientError> {
+    if let Some(limits) = &config.publish_admission {
+        limits.validate()?;
+    }
+
     if config.command_queue_size == 0 || config.default_operation_timeout_ms == 0 {
         return Err(invalid(
             "async configuration",
@@ -415,8 +419,10 @@ impl TokioClientWorker {
                     match command {
                         Some(TokioClientCommand::Shutdown) | None => {
                             self.command_rx.close();
-                            self.close_admissions();
-                            let result = self.disconnect(0, Vec::new()).await;
+                            let admission_result = self.close_admissions().await;
+                            // Even a stalled sender must not skip transport cleanup.
+                            let disconnect_result = self.disconnect(0, Vec::new()).await;
+                            let result = admission_result.and(disconnect_result);
                             if let Err(error) = &result {
                                 self.engine.set_reconnect(false);
                                 self.connecting = None;
@@ -699,17 +705,13 @@ impl TokioClientWorker {
                             // active callback's order and leave new engine events
                             // for the next normal outgoing/event drain.
                             self.admission_needs_drain = true;
-                            let result = if self.admission_transport_failed {
-                                Err(MqttClientError::NotConnected)
-                            } else {
-                                publish_command(
-                                    &mut self.engine,
-                                    &self.config,
-                                    self.intentional_stop,
-                                    request.command,
-                                )
-                            };
-                            let _ = request.response_tx.send(result);
+                            admit_request(
+                                &mut self.engine,
+                                &self.config,
+                                self.intentional_stop,
+                                self.admission_transport_failed,
+                                request,
+                            );
                         }
                         None => self.admission_open = false,
                     }
@@ -720,19 +722,34 @@ impl TokioClientWorker {
 
     fn admit(&mut self, request: PublishAdmission) {
         // Dropping the response does not retract an already queued publication.
-        let _ = request.response_tx.send(self.publish(request.command));
+        admit_request(
+            &mut self.engine,
+            &self.config,
+            self.intentional_stop,
+            self.admission_transport_failed,
+            request,
+        );
     }
 
-    fn close_admissions(&mut self) {
+    async fn close_admissions(&mut self) -> Result<(), MqttClientError> {
         self.admission_rx.close();
         self.admission_open = false;
-        while let Ok(request) = self.admission_rx.try_recv() {
-            let _ = request
-                .response_tx
-                .send(Err(MqttClientError::OperationCancelled {
+        let duration = self.config.default_operation_timeout_ms;
+        // Closing prevents new reservations, but an outstanding mpsc Permit can
+        // still enqueue. recv() reaches None only after all such permits have
+        // sent or dropped; try_recv() could miss a concurrently submitting batch.
+        tokio::time::timeout(Duration::from_millis(duration), async {
+            while let Some(request) = self.admission_rx.recv().await {
+                request.reject(MqttClientError::OperationCancelled {
                     operation: "publish admission during shutdown".into(),
-                }));
-        }
+                });
+            }
+        })
+        .await
+        .map_err(|_| MqttClientError::OperationTimeout {
+            operation: "publish admission shutdown".into(),
+            timeout_ms: duration,
+        })
     }
 
     async fn write_output(&mut self) -> Result<(), MqttClientError> {
@@ -1028,6 +1045,22 @@ impl TokioClientWorker {
     }
 }
 
+fn admit_request(
+    engine: &mut MqttEngine,
+    config: &TokioAsyncClientConfig,
+    intentional_stop: bool,
+    transport_failed: bool,
+    request: PublishAdmission,
+) {
+    request.respond(|command| {
+        if transport_failed {
+            Err(MqttClientError::NotConnected)
+        } else {
+            publish_command(engine, config, intentional_stop, command)
+        }
+    });
+}
+
 fn publish_command(
     engine: &mut MqttEngine,
     config: &TokioAsyncClientConfig,
@@ -1059,6 +1092,9 @@ mod payload_tests;
 
 #[cfg(test)]
 mod admission_tests;
+
+#[cfg(test)]
+mod batch_admission_tests;
 
 #[cfg(test)]
 pub(super) mod test_support;

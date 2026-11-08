@@ -30,14 +30,18 @@ async fn shared_payload_command_and_admission_channels_keep_the_same_buffer() {
                 if admission {
                     let (tx, rx) = mpsc::channel(1);
                     worker.admission_rx = rx;
-                    tx.send(PublishAdmission {
+                    tx.send(PublishAdmission::Single {
                         command,
                         response_tx,
+                        _permit: None,
                     })
                     .await
                     .unwrap();
                     let request = worker.admission_rx.recv().await.unwrap();
-                    assert_eq!(request.command.payload.as_ptr(), application.as_ptr());
+                    let PublishAdmission::Single { command, .. } = &request else {
+                        unreachable!()
+                    };
+                    assert_eq!(command.payload.as_ptr(), application.as_ptr());
                     worker.admit(request);
                     assert_eq!(response_rx.await.unwrap().unwrap().is_some(), qos > 0);
                 } else {
@@ -119,9 +123,10 @@ async fn shared_payload_shutdown_drops_inflight_queued_and_unread_commands() {
         if !full_output {
             let (payload, weak) = tracked_payload(4096);
             admissions
-                .send(PublishAdmission {
+                .send(PublishAdmission::Single {
                     command: PublishCommand::from_bytes("unread", payload, 1, false),
                     response_tx,
+                    _permit: None,
                 })
                 .await
                 .unwrap();
