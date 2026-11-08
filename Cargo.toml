@@ -142,6 +142,11 @@ name = "shared_payload"
 harness = false
 required-features = ["std", "shared-payloads"]
 
+[[bench]]
+name = "publish_admission"
+harness = false
+required-features = ["async-client"]
+
 [[example]]
 name = "durable_session"
 required-features = ["std", "durable-session"]
