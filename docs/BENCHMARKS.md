@@ -1,9 +1,11 @@
 # Microbenchmarks
 
 The `flowsdk` crate uses [Criterion](https://github.com/criterion-rs/criterion.rs)
-on stable Rust. All six suites run in memory without a broker, sockets, an async
-runtime, or certificates. For broker and connection load testing, use the
-standalone `mqtt_ring_bench` crate, maintained outside this workspace.
+on stable Rust. The six protocol/payload suites run in memory without a broker,
+sockets, an async runtime, or certificates. The `publish_admission` suite uses a
+local TCP broker stub and a Tokio runtime to exercise the public async APIs. For
+external broker and connection load testing, use the standalone `mqtt_ring_bench`
+crate, maintained outside this workspace.
 
 ## Run
 
@@ -152,3 +154,84 @@ allocation and replacement-copy reductions are deterministic across both runs.
   valid”: `native_and_rustls_clients_use_custom_ca_and_complete_disconnect` and
   `tls_backends_verify_custom_roots_and_exchange_binary_data`. Both failures were
   reproduced from unchanged commit `dc932414`; they precede this payload change.
+
+## Batched publish admission
+
+```bash
+# Verify every case without collecting measurements. No external broker is used.
+cargo bench -p flowsdk --no-default-features \
+  --features std,async-client,strict-protocol-compliance \
+  --bench publish_admission -- --test
+
+# Example comparison: 32 separate MQTT 5 publications with 64-byte payloads.
+cargo bench -p flowsdk --no-default-features \
+  --features std,async-client,strict-protocol-compliance,shared-payloads \
+  --bench publish_admission -- 'publish_admission/v5/payload64/.*/32$'
+```
+
+The suite compares sequential single-publication admissions, bounded-concurrent
+single admissions, and one batch admission. A synchronous engine path provides an
+in-memory reference. Cases cover MQTT 3.1.1 and MQTT 5, QoS 0, payload sizes 64
+and 4096 bytes, and groups of 1, 8, and 32 separate publications. The three main
+async paths enable the same admission budgets, with limits above the test group
+sizes. An additional `legacy_sequential_single` case leaves `publish_admission`
+unconfigured to expose overhead from opting into the new request budgets; it is
+not a benchmark of an older SDK revision. There are 60 cases in total.
+
+Each Criterion iteration times command submission until all admission results
+are returned. Commands and payloads are prepared before the timer starts. A local
+TCP broker stub parses and verifies every topic, payload, sequence number, and
+flag. After timing, the iteration waits for the verifier to report completion
+before starting the next iteration. This barrier catches lost or duplicate
+publications and prevents accumulated output from changing later iterations. The
+final verification wait and remaining drain time are excluded from the duration.
+Each admission group still produces exactly that many MQTT PUBLISH packets; batch
+admission never merges payloads.
+
+The async cases use a current-thread Tokio runtime shared by the SDK worker and
+broker stub. The timer includes scheduling, result collection, the common timeout
+guard, and any transport/verifier work that happens before admission completion.
+It is admission wall latency under this scheduling arrangement, not isolated CPU
+time, broker acknowledgement latency, maximum throughput, or a VeloFlux result.
+Concurrent singles also include `FuturesUnordered` bookkeeping. The direct engine
+case excludes channels, runtime scheduling, and socket I/O, so it is a reference
+for protocol work rather than an equivalent transport measurement. Criterion's
+throughput unit is publications represented by the timed admission group.
+
+The benchmark works with owned or shared payload storage; explicitly select the
+same features for comparisons. It does not measure allocation counts, scheduler
+wakeups, or retained memory; use an allocator/profiler and the full application
+benchmark for those questions. QoS 1/2 and lifecycle correctness are covered by
+the admission tests rather than this QoS 0 timing fixture.
+
+### Local admission sample (2026-11-08)
+
+Measured from `feat/batch-publish-admission`, based on upstream main `1a3988d3`,
+on macOS 15.7 with `rustc 1.98.0-nightly (14210df0e 2026-05-31)`. These are
+release-build Criterion point estimates and 95% confidence intervals for a group
+of 32 MQTT 5 QoS 0 publications, each with a 64-byte payload and shared storage.
+No other builds or test suites were run concurrently by this task.
+
+```bash
+cargo bench -p flowsdk --no-default-features \
+  --features std,async-client,strict-protocol-compliance,shared-payloads \
+  --bench publish_admission --locked --offline -- \
+  'publish_admission/v5/payload64/.*/32$' \
+  --sample-size 30 --warm-up-time 1 --measurement-time 3 --noplot
+```
+
+| Admission path | Time per group of 32 | 95% confidence interval |
+| --- | ---: | ---: |
+| Sequential singles, budgets disabled | 258.06 us | 248.24–263.06 us |
+| Sequential singles, budgets enabled | 277.05 us | 276.21–277.82 us |
+| Concurrent singles, budgets enabled | 81.626 us | 81.479–81.801 us |
+| One batch, budgets enabled | 17.700 us | 17.657–17.749 us |
+| Direct engine reference | 7.5857 us | 7.0155–8.4384 us |
+
+Batch admission took about 1/15.7 of the budgeted sequential admission time and
+1/4.6 of the budgeted concurrent admission time in this fixture. Enabling budgets
+for sequential singles added about 7.4% versus unbudgeted singles in this run;
+limits remain opt-in. These comparisons are within this SDK revision, not a
+before/after-main regression benchmark. Each group was verified to produce all
+32 distinct MQTT PUBLISH packets. The scheduling and measurement limits above
+apply: these figures do not establish VeloFlux throughput or CPU savings.
