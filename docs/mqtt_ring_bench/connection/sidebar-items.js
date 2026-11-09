@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ConnState","QuicConnState"],"fn":["outgoing_packet_limit","receive_parse_level"],"struct":["Connection","EventOutcome","QuicConnection","TcpSendQueue"]};

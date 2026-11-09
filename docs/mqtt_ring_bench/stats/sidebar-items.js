@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["ErrorKind"],"fn":["merge_latency_samples","ms","percentile","print_final_summary"],"struct":["BenchStats","StatsSnapshot"]};

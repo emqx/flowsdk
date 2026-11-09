@@ -1,1 +1,0 @@
-window.SIDEBAR_ITEMS = {"enum":["BenchAction","ShutdownMode"],"fn":["num_cpus","parse_args","parse_ifaddrs"],"struct":["BenchArgs","BenchConfig"]};
