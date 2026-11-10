@@ -84,7 +84,7 @@
 <a href=#84 id=84 data-nosnippet>84</a>                })<span class="question-mark">?</span>;
 <a href=#85 id=85 data-nosnippet>85</a>                <span class="kw">let </span>key_der: PrivateKeyDer&lt;<span class="lifetime">'static</span>&gt; = parsed_key.clone_key();
 <a href=#86 id=86 data-nosnippet>86</a>
-<a href=#87 id=87 data-nosnippet>87</a>                RustlsClientConfig::builder()
+<a href=#87 id=87 data-nosnippet>87</a>                <span class="kw">super</span>::<span class="kw">super</span>::tls_config_builder(rustls::crypto::ring::default_provider())
 <a href=#88 id=88 data-nosnippet>88</a>                    .with_root_certificates(roots)
 <a href=#89 id=89 data-nosnippet>89</a>                    .with_client_auth_cert(chain_der, key_der)
 <a href=#90 id=90 data-nosnippet>90</a>                    .map_err(|e| {
@@ -94,7 +94,7 @@
 <a href=#94 id=94 data-nosnippet>94</a>                        ))
 <a href=#95 id=95 data-nosnippet>95</a>                    })<span class="question-mark">?
 <a href=#96 id=96 data-nosnippet>96</a>            </span>} <span class="kw">else </span>{
-<a href=#97 id=97 data-nosnippet>97</a>                RustlsClientConfig::builder()
+<a href=#97 id=97 data-nosnippet>97</a>                <span class="kw">super</span>::<span class="kw">super</span>::tls_config_builder(rustls::crypto::ring::default_provider())
 <a href=#98 id=98 data-nosnippet>98</a>                    .with_root_certificates(roots)
 <a href=#99 id=99 data-nosnippet>99</a>                    .with_no_client_auth()
 <a href=#100 id=100 data-nosnippet>100</a>            };

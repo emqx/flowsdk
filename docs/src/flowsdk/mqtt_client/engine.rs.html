@@ -6620,622 +6620,624 @@
 <a href=#6620 id=6620 data-nosnippet>6620</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
 <a href=#6621 id=6621 data-nosnippet>6621</a>    </span><span class="kw">fn </span>quic_test_crypto_config() -&gt; rustls::ClientConfig {
 <a href=#6622 id=6622 data-nosnippet>6622</a>        <span class="attr">#[cfg(feature = <span class="string">"quic-proto-openssl"</span>)]
-<a href=#6623 id=6623 data-nosnippet>6623</a>        </span><span class="kw">let _ </span>= rustls_openssl::default_provider().install_default();
+<a href=#6623 id=6623 data-nosnippet>6623</a>        </span><span class="kw">let </span>provider = rustls_openssl::default_provider();
 <a href=#6624 id=6624 data-nosnippet>6624</a>        <span class="attr">#[cfg(not(feature = <span class="string">"quic-proto-openssl"</span>))]
-<a href=#6625 id=6625 data-nosnippet>6625</a>        </span><span class="kw">let _ </span>= rustls::crypto::ring::default_provider().install_default();
+<a href=#6625 id=6625 data-nosnippet>6625</a>        </span><span class="kw">let </span>provider = rustls::crypto::ring::default_provider();
 <a href=#6626 id=6626 data-nosnippet>6626</a>
-<a href=#6627 id=6627 data-nosnippet>6627</a>        rustls::ClientConfig::builder()
-<a href=#6628 id=6628 data-nosnippet>6628</a>            .with_root_certificates(rustls::RootCertStore::empty())
-<a href=#6629 id=6629 data-nosnippet>6629</a>            .with_no_client_auth()
-<a href=#6630 id=6630 data-nosnippet>6630</a>    }
-<a href=#6631 id=6631 data-nosnippet>6631</a>
-<a href=#6632 id=6632 data-nosnippet>6632</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#6633 id=6633 data-nosnippet>6633</a>    </span><span class="kw">fn </span>connected_quic_engine_without_peer_limits() -&gt; QuicMqttEngine {
-<a href=#6634 id=6634 data-nosnippet>6634</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(
-<a href=#6635 id=6635 data-nosnippet>6635</a>            MqttClientOptions::builder()
-<a href=#6636 id=6636 data-nosnippet>6636</a>                .max_outgoing_packet_count(<span class="number">1</span>)
-<a href=#6637 id=6637 data-nosnippet>6637</a>                .build(),
-<a href=#6638 id=6638 data-nosnippet>6638</a>        )
-<a href=#6639 id=6639 data-nosnippet>6639</a>        .unwrap();
-<a href=#6640 id=6640 data-nosnippet>6640</a>        engine
-<a href=#6641 id=6641 data-nosnippet>6641</a>            .connect(
-<a href=#6642 id=6642 data-nosnippet>6642</a>                <span class="string">"127.0.0.1:4433"</span>.parse().unwrap(),
-<a href=#6643 id=6643 data-nosnippet>6643</a>                <span class="string">"localhost"</span>,
-<a href=#6644 id=6644 data-nosnippet>6644</a>                quic_test_crypto_config(),
-<a href=#6645 id=6645 data-nosnippet>6645</a>                Instant::now(),
-<a href=#6646 id=6646 data-nosnippet>6646</a>            )
-<a href=#6647 id=6647 data-nosnippet>6647</a>            .unwrap();
-<a href=#6648 id=6648 data-nosnippet>6648</a>        engine.mqtt_engine.is_connected = <span class="bool-val">true</span>;
-<a href=#6649 id=6649 data-nosnippet>6649</a>        engine
-<a href=#6650 id=6650 data-nosnippet>6650</a>    }
-<a href=#6651 id=6651 data-nosnippet>6651</a>
-<a href=#6652 id=6652 data-nosnippet>6652</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#6653 id=6653 data-nosnippet>6653</a>    </span><span class="kw">fn </span>mqtt_connected_quic_engine() -&gt; QuicMqttEngine {
-<a href=#6654 id=6654 data-nosnippet>6654</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(
-<a href=#6655 id=6655 data-nosnippet>6655</a>            MqttClientOptions::builder()
-<a href=#6656 id=6656 data-nosnippet>6656</a>                .max_outgoing_packet_count(<span class="number">1</span>)
-<a href=#6657 id=6657 data-nosnippet>6657</a>                .build(),
-<a href=#6658 id=6658 data-nosnippet>6658</a>        )
-<a href=#6659 id=6659 data-nosnippet>6659</a>        .unwrap();
-<a href=#6660 id=6660 data-nosnippet>6660</a>        engine.mqtt_engine.connect().unwrap();
-<a href=#6661 id=6661 data-nosnippet>6661</a>        <span class="kw">let _ </span>= engine.mqtt_engine.take_outgoing();
-<a href=#6662 id=6662 data-nosnippet>6662</a>        <span class="kw">let </span>events = engine
-<a href=#6663 id=6663 data-nosnippet>6663</a>            .mqtt_engine
-<a href=#6664 id=6664 data-nosnippet>6664</a>            .handle_incoming(<span class="kw-2">&amp;</span>[<span class="number">0x20</span>, <span class="number">0x03</span>, <span class="number">0x00</span>, <span class="number">0x00</span>, <span class="number">0x00</span>]);
-<a href=#6665 id=6665 data-nosnippet>6665</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(events.as_slice(), [MqttEvent::Connected(<span class="kw">_</span>)]));
-<a href=#6666 id=6666 data-nosnippet>6666</a>        engine
-<a href=#6667 id=6667 data-nosnippet>6667</a>    }
-<a href=#6668 id=6668 data-nosnippet>6668</a>
-<a href=#6669 id=6669 data-nosnippet>6669</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#6670 id=6670 data-nosnippet>6670</a>    #[test]
-<a href=#6671 id=6671 data-nosnippet>6671</a>    </span><span class="kw">fn </span>reduced_parse_level_applies_to_quic_data_streams() {
-<a href=#6672 id=6672 data-nosnippet>6672</a>        <span class="kw">use </span>quinn_proto::{Dir, Side, StreamId};
-<a href=#6673 id=6673 data-nosnippet>6673</a>
-<a href=#6674 id=6674 data-nosnippet>6674</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
-<a href=#6675 id=6675 data-nosnippet>6675</a>        <span class="kw">let </span>stream_id = StreamId::new(Side::Server, Dir::Bi, <span class="number">0</span>);
-<a href=#6676 id=6676 data-nosnippet>6676</a>        engine
-<a href=#6677 id=6677 data-nosnippet>6677</a>            .data_streams
-<a href=#6678 id=6678 data-nosnippet>6678</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">2</span>));
-<a href=#6679 id=6679 data-nosnippet>6679</a>        engine.set_parse_level(ParseLevel::HeadersParsed);
-<a href=#6680 id=6680 data-nosnippet>6680</a>
-<a href=#6681 id=6681 data-nosnippet>6681</a>        <span class="kw">let </span>publish = MqttPublish::new_with_prop(
-<a href=#6682 id=6682 data-nosnippet>6682</a>            <span class="number">1</span>,
-<a href=#6683 id=6683 data-nosnippet>6683</a>            <span class="string">"bench/events"</span>.to_string(),
-<a href=#6684 id=6684 data-nosnippet>6684</a>            <span class="prelude-val">Some</span>(<span class="number">12</span>),
-<a href=#6685 id=6685 data-nosnippet>6685</a>            <span class="string">b"payload"</span>.to_vec(),
-<a href=#6686 id=6686 data-nosnippet>6686</a>            <span class="bool-val">false</span>,
-<a href=#6687 id=6687 data-nosnippet>6687</a>            <span class="bool-val">false</span>,
-<a href=#6688 id=6688 data-nosnippet>6688</a>            Vec::new(),
-<a href=#6689 id=6689 data-nosnippet>6689</a>        );
-<a href=#6690 id=6690 data-nosnippet>6690</a>        engine
-<a href=#6691 id=6691 data-nosnippet>6691</a>            .data_streams
-<a href=#6692 id=6692 data-nosnippet>6692</a>            .get_mut(<span class="kw-2">&amp;</span>stream_id)
-<a href=#6693 id=6693 data-nosnippet>6693</a>            .unwrap()
-<a href=#6694 id=6694 data-nosnippet>6694</a>            .parser
-<a href=#6695 id=6695 data-nosnippet>6695</a>            .feed(<span class="kw-2">&amp;</span>MqttPacket::Publish5(publish).to_bytes().unwrap());
-<a href=#6696 id=6696 data-nosnippet>6696</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = Vec::new();
-<a href=#6697 id=6697 data-nosnippet>6697</a>        QuicMqttEngine::drain_data_stream(
-<a href=#6698 id=6698 data-nosnippet>6698</a>            <span class="kw-2">&amp;mut </span>engine.data_streams,
-<a href=#6699 id=6699 data-nosnippet>6699</a>            <span class="kw-2">&amp;mut </span>engine.mqtt_engine,
-<a href=#6700 id=6700 data-nosnippet>6700</a>            stream_id,
-<a href=#6701 id=6701 data-nosnippet>6701</a>            <span class="kw-2">&amp;mut </span>events,
-<a href=#6702 id=6702 data-nosnippet>6702</a>        );
-<a href=#6703 id=6703 data-nosnippet>6703</a>
-<a href=#6704 id=6704 data-nosnippet>6704</a>        <span class="macro">assert_eq!</span>(engine.parse_level(), ParseLevel::HeadersParsed);
-<a href=#6705 id=6705 data-nosnippet>6705</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#6706 id=6706 data-nosnippet>6706</a>            events.as_slice(),
-<a href=#6707 id=6707 data-nosnippet>6707</a>            [MqttEvent::PublishReceived {
-<a href=#6708 id=6708 data-nosnippet>6708</a>                packet_id: <span class="prelude-val">Some</span>(<span class="number">12</span>),
-<a href=#6709 id=6709 data-nosnippet>6709</a>                stream: <span class="prelude-val">Some</span>(<span class="kw">_</span>)
-<a href=#6710 id=6710 data-nosnippet>6710</a>            }]
-<a href=#6711 id=6711 data-nosnippet>6711</a>        ));
-<a href=#6712 id=6712 data-nosnippet>6712</a>        <span class="kw">let </span>response = <span class="kw-2">&amp;</span>engine.data_streams.get(<span class="kw-2">&amp;</span>stream_id).unwrap().outgoing;
-<a href=#6713 id=6713 data-nosnippet>6713</a>        <span class="macro">assert_eq!</span>(response[<span class="number">0</span>] &amp; <span class="number">0xf0</span>, <span class="number">0x40</span>);
-<a href=#6714 id=6714 data-nosnippet>6714</a>    }
-<a href=#6715 id=6715 data-nosnippet>6715</a>
-<a href=#6716 id=6716 data-nosnippet>6716</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#6717 id=6717 data-nosnippet>6717</a>    #[test]
-<a href=#6718 id=6718 data-nosnippet>6718</a>    </span><span class="kw">fn </span>quic_control_subscriptions_track_operations_and_route_acks() {
-<a href=#6719 id=6719 data-nosnippet>6719</a>        <span class="kw">use </span><span class="kw">crate</span>::mqtt_client::opts::OperationTimeouts;
-<a href=#6720 id=6720 data-nosnippet>6720</a>        <span class="kw">use </span><span class="kw">crate</span>::mqtt_serde::parser::ParseOk;
-<a href=#6721 id=6721 data-nosnippet>6721</a>        <span class="kw">use </span>quinn_proto::Side;
-<a href=#6722 id=6722 data-nosnippet>6722</a>
-<a href=#6723 id=6723 data-nosnippet>6723</a>        <span class="kw">for </span>version <span class="kw">in </span>[<span class="number">3</span>, <span class="number">5</span>] {
-<a href=#6724 id=6724 data-nosnippet>6724</a>            <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(
-<a href=#6725 id=6725 data-nosnippet>6725</a>                MqttClientOptions::builder()
-<a href=#6726 id=6726 data-nosnippet>6726</a>                    .mqtt_version(version)
-<a href=#6727 id=6727 data-nosnippet>6727</a>                    .operation_timeouts(OperationTimeouts::cloud())
-<a href=#6728 id=6728 data-nosnippet>6728</a>                    .build(),
-<a href=#6729 id=6729 data-nosnippet>6729</a>            )
-<a href=#6730 id=6730 data-nosnippet>6730</a>            .unwrap();
-<a href=#6731 id=6731 data-nosnippet>6731</a>            establish_connection(<span class="kw-2">&amp;mut </span>engine.mqtt_engine);
-<a href=#6732 id=6732 data-nosnippet>6732</a>            engine.control_stream = <span class="prelude-val">Some</span>(StreamId::new(Side::Client, Dir::Bi, <span class="number">0</span>));
-<a href=#6733 id=6733 data-nosnippet>6733</a>
-<a href=#6734 id=6734 data-nosnippet>6734</a>            <span class="comment">// Control and data streams share the packet identifier space.
-<a href=#6735 id=6735 data-nosnippet>6735</a>            </span><span class="kw">let </span>data = StreamId::new(Side::Client, Dir::Bi, <span class="number">1</span>);
-<a href=#6736 id=6736 data-nosnippet>6736</a>            engine
-<a href=#6737 id=6737 data-nosnippet>6737</a>                .data_streams
-<a href=#6738 id=6738 data-nosnippet>6738</a>                .insert(data, QuicStream::new(<span class="number">1024</span>, version, <span class="number">10</span>));
-<a href=#6739 id=6739 data-nosnippet>6739</a>            <span class="kw">let </span>data_pid = engine
-<a href=#6740 id=6740 data-nosnippet>6740</a>                .subscribe_on(data.into(), SubscribeCommand::single(<span class="string">"data/#"</span>, <span class="number">1</span>))
-<a href=#6741 id=6741 data-nosnippet>6741</a>                .unwrap();
-<a href=#6742 id=6742 data-nosnippet>6742</a>            <span class="kw">let </span>data_bytes = engine.data_streams[<span class="kw-2">&amp;</span>data].outgoing.clone();
-<a href=#6743 id=6743 data-nosnippet>6743</a>            <span class="kw">let </span>sub_pid = engine
-<a href=#6744 id=6744 data-nosnippet>6744</a>                .subscribe_on_control(SubscribeCommand::single(<span class="string">"control/#"</span>, <span class="number">1</span>))
-<a href=#6745 id=6745 data-nosnippet>6745</a>                .unwrap();
-<a href=#6746 id=6746 data-nosnippet>6746</a>            <span class="kw">let </span>unsub_pid = engine
-<a href=#6747 id=6747 data-nosnippet>6747</a>                .unsubscribe_on_control(UnsubscribeCommand::from_topics(<span class="macro">vec!</span>[<span class="string">"old/#"</span>.into()]))
-<a href=#6748 id=6748 data-nosnippet>6748</a>                .unwrap();
-<a href=#6749 id=6749 data-nosnippet>6749</a>            <span class="macro">assert_ne!</span>(sub_pid, data_pid);
-<a href=#6750 id=6750 data-nosnippet>6750</a>            <span class="macro">assert_ne!</span>(unsub_pid, data_pid);
-<a href=#6751 id=6751 data-nosnippet>6751</a>            <span class="macro">assert_ne!</span>(sub_pid, unsub_pid);
-<a href=#6752 id=6752 data-nosnippet>6752</a>            <span class="macro">assert_eq!</span>(engine.data_stream_count(), <span class="number">1</span>);
-<a href=#6753 id=6753 data-nosnippet>6753</a>            <span class="macro">assert!</span>(engine.default_sub_stream.is_none());
-<a href=#6754 id=6754 data-nosnippet>6754</a>            <span class="macro">assert_eq!</span>(engine.data_streams[<span class="kw-2">&amp;</span>data].outgoing, data_bytes);
-<a href=#6755 id=6755 data-nosnippet>6755</a>
-<a href=#6756 id=6756 data-nosnippet>6756</a>            <span class="comment">// The normal control flush drains this buffer. No raw injection is used.
-<a href=#6757 id=6757 data-nosnippet>6757</a>            </span><span class="kw">let </span>outgoing = engine.mqtt_engine.take_outgoing();
-<a href=#6758 id=6758 data-nosnippet>6758</a>            <span class="kw">let </span>ParseOk::Packet(subscribe, used) =
-<a href=#6759 id=6759 data-nosnippet>6759</a>                MqttPacket::from_bytes_with_version(<span class="kw-2">&amp;</span>outgoing, version).unwrap()
-<a href=#6760 id=6760 data-nosnippet>6760</a>            <span class="kw">else </span>{
-<a href=#6761 id=6761 data-nosnippet>6761</a>                <span class="macro">panic!</span>(<span class="string">"expected SUBSCRIBE"</span>);
-<a href=#6762 id=6762 data-nosnippet>6762</a>            };
-<a href=#6763 id=6763 data-nosnippet>6763</a>            <span class="kw">match </span>subscribe {
-<a href=#6764 id=6764 data-nosnippet>6764</a>                MqttPacket::Subscribe3(p) =&gt; <span class="macro">assert_eq!</span>(p.message_id, sub_pid),
-<a href=#6765 id=6765 data-nosnippet>6765</a>                MqttPacket::Subscribe5(p) =&gt; <span class="macro">assert_eq!</span>(p.packet_id, sub_pid),
-<a href=#6766 id=6766 data-nosnippet>6766</a>                other =&gt; <span class="macro">panic!</span>(<span class="string">"expected SUBSCRIBE, got {other:?}"</span>),
-<a href=#6767 id=6767 data-nosnippet>6767</a>            }
-<a href=#6768 id=6768 data-nosnippet>6768</a>            <span class="kw">let </span>ParseOk::Packet(unsubscribe, <span class="kw">_</span>) =
-<a href=#6769 id=6769 data-nosnippet>6769</a>                MqttPacket::from_bytes_with_version(<span class="kw-2">&amp;</span>outgoing[used..], version).unwrap()
-<a href=#6770 id=6770 data-nosnippet>6770</a>            <span class="kw">else </span>{
-<a href=#6771 id=6771 data-nosnippet>6771</a>                <span class="macro">panic!</span>(<span class="string">"expected UNSUBSCRIBE"</span>);
-<a href=#6772 id=6772 data-nosnippet>6772</a>            };
-<a href=#6773 id=6773 data-nosnippet>6773</a>            <span class="kw">match </span>unsubscribe {
-<a href=#6774 id=6774 data-nosnippet>6774</a>                MqttPacket::Unsubscribe3(p) =&gt; <span class="macro">assert_eq!</span>(p.message_id, unsub_pid),
-<a href=#6775 id=6775 data-nosnippet>6775</a>                MqttPacket::Unsubscribe5(p) =&gt; <span class="macro">assert_eq!</span>(p.packet_id, unsub_pid),
-<a href=#6776 id=6776 data-nosnippet>6776</a>                other =&gt; <span class="macro">panic!</span>(<span class="string">"expected UNSUBSCRIBE, got {other:?}"</span>),
-<a href=#6777 id=6777 data-nosnippet>6777</a>            }
-<a href=#6778 id=6778 data-nosnippet>6778</a>            <span class="kw">for </span>(operation, pid) <span class="kw">in </span>[
-<a href=#6779 id=6779 data-nosnippet>6779</a>                (OperationKind::Subscribe, sub_pid),
-<a href=#6780 id=6780 data-nosnippet>6780</a>                (OperationKind::Unsubscribe, unsub_pid),
-<a href=#6781 id=6781 data-nosnippet>6781</a>            ] {
-<a href=#6782 id=6782 data-nosnippet>6782</a>                <span class="kw">let </span>mqtt = <span class="kw-2">&amp;</span>engine.mqtt_engine;
-<a href=#6783 id=6783 data-nosnippet>6783</a>                <span class="macro">assert_eq!</span>(mqtt.inflight_queue.get(pid).unwrap().stream, <span class="prelude-val">None</span>);
-<a href=#6784 id=6784 data-nosnippet>6784</a>                <span class="macro">assert!</span>(mqtt.state.reserved.contains(<span class="kw-2">&amp;</span>pid));
-<a href=#6785 id=6785 data-nosnippet>6785</a>                <span class="macro">assert!</span>(mqtt.state.deadlines.contains_key(<span class="kw-2">&amp;</span>(operation, <span class="prelude-val">Some</span>(pid))));
-<a href=#6786 id=6786 data-nosnippet>6786</a>            }
-<a href=#6787 id=6787 data-nosnippet>6787</a>
-<a href=#6788 id=6788 data-nosnippet>6788</a>            <span class="comment">// Receive UNSUBACK first to check that each ACK completes only its operation.
-<a href=#6789 id=6789 data-nosnippet>6789</a>            </span><span class="kw">let </span>[hi, lo] = unsub_pid.to_be_bytes();
-<a href=#6790 id=6790 data-nosnippet>6790</a>            <span class="kw">let </span>unsuback = <span class="kw">if </span>version == <span class="number">5 </span>{
-<a href=#6791 id=6791 data-nosnippet>6791</a>                <span class="macro">vec!</span>[<span class="number">0xb0</span>, <span class="number">4</span>, hi, lo, <span class="number">0</span>, <span class="number">0</span>]
-<a href=#6792 id=6792 data-nosnippet>6792</a>            } <span class="kw">else </span>{
-<a href=#6793 id=6793 data-nosnippet>6793</a>                <span class="macro">vec!</span>[<span class="number">0xb0</span>, <span class="number">2</span>, hi, lo]
-<a href=#6794 id=6794 data-nosnippet>6794</a>            };
-<a href=#6795 id=6795 data-nosnippet>6795</a>            <span class="kw">let </span>events = engine.mqtt_engine.handle_incoming(<span class="kw-2">&amp;</span>unsuback);
-<a href=#6796 id=6796 data-nosnippet>6796</a>            <span class="macro">assert!</span>(
-<a href=#6797 id=6797 data-nosnippet>6797</a>                <span class="macro">matches!</span>(events.as_slice(), [MqttEvent::Unsubscribed(r)] <span class="kw">if </span>r.packet_id == unsub_pid)
-<a href=#6798 id=6798 data-nosnippet>6798</a>            );
-<a href=#6799 id=6799 data-nosnippet>6799</a>            <span class="macro">assert!</span>(engine.mqtt_engine.inflight_queue.contains(sub_pid));
-<a href=#6800 id=6800 data-nosnippet>6800</a>
-<a href=#6801 id=6801 data-nosnippet>6801</a>            <span class="kw">let </span>[hi, lo] = sub_pid.to_be_bytes();
-<a href=#6802 id=6802 data-nosnippet>6802</a>            <span class="kw">let </span>suback = <span class="kw">if </span>version == <span class="number">5 </span>{
-<a href=#6803 id=6803 data-nosnippet>6803</a>                <span class="macro">vec!</span>[<span class="number">0x90</span>, <span class="number">4</span>, hi, lo, <span class="number">0</span>, <span class="number">1</span>]
-<a href=#6804 id=6804 data-nosnippet>6804</a>            } <span class="kw">else </span>{
-<a href=#6805 id=6805 data-nosnippet>6805</a>                <span class="macro">vec!</span>[<span class="number">0x90</span>, <span class="number">3</span>, hi, lo, <span class="number">1</span>]
-<a href=#6806 id=6806 data-nosnippet>6806</a>            };
-<a href=#6807 id=6807 data-nosnippet>6807</a>            <span class="kw">let </span>events = engine.mqtt_engine.handle_incoming(<span class="kw-2">&amp;</span>suback);
-<a href=#6808 id=6808 data-nosnippet>6808</a>            <span class="macro">assert!</span>(<span class="macro">matches!</span>(events.as_slice(), [MqttEvent::Subscribed(r)]
-<a href=#6809 id=6809 data-nosnippet>6809</a>                <span class="kw">if </span>r.packet_id == sub_pid &amp;&amp; r.reason_codes == [<span class="number">1</span>]));
-<a href=#6810 id=6810 data-nosnippet>6810</a>            <span class="kw">for </span>pid <span class="kw">in </span>[sub_pid, unsub_pid] {
-<a href=#6811 id=6811 data-nosnippet>6811</a>                <span class="macro">assert!</span>(!engine.mqtt_engine.inflight_queue.contains(pid));
-<a href=#6812 id=6812 data-nosnippet>6812</a>                <span class="macro">assert!</span>(!engine.mqtt_engine.state.reserved.contains(<span class="kw-2">&amp;</span>pid));
-<a href=#6813 id=6813 data-nosnippet>6813</a>                <span class="macro">assert!</span>(!engine
-<a href=#6814 id=6814 data-nosnippet>6814</a>                    .mqtt_engine
-<a href=#6815 id=6815 data-nosnippet>6815</a>                    .state
-<a href=#6816 id=6816 data-nosnippet>6816</a>                    .deadlines
-<a href=#6817 id=6817 data-nosnippet>6817</a>                    .keys()
-<a href=#6818 id=6818 data-nosnippet>6818</a>                    .any(|(<span class="kw">_</span>, id)| <span class="kw-2">*</span>id == <span class="prelude-val">Some</span>(pid)));
-<a href=#6819 id=6819 data-nosnippet>6819</a>            }
-<a href=#6820 id=6820 data-nosnippet>6820</a>            <span class="macro">assert!</span>(engine.mqtt_engine.inflight_queue.contains(data_pid));
-<a href=#6821 id=6821 data-nosnippet>6821</a>        }
-<a href=#6822 id=6822 data-nosnippet>6822</a>    }
-<a href=#6823 id=6823 data-nosnippet>6823</a>
-<a href=#6824 id=6824 data-nosnippet>6824</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#6825 id=6825 data-nosnippet>6825</a>    #[test]
-<a href=#6826 id=6826 data-nosnippet>6826</a>    </span><span class="kw">fn </span>quic_control_subscriptions_preserve_packet_ids_on_backpressure() {
-<a href=#6827 id=6827 data-nosnippet>6827</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
-<a href=#6828 id=6828 data-nosnippet>6828</a>        <span class="kw">let </span><span class="kw-2">mut </span>subscribe = SubscribeCommand::single(<span class="string">"control/#"</span>, <span class="number">1</span>);
-<a href=#6829 id=6829 data-nosnippet>6829</a>        subscribe.packet_id = <span class="prelude-val">Some</span>(<span class="number">41</span>);
-<a href=#6830 id=6830 data-nosnippet>6830</a>        <span class="kw">let </span><span class="kw-2">mut </span>unsubscribe = UnsubscribeCommand::from_topics(<span class="macro">vec!</span>[<span class="string">"control/#"</span>.into()]);
-<a href=#6831 id=6831 data-nosnippet>6831</a>        unsubscribe.packet_id = <span class="prelude-val">Some</span>(<span class="number">42</span>);
-<a href=#6832 id=6832 data-nosnippet>6832</a>
-<a href=#6833 id=6833 data-nosnippet>6833</a>        engine.ping().unwrap(); <span class="comment">// Fill the one-packet outgoing buffer.
-<a href=#6834 id=6834 data-nosnippet>6834</a>        </span><span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#6835 id=6835 data-nosnippet>6835</a>            engine.subscribe_on_control(subscribe.clone()),
-<a href=#6836 id=6836 data-nosnippet>6836</a>            <span class="prelude-val">Err</span>(MqttClientError::BufferFull { .. })
-<a href=#6837 id=6837 data-nosnippet>6837</a>        ));
-<a href=#6838 id=6838 data-nosnippet>6838</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#6839 id=6839 data-nosnippet>6839</a>            engine.unsubscribe_on_control(unsubscribe.clone()),
-<a href=#6840 id=6840 data-nosnippet>6840</a>            <span class="prelude-val">Err</span>(MqttClientError::BufferFull { .. })
-<a href=#6841 id=6841 data-nosnippet>6841</a>        ));
-<a href=#6842 id=6842 data-nosnippet>6842</a>        <span class="macro">assert!</span>(engine.mqtt_engine.inflight_queue.is_empty());
-<a href=#6843 id=6843 data-nosnippet>6843</a>        <span class="macro">assert!</span>(engine.mqtt_engine.state.reserved.is_empty());
-<a href=#6844 id=6844 data-nosnippet>6844</a>        engine.mqtt_engine.take_outgoing();
-<a href=#6845 id=6845 data-nosnippet>6845</a>
-<a href=#6846 id=6846 data-nosnippet>6846</a>        <span class="macro">assert_eq!</span>(engine.subscribe_on_control(subscribe.clone()).unwrap(), <span class="number">41</span>);
-<a href=#6847 id=6847 data-nosnippet>6847</a>        engine.mqtt_engine.take_outgoing();
-<a href=#6848 id=6848 data-nosnippet>6848</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#6849 id=6849 data-nosnippet>6849</a>            engine.subscribe_on_control(subscribe),
-<a href=#6850 id=6850 data-nosnippet>6850</a>            <span class="prelude-val">Err</span>(MqttClientError::InvalidPacketId { packet_id: <span class="number">41 </span>})
-<a href=#6851 id=6851 data-nosnippet>6851</a>        ));
-<a href=#6852 id=6852 data-nosnippet>6852</a>        <span class="macro">assert_eq!</span>(
-<a href=#6853 id=6853 data-nosnippet>6853</a>            engine.unsubscribe_on_control(unsubscribe.clone()).unwrap(),
-<a href=#6854 id=6854 data-nosnippet>6854</a>            <span class="number">42
-<a href=#6855 id=6855 data-nosnippet>6855</a>        </span>);
-<a href=#6856 id=6856 data-nosnippet>6856</a>        engine.mqtt_engine.take_outgoing();
-<a href=#6857 id=6857 data-nosnippet>6857</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#6858 id=6858 data-nosnippet>6858</a>            engine.unsubscribe_on_control(unsubscribe),
-<a href=#6859 id=6859 data-nosnippet>6859</a>            <span class="prelude-val">Err</span>(MqttClientError::InvalidPacketId { packet_id: <span class="number">42 </span>})
-<a href=#6860 id=6860 data-nosnippet>6860</a>        ));
-<a href=#6861 id=6861 data-nosnippet>6861</a>        <span class="macro">assert!</span>(engine.mqtt_engine.take_outgoing().is_empty());
-<a href=#6862 id=6862 data-nosnippet>6862</a>        <span class="macro">assert_eq!</span>(engine.data_stream_count(), <span class="number">0</span>);
-<a href=#6863 id=6863 data-nosnippet>6863</a>    }
-<a href=#6864 id=6864 data-nosnippet>6864</a>
-<a href=#6865 id=6865 data-nosnippet>6865</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#6866 id=6866 data-nosnippet>6866</a>    #[test]
-<a href=#6867 id=6867 data-nosnippet>6867</a>    </span><span class="kw">fn </span>quic_control_subscriptions_reject_disconnected_or_finished_streams() {
-<a href=#6868 id=6868 data-nosnippet>6868</a>        <span class="kw">for </span>state <span class="kw">in </span><span class="number">0</span>..<span class="number">3 </span>{
-<a href=#6869 id=6869 data-nosnippet>6869</a>            <span class="kw">let </span><span class="kw-2">mut </span>engine = <span class="kw">if </span>state == <span class="number">0 </span>{
-<a href=#6870 id=6870 data-nosnippet>6870</a>                QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap()
-<a href=#6871 id=6871 data-nosnippet>6871</a>            } <span class="kw">else </span>{
-<a href=#6872 id=6872 data-nosnippet>6872</a>                mqtt_connected_quic_engine()
-<a href=#6873 id=6873 data-nosnippet>6873</a>            };
-<a href=#6874 id=6874 data-nosnippet>6874</a>            engine.control_finishing = state == <span class="number">1</span>;
-<a href=#6875 id=6875 data-nosnippet>6875</a>            engine.control_finished = state == <span class="number">2</span>;
-<a href=#6876 id=6876 data-nosnippet>6876</a>            <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#6877 id=6877 data-nosnippet>6877</a>                engine.subscribe_on_control(SubscribeCommand::single(<span class="string">"control/#"</span>, <span class="number">1</span>)),
-<a href=#6878 id=6878 data-nosnippet>6878</a>                <span class="prelude-val">Err</span>(MqttClientError::InvalidState { .. })
-<a href=#6879 id=6879 data-nosnippet>6879</a>            ));
-<a href=#6880 id=6880 data-nosnippet>6880</a>            <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#6881 id=6881 data-nosnippet>6881</a>                engine.unsubscribe_on_control(UnsubscribeCommand::from_topics(<span class="macro">vec!</span>[
-<a href=#6882 id=6882 data-nosnippet>6882</a>                    <span class="string">"control/#"</span>.into()
-<a href=#6883 id=6883 data-nosnippet>6883</a>                ])),
-<a href=#6884 id=6884 data-nosnippet>6884</a>                <span class="prelude-val">Err</span>(MqttClientError::InvalidState { .. })
-<a href=#6885 id=6885 data-nosnippet>6885</a>            ));
-<a href=#6886 id=6886 data-nosnippet>6886</a>            <span class="macro">assert!</span>(engine.mqtt_engine.inflight_queue.is_empty());
-<a href=#6887 id=6887 data-nosnippet>6887</a>            <span class="macro">assert!</span>(engine.mqtt_engine.state.reserved.is_empty());
-<a href=#6888 id=6888 data-nosnippet>6888</a>            <span class="macro">assert!</span>(engine.mqtt_engine.take_outgoing().is_empty());
-<a href=#6889 id=6889 data-nosnippet>6889</a>            <span class="macro">assert_eq!</span>(engine.data_stream_count(), <span class="number">0</span>);
-<a href=#6890 id=6890 data-nosnippet>6890</a>        }
-<a href=#6891 id=6891 data-nosnippet>6891</a>    }
-<a href=#6892 id=6892 data-nosnippet>6892</a>
-<a href=#6893 id=6893 data-nosnippet>6893</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#6894 id=6894 data-nosnippet>6894</a>    #[test]
-<a href=#6895 id=6895 data-nosnippet>6895</a>    </span><span class="kw">fn </span>test_quic_data_stream_api_routes_commands_and_reuses_defaults() {
-<a href=#6896 id=6896 data-nosnippet>6896</a>        <span class="kw">use </span>quinn_proto::{Dir, Side, StreamId};
-<a href=#6897 id=6897 data-nosnippet>6897</a>
-<a href=#6898 id=6898 data-nosnippet>6898</a>        <span class="comment">// GIVEN: A QUIC connection exists, but no peer transport parameters have
-<a href=#6899 id=6899 data-nosnippet>6899</a>        // been received to grant client-initiated bidirectional stream capacity.
-<a href=#6900 id=6900 data-nosnippet>6900</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>engine = connected_quic_engine_without_peer_limits();
-<a href=#6901 id=6901 data-nosnippet>6901</a>
-<a href=#6902 id=6902 data-nosnippet>6902</a>        <span class="comment">// WHEN: The caller asks the public API to open a new data stream.
-<a href=#6903 id=6903 data-nosnippet>6903</a>        // THEN: The request fails instead of creating untracked stream state.
-<a href=#6904 id=6904 data-nosnippet>6904</a>        </span><span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#6905 id=6905 data-nosnippet>6905</a>            engine.open_data_stream(),
-<a href=#6906 id=6906 data-nosnippet>6906</a>            <span class="prelude-val">Err</span>(MqttClientError::InternalError { .. })
-<a href=#6907 id=6907 data-nosnippet>6907</a>        ));
-<a href=#6908 id=6908 data-nosnippet>6908</a>
-<a href=#6909 id=6909 data-nosnippet>6909</a>        <span class="comment">// GIVEN: A connected MQTT session with one known QUIC data stream.
-<a href=#6910 id=6910 data-nosnippet>6910</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
-<a href=#6911 id=6911 data-nosnippet>6911</a>        <span class="kw">let </span>stream_id = StreamId::new(Side::Client, Dir::Bi, <span class="number">1</span>);
-<a href=#6912 id=6912 data-nosnippet>6912</a>        engine
-<a href=#6913 id=6913 data-nosnippet>6913</a>            .data_streams
-<a href=#6914 id=6914 data-nosnippet>6914</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">1</span>));
-<a href=#6915 id=6915 data-nosnippet>6915</a>        <span class="kw">let </span>stream = u64::from(stream_id);
-<a href=#6916 id=6916 data-nosnippet>6916</a>        <span class="macro">assert_eq!</span>(engine.data_stream_count(), <span class="number">1</span>);
-<a href=#6917 id=6917 data-nosnippet>6917</a>        <span class="macro">assert!</span>(engine.control_stream_id().is_none());
-<a href=#6918 id=6918 data-nosnippet>6918</a>
-<a href=#6919 id=6919 data-nosnippet>6919</a>        <span class="comment">// WHEN: A publish is targeted at that explicit stream.
-<a href=#6920 id=6920 data-nosnippet>6920</a>        // THEN: The MQTT packet is encoded, tracked, and buffered on the stream.
-<a href=#6921 id=6921 data-nosnippet>6921</a>        </span><span class="kw">let </span>publish_pid = engine
-<a href=#6922 id=6922 data-nosnippet>6922</a>            .publish_on(
-<a href=#6923 id=6923 data-nosnippet>6923</a>                stream,
-<a href=#6924 id=6924 data-nosnippet>6924</a>                PublishCommand::simple(<span class="string">"topic/a"</span>, <span class="string">b"payload"</span>.to_vec(), <span class="number">1</span>, <span class="bool-val">false</span>),
-<a href=#6925 id=6925 data-nosnippet>6925</a>            )
-<a href=#6926 id=6926 data-nosnippet>6926</a>            .unwrap();
-<a href=#6927 id=6927 data-nosnippet>6927</a>        <span class="macro">assert_eq!</span>(publish_pid, <span class="prelude-val">Some</span>(<span class="number">1</span>));
-<a href=#6928 id=6928 data-nosnippet>6928</a>        <span class="macro">assert!</span>(engine
-<a href=#6929 id=6929 data-nosnippet>6929</a>            .data_streams
-<a href=#6930 id=6930 data-nosnippet>6930</a>            .values()
-<a href=#6931 id=6931 data-nosnippet>6931</a>            .any(|ds| ds.pending_packets == <span class="number">1 </span>&amp;&amp; !ds.outgoing.is_empty()));
-<a href=#6932 id=6932 data-nosnippet>6932</a>
-<a href=#6933 id=6933 data-nosnippet>6933</a>        <span class="kw">let </span>bad_stream = stream + <span class="number">4</span>;
-<a href=#6934 id=6934 data-nosnippet>6934</a>        <span class="comment">// WHEN: A publish targets an unknown stream handle.
-<a href=#6935 id=6935 data-nosnippet>6935</a>        // THEN: The API rejects the command before allocating MQTT state.
-<a href=#6936 id=6936 data-nosnippet>6936</a>        </span><span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#6937 id=6937 data-nosnippet>6937</a>            engine.publish_on(
-<a href=#6938 id=6938 data-nosnippet>6938</a>                bad_stream,
-<a href=#6939 id=6939 data-nosnippet>6939</a>                PublishCommand::simple(<span class="string">"topic/b"</span>, <span class="string">b"payload"</span>.to_vec(), <span class="number">0</span>, <span class="bool-val">false</span>)
-<a href=#6940 id=6940 data-nosnippet>6940</a>            ),
-<a href=#6941 id=6941 data-nosnippet>6941</a>            <span class="prelude-val">Err</span>(MqttClientError::InvalidState { .. })
-<a href=#6942 id=6942 data-nosnippet>6942</a>        ));
-<a href=#6943 id=6943 data-nosnippet>6943</a>
-<a href=#6944 id=6944 data-nosnippet>6944</a>        <span class="comment">// GIVEN: A fresh engine that has not registered the previous stream id.
-<a href=#6945 id=6945 data-nosnippet>6945</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
-<a href=#6946 id=6946 data-nosnippet>6946</a>        <span class="comment">// WHEN: A subscribe uses a handle from another engine instance.
-<a href=#6947 id=6947 data-nosnippet>6947</a>        // THEN: The handle is treated as unknown and rejected.
-<a href=#6948 id=6948 data-nosnippet>6948</a>        </span><span class="kw">let </span>sub_pid = engine
-<a href=#6949 id=6949 data-nosnippet>6949</a>            .subscribe_on(stream, SubscribeCommand::single(<span class="string">"topic/sub"</span>, <span class="number">0</span>))
-<a href=#6950 id=6950 data-nosnippet>6950</a>            .expect_err(<span class="string">"stream handle from another engine must be rejected"</span>);
-<a href=#6951 id=6951 data-nosnippet>6951</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(sub_pid, MqttClientError::InvalidState { .. }));
-<a href=#6952 id=6952 data-nosnippet>6952</a>
-<a href=#6953 id=6953 data-nosnippet>6953</a>        <span class="comment">// GIVEN: The stream handle is registered on this engine.
-<a href=#6954 id=6954 data-nosnippet>6954</a>        </span>engine
-<a href=#6955 id=6955 data-nosnippet>6955</a>            .data_streams
-<a href=#6956 id=6956 data-nosnippet>6956</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">1</span>));
-<a href=#6957 id=6957 data-nosnippet>6957</a>        <span class="comment">// WHEN: A subscribe is targeted at the explicit stream.
-<a href=#6958 id=6958 data-nosnippet>6958</a>        // THEN: The SUBSCRIBE packet is allocated and buffered on that stream.
-<a href=#6959 id=6959 data-nosnippet>6959</a>        </span><span class="kw">let </span>sub_pid = engine
-<a href=#6960 id=6960 data-nosnippet>6960</a>            .subscribe_on(stream, SubscribeCommand::single(<span class="string">"topic/sub"</span>, <span class="number">0</span>))
-<a href=#6961 id=6961 data-nosnippet>6961</a>            .unwrap();
-<a href=#6962 id=6962 data-nosnippet>6962</a>        <span class="macro">assert_eq!</span>(sub_pid, <span class="number">1</span>);
-<a href=#6963 id=6963 data-nosnippet>6963</a>
-<a href=#6964 id=6964 data-nosnippet>6964</a>        <span class="comment">// GIVEN: A connected MQTT session with one known QUIC data stream.
-<a href=#6965 id=6965 data-nosnippet>6965</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
-<a href=#6966 id=6966 data-nosnippet>6966</a>        engine
-<a href=#6967 id=6967 data-nosnippet>6967</a>            .data_streams
-<a href=#6968 id=6968 data-nosnippet>6968</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">1</span>));
-<a href=#6969 id=6969 data-nosnippet>6969</a>        <span class="comment">// WHEN: An unsubscribe is targeted at the explicit stream.
-<a href=#6970 id=6970 data-nosnippet>6970</a>        // THEN: The UNSUBSCRIBE packet is allocated and buffered on that stream.
-<a href=#6971 id=6971 data-nosnippet>6971</a>        </span><span class="kw">let </span>unsub_pid = engine
-<a href=#6972 id=6972 data-nosnippet>6972</a>            .unsubscribe_on(
-<a href=#6973 id=6973 data-nosnippet>6973</a>                stream,
-<a href=#6974 id=6974 data-nosnippet>6974</a>                UnsubscribeCommand::from_topics(<span class="macro">vec!</span>[<span class="string">"topic/sub"</span>.to_string()]),
-<a href=#6975 id=6975 data-nosnippet>6975</a>            )
-<a href=#6976 id=6976 data-nosnippet>6976</a>            .unwrap();
-<a href=#6977 id=6977 data-nosnippet>6977</a>        <span class="macro">assert_eq!</span>(unsub_pid, <span class="number">1</span>);
-<a href=#6978 id=6978 data-nosnippet>6978</a>
-<a href=#6979 id=6979 data-nosnippet>6979</a>        <span class="comment">// GIVEN: The default publish stream is already known.
-<a href=#6980 id=6980 data-nosnippet>6980</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
-<a href=#6981 id=6981 data-nosnippet>6981</a>        engine
-<a href=#6982 id=6982 data-nosnippet>6982</a>            .data_streams
-<a href=#6983 id=6983 data-nosnippet>6983</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">1</span>));
-<a href=#6984 id=6984 data-nosnippet>6984</a>        engine.default_pub_stream = <span class="prelude-val">Some</span>(stream_id);
-<a href=#6985 id=6985 data-nosnippet>6985</a>        <span class="comment">// WHEN: The high-level publish API is used.
-<a href=#6986 id=6986 data-nosnippet>6986</a>        // THEN: It reuses the default publish stream instead of opening another.
-<a href=#6987 id=6987 data-nosnippet>6987</a>        </span><span class="kw">let </span>publish_pid = engine
-<a href=#6988 id=6988 data-nosnippet>6988</a>            .publish(PublishCommand::simple(
-<a href=#6989 id=6989 data-nosnippet>6989</a>                <span class="string">"topic/default"</span>,
-<a href=#6990 id=6990 data-nosnippet>6990</a>                <span class="string">b"x"</span>.to_vec(),
-<a href=#6991 id=6991 data-nosnippet>6991</a>                <span class="number">1</span>,
-<a href=#6992 id=6992 data-nosnippet>6992</a>                <span class="bool-val">false</span>,
-<a href=#6993 id=6993 data-nosnippet>6993</a>            ))
-<a href=#6994 id=6994 data-nosnippet>6994</a>            .unwrap();
-<a href=#6995 id=6995 data-nosnippet>6995</a>        <span class="macro">assert_eq!</span>(publish_pid, <span class="prelude-val">Some</span>(<span class="number">1</span>));
-<a href=#6996 id=6996 data-nosnippet>6996</a>        <span class="kw">let </span>default_pub = engine.default_pub_stream.unwrap();
-<a href=#6997 id=6997 data-nosnippet>6997</a>        <span class="macro">assert_eq!</span>(engine.ensure_default_pub_stream().unwrap(), default_pub);
-<a href=#6998 id=6998 data-nosnippet>6998</a>
-<a href=#6999 id=6999 data-nosnippet>6999</a>        <span class="comment">// GIVEN: The default subscribe stream is already known.
-<a href=#7000 id=7000 data-nosnippet>7000</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
-<a href=#7001 id=7001 data-nosnippet>7001</a>        engine
-<a href=#7002 id=7002 data-nosnippet>7002</a>            .data_streams
-<a href=#7003 id=7003 data-nosnippet>7003</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">2</span>));
-<a href=#7004 id=7004 data-nosnippet>7004</a>        engine.default_sub_stream = <span class="prelude-val">Some</span>(stream_id);
-<a href=#7005 id=7005 data-nosnippet>7005</a>        <span class="comment">// WHEN: The high-level subscribe and unsubscribe APIs are used.
-<a href=#7006 id=7006 data-nosnippet>7006</a>        // THEN: Both commands reuse the default subscribe stream.
-<a href=#7007 id=7007 data-nosnippet>7007</a>        </span><span class="kw">let </span>sub_pid = engine
-<a href=#7008 id=7008 data-nosnippet>7008</a>            .subscribe(SubscribeCommand::single(<span class="string">"topic/default"</span>, <span class="number">0</span>))
-<a href=#7009 id=7009 data-nosnippet>7009</a>            .unwrap();
-<a href=#7010 id=7010 data-nosnippet>7010</a>        <span class="macro">assert_eq!</span>(sub_pid, <span class="number">1</span>);
-<a href=#7011 id=7011 data-nosnippet>7011</a>        <span class="kw">let </span>default_sub = engine.default_sub_stream.unwrap();
-<a href=#7012 id=7012 data-nosnippet>7012</a>        <span class="kw">let </span>unsub_pid = engine
-<a href=#7013 id=7013 data-nosnippet>7013</a>            .unsubscribe(UnsubscribeCommand::from_topics(<span class="macro">vec!</span>[
-<a href=#7014 id=7014 data-nosnippet>7014</a>                <span class="string">"topic/default"</span>.to_string()
-<a href=#7015 id=7015 data-nosnippet>7015</a>            ]))
-<a href=#7016 id=7016 data-nosnippet>7016</a>            .unwrap();
-<a href=#7017 id=7017 data-nosnippet>7017</a>        <span class="macro">assert_eq!</span>(unsub_pid, <span class="number">2</span>);
-<a href=#7018 id=7018 data-nosnippet>7018</a>        <span class="macro">assert_eq!</span>(engine.ensure_default_sub_stream().unwrap(), default_sub);
-<a href=#7019 id=7019 data-nosnippet>7019</a>    }
-<a href=#7020 id=7020 data-nosnippet>7020</a>
-<a href=#7021 id=7021 data-nosnippet>7021</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#7022 id=7022 data-nosnippet>7022</a>    #[test]
-<a href=#7023 id=7023 data-nosnippet>7023</a>    </span><span class="kw">fn </span>test_quic_data_stream_capacity_and_finished_errors() {
-<a href=#7024 id=7024 data-nosnippet>7024</a>        <span class="kw">use </span>quinn_proto::{Dir, Side, StreamId};
-<a href=#7025 id=7025 data-nosnippet>7025</a>
-<a href=#7026 id=7026 data-nosnippet>7026</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
-<a href=#7027 id=7027 data-nosnippet>7027</a>        <span class="kw">let </span>stream_id = StreamId::new(Side::Client, Dir::Bi, <span class="number">1</span>);
-<a href=#7028 id=7028 data-nosnippet>7028</a>        engine
-<a href=#7029 id=7029 data-nosnippet>7029</a>            .data_streams
-<a href=#7030 id=7030 data-nosnippet>7030</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">1</span>));
-<a href=#7031 id=7031 data-nosnippet>7031</a>        <span class="kw">let </span>stream = u64::from(stream_id);
-<a href=#7032 id=7032 data-nosnippet>7032</a>
-<a href=#7033 id=7033 data-nosnippet>7033</a>        engine
-<a href=#7034 id=7034 data-nosnippet>7034</a>            .data_streams
-<a href=#7035 id=7035 data-nosnippet>7035</a>            .get_mut(<span class="kw-2">&amp;</span>stream_id)
-<a href=#7036 id=7036 data-nosnippet>7036</a>            .unwrap()
-<a href=#7037 id=7037 data-nosnippet>7037</a>            .pending_packets = <span class="number">1</span>;
-<a href=#7038 id=7038 data-nosnippet>7038</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#7039 id=7039 data-nosnippet>7039</a>            engine.publish_on(
-<a href=#7040 id=7040 data-nosnippet>7040</a>                stream,
-<a href=#7041 id=7041 data-nosnippet>7041</a>                PublishCommand::simple(<span class="string">"topic/full"</span>, <span class="string">b"payload"</span>.to_vec(), <span class="number">1</span>, <span class="bool-val">false</span>)
-<a href=#7042 id=7042 data-nosnippet>7042</a>            ),
-<a href=#7043 id=7043 data-nosnippet>7043</a>            <span class="prelude-val">Err</span>(MqttClientError::BufferFull {
-<a href=#7044 id=7044 data-nosnippet>7044</a>                buffer_type,
-<a href=#7045 id=7045 data-nosnippet>7045</a>                capacity: <span class="number">1</span>,
-<a href=#7046 id=7046 data-nosnippet>7046</a>            }) <span class="kw">if </span>buffer_type == <span class="string">"quic_stream_outgoing"
-<a href=#7047 id=7047 data-nosnippet>7047</a>        </span>));
-<a href=#7048 id=7048 data-nosnippet>7048</a>
-<a href=#7049 id=7049 data-nosnippet>7049</a>        <span class="kw">let </span>ds = engine.data_streams.get_mut(<span class="kw-2">&amp;</span>stream_id).unwrap();
-<a href=#7050 id=7050 data-nosnippet>7050</a>        ds.pending_packets = <span class="number">0</span>;
-<a href=#7051 id=7051 data-nosnippet>7051</a>        ds.finished = <span class="bool-val">true</span>;
-<a href=#7052 id=7052 data-nosnippet>7052</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#7053 id=7053 data-nosnippet>7053</a>            engine.subscribe_on(stream, SubscribeCommand::single(<span class="string">"topic/finished"</span>, <span class="number">0</span>)),
-<a href=#7054 id=7054 data-nosnippet>7054</a>            <span class="prelude-val">Err</span>(MqttClientError::InvalidState { .. })
-<a href=#7055 id=7055 data-nosnippet>7055</a>        ));
-<a href=#7056 id=7056 data-nosnippet>7056</a>    }
-<a href=#7057 id=7057 data-nosnippet>7057</a>
-<a href=#7058 id=7058 data-nosnippet>7058</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#7059 id=7059 data-nosnippet>7059</a>    #[test]
-<a href=#7060 id=7060 data-nosnippet>7060</a>    </span><span class="kw">fn </span>test_zero_rtt_config_default_and_connect_disables() {
-<a href=#7061 id=7061 data-nosnippet>7061</a>        <span class="kw">let </span>default = QuicZeroRttConfig::default();
-<a href=#7062 id=7062 data-nosnippet>7062</a>        <span class="macro">assert_eq!</span>(default.session_cache_size, <span class="number">256</span>);
-<a href=#7063 id=7063 data-nosnippet>7063</a>        <span class="macro">assert!</span>(default.replay_on_reject);
-<a href=#7064 id=7064 data-nosnippet>7064</a>
-<a href=#7065 id=7065 data-nosnippet>7065</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
-<a href=#7066 id=7066 data-nosnippet>7066</a>        engine.zero_rtt_config = <span class="prelude-val">Some</span>(default);
-<a href=#7067 id=7067 data-nosnippet>7067</a>        engine.zero_rtt_status = QuicZeroRttStatus::Attempted;
-<a href=#7068 id=7068 data-nosnippet>7068</a>        engine
-<a href=#7069 id=7069 data-nosnippet>7069</a>            .pending_transport_events
-<a href=#7070 id=7070 data-nosnippet>7070</a>            .push_back(MqttEvent::ZeroRttStatusChanged {
-<a href=#7071 id=7071 data-nosnippet>7071</a>                status: QuicZeroRttStatus::Attempted,
-<a href=#7072 id=7072 data-nosnippet>7072</a>            });
-<a href=#7073 id=7073 data-nosnippet>7073</a>        QuicMqttEngine::journal_stream_open(
-<a href=#7074 id=7074 data-nosnippet>7074</a>            <span class="kw-2">&amp;mut </span>engine.early_stream_journal,
-<a href=#7075 id=7075 data-nosnippet>7075</a>            StreamId::new(quinn_proto::Side::Client, Dir::Bi, <span class="number">0</span>),
-<a href=#7076 id=7076 data-nosnippet>7076</a>            EarlyStreamRole::Control,
-<a href=#7077 id=7077 data-nosnippet>7077</a>        );
-<a href=#7078 id=7078 data-nosnippet>7078</a>
-<a href=#7079 id=7079 data-nosnippet>7079</a>        engine
-<a href=#7080 id=7080 data-nosnippet>7080</a>            .connect(
-<a href=#7081 id=7081 data-nosnippet>7081</a>                <span class="string">"127.0.0.1:4433"</span>.parse().unwrap(),
-<a href=#7082 id=7082 data-nosnippet>7082</a>                <span class="string">"localhost"</span>,
-<a href=#7083 id=7083 data-nosnippet>7083</a>                quic_test_crypto_config(),
-<a href=#7084 id=7084 data-nosnippet>7084</a>                Instant::now(),
-<a href=#7085 id=7085 data-nosnippet>7085</a>            )
-<a href=#7086 id=7086 data-nosnippet>7086</a>            .unwrap();
-<a href=#7087 id=7087 data-nosnippet>7087</a>
-<a href=#7088 id=7088 data-nosnippet>7088</a>        <span class="macro">assert_eq!</span>(engine.zero_rtt_config, <span class="prelude-val">None</span>);
-<a href=#7089 id=7089 data-nosnippet>7089</a>        <span class="macro">assert_eq!</span>(engine.zero_rtt_status(), QuicZeroRttStatus::Disabled);
-<a href=#7090 id=7090 data-nosnippet>7090</a>        <span class="macro">assert!</span>(engine.pending_transport_events.is_empty());
-<a href=#7091 id=7091 data-nosnippet>7091</a>        <span class="macro">assert!</span>(engine.early_stream_journal.is_empty());
-<a href=#7092 id=7092 data-nosnippet>7092</a>    }
-<a href=#7093 id=7093 data-nosnippet>7093</a>
-<a href=#7094 id=7094 data-nosnippet>7094</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#7095 id=7095 data-nosnippet>7095</a>    #[test]
-<a href=#7096 id=7096 data-nosnippet>7096</a>    </span><span class="kw">fn </span>test_connect_with_zero_rtt_emits_unavailable_without_ticket() {
-<a href=#7097 id=7097 data-nosnippet>7097</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
-<a href=#7098 id=7098 data-nosnippet>7098</a>        <span class="kw">let </span>config = QuicZeroRttConfig {
-<a href=#7099 id=7099 data-nosnippet>7099</a>            session_cache_size: <span class="number">8</span>,
-<a href=#7100 id=7100 data-nosnippet>7100</a>            replay_on_reject: <span class="bool-val">false</span>,
-<a href=#7101 id=7101 data-nosnippet>7101</a>        };
-<a href=#7102 id=7102 data-nosnippet>7102</a>
-<a href=#7103 id=7103 data-nosnippet>7103</a>        engine
-<a href=#7104 id=7104 data-nosnippet>7104</a>            .connect_with_zero_rtt(
-<a href=#7105 id=7105 data-nosnippet>7105</a>                <span class="string">"127.0.0.1:4433"</span>.parse().unwrap(),
-<a href=#7106 id=7106 data-nosnippet>7106</a>                <span class="string">"localhost"</span>,
-<a href=#7107 id=7107 data-nosnippet>7107</a>                quic_test_crypto_config(),
-<a href=#7108 id=7108 data-nosnippet>7108</a>                config,
-<a href=#7109 id=7109 data-nosnippet>7109</a>                Instant::now(),
-<a href=#7110 id=7110 data-nosnippet>7110</a>            )
-<a href=#7111 id=7111 data-nosnippet>7111</a>            .unwrap();
-<a href=#7112 id=7112 data-nosnippet>7112</a>
-<a href=#7113 id=7113 data-nosnippet>7113</a>        <span class="macro">assert_eq!</span>(engine.zero_rtt_config, <span class="prelude-val">Some</span>(config));
-<a href=#7114 id=7114 data-nosnippet>7114</a>        <span class="macro">assert_eq!</span>(engine.zero_rtt_status(), QuicZeroRttStatus::Unavailable);
-<a href=#7115 id=7115 data-nosnippet>7115</a>        <span class="macro">assert!</span>(engine.zero_rtt_cache.is_some());
-<a href=#7116 id=7116 data-nosnippet>7116</a>
-<a href=#7117 id=7117 data-nosnippet>7117</a>        <span class="kw">let </span>events = engine.take_events();
-<a href=#7118 id=7118 data-nosnippet>7118</a>        <span class="macro">assert_eq!</span>(events.len(), <span class="number">1</span>);
-<a href=#7119 id=7119 data-nosnippet>7119</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#7120 id=7120 data-nosnippet>7120</a>            events[<span class="number">0</span>],
-<a href=#7121 id=7121 data-nosnippet>7121</a>            MqttEvent::ZeroRttStatusChanged {
-<a href=#7122 id=7122 data-nosnippet>7122</a>                status: QuicZeroRttStatus::Unavailable
-<a href=#7123 id=7123 data-nosnippet>7123</a>            }
-<a href=#7124 id=7124 data-nosnippet>7124</a>        ));
-<a href=#7125 id=7125 data-nosnippet>7125</a>        <span class="macro">assert!</span>(engine.take_events().is_empty());
-<a href=#7126 id=7126 data-nosnippet>7126</a>    }
-<a href=#7127 id=7127 data-nosnippet>7127</a>
-<a href=#7128 id=7128 data-nosnippet>7128</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#7129 id=7129 data-nosnippet>7129</a>    #[test]
-<a href=#7130 id=7130 data-nosnippet>7130</a>    </span><span class="kw">fn </span>test_zero_rtt_early_control_open_failure_falls_back_to_unavailable() {
-<a href=#7131 id=7131 data-nosnippet>7131</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
-<a href=#7132 id=7132 data-nosnippet>7132</a>        engine.zero_rtt_config = <span class="prelude-val">Some</span>(QuicZeroRttConfig::default());
-<a href=#7133 id=7133 data-nosnippet>7133</a>
-<a href=#7134 id=7134 data-nosnippet>7134</a>        engine.begin_zero_rtt_attempt(<span class="prelude-val">None</span>);
+<a href=#6627 id=6627 data-nosnippet>6627</a>        rustls::ClientConfig::builder_with_provider(Arc::new(provider))
+<a href=#6628 id=6628 data-nosnippet>6628</a>            .with_safe_default_protocol_versions()
+<a href=#6629 id=6629 data-nosnippet>6629</a>            .unwrap()
+<a href=#6630 id=6630 data-nosnippet>6630</a>            .with_root_certificates(rustls::RootCertStore::empty())
+<a href=#6631 id=6631 data-nosnippet>6631</a>            .with_no_client_auth()
+<a href=#6632 id=6632 data-nosnippet>6632</a>    }
+<a href=#6633 id=6633 data-nosnippet>6633</a>
+<a href=#6634 id=6634 data-nosnippet>6634</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#6635 id=6635 data-nosnippet>6635</a>    </span><span class="kw">fn </span>connected_quic_engine_without_peer_limits() -&gt; QuicMqttEngine {
+<a href=#6636 id=6636 data-nosnippet>6636</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(
+<a href=#6637 id=6637 data-nosnippet>6637</a>            MqttClientOptions::builder()
+<a href=#6638 id=6638 data-nosnippet>6638</a>                .max_outgoing_packet_count(<span class="number">1</span>)
+<a href=#6639 id=6639 data-nosnippet>6639</a>                .build(),
+<a href=#6640 id=6640 data-nosnippet>6640</a>        )
+<a href=#6641 id=6641 data-nosnippet>6641</a>        .unwrap();
+<a href=#6642 id=6642 data-nosnippet>6642</a>        engine
+<a href=#6643 id=6643 data-nosnippet>6643</a>            .connect(
+<a href=#6644 id=6644 data-nosnippet>6644</a>                <span class="string">"127.0.0.1:4433"</span>.parse().unwrap(),
+<a href=#6645 id=6645 data-nosnippet>6645</a>                <span class="string">"localhost"</span>,
+<a href=#6646 id=6646 data-nosnippet>6646</a>                quic_test_crypto_config(),
+<a href=#6647 id=6647 data-nosnippet>6647</a>                Instant::now(),
+<a href=#6648 id=6648 data-nosnippet>6648</a>            )
+<a href=#6649 id=6649 data-nosnippet>6649</a>            .unwrap();
+<a href=#6650 id=6650 data-nosnippet>6650</a>        engine.mqtt_engine.is_connected = <span class="bool-val">true</span>;
+<a href=#6651 id=6651 data-nosnippet>6651</a>        engine
+<a href=#6652 id=6652 data-nosnippet>6652</a>    }
+<a href=#6653 id=6653 data-nosnippet>6653</a>
+<a href=#6654 id=6654 data-nosnippet>6654</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#6655 id=6655 data-nosnippet>6655</a>    </span><span class="kw">fn </span>mqtt_connected_quic_engine() -&gt; QuicMqttEngine {
+<a href=#6656 id=6656 data-nosnippet>6656</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(
+<a href=#6657 id=6657 data-nosnippet>6657</a>            MqttClientOptions::builder()
+<a href=#6658 id=6658 data-nosnippet>6658</a>                .max_outgoing_packet_count(<span class="number">1</span>)
+<a href=#6659 id=6659 data-nosnippet>6659</a>                .build(),
+<a href=#6660 id=6660 data-nosnippet>6660</a>        )
+<a href=#6661 id=6661 data-nosnippet>6661</a>        .unwrap();
+<a href=#6662 id=6662 data-nosnippet>6662</a>        engine.mqtt_engine.connect().unwrap();
+<a href=#6663 id=6663 data-nosnippet>6663</a>        <span class="kw">let _ </span>= engine.mqtt_engine.take_outgoing();
+<a href=#6664 id=6664 data-nosnippet>6664</a>        <span class="kw">let </span>events = engine
+<a href=#6665 id=6665 data-nosnippet>6665</a>            .mqtt_engine
+<a href=#6666 id=6666 data-nosnippet>6666</a>            .handle_incoming(<span class="kw-2">&amp;</span>[<span class="number">0x20</span>, <span class="number">0x03</span>, <span class="number">0x00</span>, <span class="number">0x00</span>, <span class="number">0x00</span>]);
+<a href=#6667 id=6667 data-nosnippet>6667</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(events.as_slice(), [MqttEvent::Connected(<span class="kw">_</span>)]));
+<a href=#6668 id=6668 data-nosnippet>6668</a>        engine
+<a href=#6669 id=6669 data-nosnippet>6669</a>    }
+<a href=#6670 id=6670 data-nosnippet>6670</a>
+<a href=#6671 id=6671 data-nosnippet>6671</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#6672 id=6672 data-nosnippet>6672</a>    #[test]
+<a href=#6673 id=6673 data-nosnippet>6673</a>    </span><span class="kw">fn </span>reduced_parse_level_applies_to_quic_data_streams() {
+<a href=#6674 id=6674 data-nosnippet>6674</a>        <span class="kw">use </span>quinn_proto::{Dir, Side, StreamId};
+<a href=#6675 id=6675 data-nosnippet>6675</a>
+<a href=#6676 id=6676 data-nosnippet>6676</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
+<a href=#6677 id=6677 data-nosnippet>6677</a>        <span class="kw">let </span>stream_id = StreamId::new(Side::Server, Dir::Bi, <span class="number">0</span>);
+<a href=#6678 id=6678 data-nosnippet>6678</a>        engine
+<a href=#6679 id=6679 data-nosnippet>6679</a>            .data_streams
+<a href=#6680 id=6680 data-nosnippet>6680</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">2</span>));
+<a href=#6681 id=6681 data-nosnippet>6681</a>        engine.set_parse_level(ParseLevel::HeadersParsed);
+<a href=#6682 id=6682 data-nosnippet>6682</a>
+<a href=#6683 id=6683 data-nosnippet>6683</a>        <span class="kw">let </span>publish = MqttPublish::new_with_prop(
+<a href=#6684 id=6684 data-nosnippet>6684</a>            <span class="number">1</span>,
+<a href=#6685 id=6685 data-nosnippet>6685</a>            <span class="string">"bench/events"</span>.to_string(),
+<a href=#6686 id=6686 data-nosnippet>6686</a>            <span class="prelude-val">Some</span>(<span class="number">12</span>),
+<a href=#6687 id=6687 data-nosnippet>6687</a>            <span class="string">b"payload"</span>.to_vec(),
+<a href=#6688 id=6688 data-nosnippet>6688</a>            <span class="bool-val">false</span>,
+<a href=#6689 id=6689 data-nosnippet>6689</a>            <span class="bool-val">false</span>,
+<a href=#6690 id=6690 data-nosnippet>6690</a>            Vec::new(),
+<a href=#6691 id=6691 data-nosnippet>6691</a>        );
+<a href=#6692 id=6692 data-nosnippet>6692</a>        engine
+<a href=#6693 id=6693 data-nosnippet>6693</a>            .data_streams
+<a href=#6694 id=6694 data-nosnippet>6694</a>            .get_mut(<span class="kw-2">&amp;</span>stream_id)
+<a href=#6695 id=6695 data-nosnippet>6695</a>            .unwrap()
+<a href=#6696 id=6696 data-nosnippet>6696</a>            .parser
+<a href=#6697 id=6697 data-nosnippet>6697</a>            .feed(<span class="kw-2">&amp;</span>MqttPacket::Publish5(publish).to_bytes().unwrap());
+<a href=#6698 id=6698 data-nosnippet>6698</a>        <span class="kw">let </span><span class="kw-2">mut </span>events = Vec::new();
+<a href=#6699 id=6699 data-nosnippet>6699</a>        QuicMqttEngine::drain_data_stream(
+<a href=#6700 id=6700 data-nosnippet>6700</a>            <span class="kw-2">&amp;mut </span>engine.data_streams,
+<a href=#6701 id=6701 data-nosnippet>6701</a>            <span class="kw-2">&amp;mut </span>engine.mqtt_engine,
+<a href=#6702 id=6702 data-nosnippet>6702</a>            stream_id,
+<a href=#6703 id=6703 data-nosnippet>6703</a>            <span class="kw-2">&amp;mut </span>events,
+<a href=#6704 id=6704 data-nosnippet>6704</a>        );
+<a href=#6705 id=6705 data-nosnippet>6705</a>
+<a href=#6706 id=6706 data-nosnippet>6706</a>        <span class="macro">assert_eq!</span>(engine.parse_level(), ParseLevel::HeadersParsed);
+<a href=#6707 id=6707 data-nosnippet>6707</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#6708 id=6708 data-nosnippet>6708</a>            events.as_slice(),
+<a href=#6709 id=6709 data-nosnippet>6709</a>            [MqttEvent::PublishReceived {
+<a href=#6710 id=6710 data-nosnippet>6710</a>                packet_id: <span class="prelude-val">Some</span>(<span class="number">12</span>),
+<a href=#6711 id=6711 data-nosnippet>6711</a>                stream: <span class="prelude-val">Some</span>(<span class="kw">_</span>)
+<a href=#6712 id=6712 data-nosnippet>6712</a>            }]
+<a href=#6713 id=6713 data-nosnippet>6713</a>        ));
+<a href=#6714 id=6714 data-nosnippet>6714</a>        <span class="kw">let </span>response = <span class="kw-2">&amp;</span>engine.data_streams.get(<span class="kw-2">&amp;</span>stream_id).unwrap().outgoing;
+<a href=#6715 id=6715 data-nosnippet>6715</a>        <span class="macro">assert_eq!</span>(response[<span class="number">0</span>] &amp; <span class="number">0xf0</span>, <span class="number">0x40</span>);
+<a href=#6716 id=6716 data-nosnippet>6716</a>    }
+<a href=#6717 id=6717 data-nosnippet>6717</a>
+<a href=#6718 id=6718 data-nosnippet>6718</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#6719 id=6719 data-nosnippet>6719</a>    #[test]
+<a href=#6720 id=6720 data-nosnippet>6720</a>    </span><span class="kw">fn </span>quic_control_subscriptions_track_operations_and_route_acks() {
+<a href=#6721 id=6721 data-nosnippet>6721</a>        <span class="kw">use </span><span class="kw">crate</span>::mqtt_client::opts::OperationTimeouts;
+<a href=#6722 id=6722 data-nosnippet>6722</a>        <span class="kw">use </span><span class="kw">crate</span>::mqtt_serde::parser::ParseOk;
+<a href=#6723 id=6723 data-nosnippet>6723</a>        <span class="kw">use </span>quinn_proto::Side;
+<a href=#6724 id=6724 data-nosnippet>6724</a>
+<a href=#6725 id=6725 data-nosnippet>6725</a>        <span class="kw">for </span>version <span class="kw">in </span>[<span class="number">3</span>, <span class="number">5</span>] {
+<a href=#6726 id=6726 data-nosnippet>6726</a>            <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(
+<a href=#6727 id=6727 data-nosnippet>6727</a>                MqttClientOptions::builder()
+<a href=#6728 id=6728 data-nosnippet>6728</a>                    .mqtt_version(version)
+<a href=#6729 id=6729 data-nosnippet>6729</a>                    .operation_timeouts(OperationTimeouts::cloud())
+<a href=#6730 id=6730 data-nosnippet>6730</a>                    .build(),
+<a href=#6731 id=6731 data-nosnippet>6731</a>            )
+<a href=#6732 id=6732 data-nosnippet>6732</a>            .unwrap();
+<a href=#6733 id=6733 data-nosnippet>6733</a>            establish_connection(<span class="kw-2">&amp;mut </span>engine.mqtt_engine);
+<a href=#6734 id=6734 data-nosnippet>6734</a>            engine.control_stream = <span class="prelude-val">Some</span>(StreamId::new(Side::Client, Dir::Bi, <span class="number">0</span>));
+<a href=#6735 id=6735 data-nosnippet>6735</a>
+<a href=#6736 id=6736 data-nosnippet>6736</a>            <span class="comment">// Control and data streams share the packet identifier space.
+<a href=#6737 id=6737 data-nosnippet>6737</a>            </span><span class="kw">let </span>data = StreamId::new(Side::Client, Dir::Bi, <span class="number">1</span>);
+<a href=#6738 id=6738 data-nosnippet>6738</a>            engine
+<a href=#6739 id=6739 data-nosnippet>6739</a>                .data_streams
+<a href=#6740 id=6740 data-nosnippet>6740</a>                .insert(data, QuicStream::new(<span class="number">1024</span>, version, <span class="number">10</span>));
+<a href=#6741 id=6741 data-nosnippet>6741</a>            <span class="kw">let </span>data_pid = engine
+<a href=#6742 id=6742 data-nosnippet>6742</a>                .subscribe_on(data.into(), SubscribeCommand::single(<span class="string">"data/#"</span>, <span class="number">1</span>))
+<a href=#6743 id=6743 data-nosnippet>6743</a>                .unwrap();
+<a href=#6744 id=6744 data-nosnippet>6744</a>            <span class="kw">let </span>data_bytes = engine.data_streams[<span class="kw-2">&amp;</span>data].outgoing.clone();
+<a href=#6745 id=6745 data-nosnippet>6745</a>            <span class="kw">let </span>sub_pid = engine
+<a href=#6746 id=6746 data-nosnippet>6746</a>                .subscribe_on_control(SubscribeCommand::single(<span class="string">"control/#"</span>, <span class="number">1</span>))
+<a href=#6747 id=6747 data-nosnippet>6747</a>                .unwrap();
+<a href=#6748 id=6748 data-nosnippet>6748</a>            <span class="kw">let </span>unsub_pid = engine
+<a href=#6749 id=6749 data-nosnippet>6749</a>                .unsubscribe_on_control(UnsubscribeCommand::from_topics(<span class="macro">vec!</span>[<span class="string">"old/#"</span>.into()]))
+<a href=#6750 id=6750 data-nosnippet>6750</a>                .unwrap();
+<a href=#6751 id=6751 data-nosnippet>6751</a>            <span class="macro">assert_ne!</span>(sub_pid, data_pid);
+<a href=#6752 id=6752 data-nosnippet>6752</a>            <span class="macro">assert_ne!</span>(unsub_pid, data_pid);
+<a href=#6753 id=6753 data-nosnippet>6753</a>            <span class="macro">assert_ne!</span>(sub_pid, unsub_pid);
+<a href=#6754 id=6754 data-nosnippet>6754</a>            <span class="macro">assert_eq!</span>(engine.data_stream_count(), <span class="number">1</span>);
+<a href=#6755 id=6755 data-nosnippet>6755</a>            <span class="macro">assert!</span>(engine.default_sub_stream.is_none());
+<a href=#6756 id=6756 data-nosnippet>6756</a>            <span class="macro">assert_eq!</span>(engine.data_streams[<span class="kw-2">&amp;</span>data].outgoing, data_bytes);
+<a href=#6757 id=6757 data-nosnippet>6757</a>
+<a href=#6758 id=6758 data-nosnippet>6758</a>            <span class="comment">// The normal control flush drains this buffer. No raw injection is used.
+<a href=#6759 id=6759 data-nosnippet>6759</a>            </span><span class="kw">let </span>outgoing = engine.mqtt_engine.take_outgoing();
+<a href=#6760 id=6760 data-nosnippet>6760</a>            <span class="kw">let </span>ParseOk::Packet(subscribe, used) =
+<a href=#6761 id=6761 data-nosnippet>6761</a>                MqttPacket::from_bytes_with_version(<span class="kw-2">&amp;</span>outgoing, version).unwrap()
+<a href=#6762 id=6762 data-nosnippet>6762</a>            <span class="kw">else </span>{
+<a href=#6763 id=6763 data-nosnippet>6763</a>                <span class="macro">panic!</span>(<span class="string">"expected SUBSCRIBE"</span>);
+<a href=#6764 id=6764 data-nosnippet>6764</a>            };
+<a href=#6765 id=6765 data-nosnippet>6765</a>            <span class="kw">match </span>subscribe {
+<a href=#6766 id=6766 data-nosnippet>6766</a>                MqttPacket::Subscribe3(p) =&gt; <span class="macro">assert_eq!</span>(p.message_id, sub_pid),
+<a href=#6767 id=6767 data-nosnippet>6767</a>                MqttPacket::Subscribe5(p) =&gt; <span class="macro">assert_eq!</span>(p.packet_id, sub_pid),
+<a href=#6768 id=6768 data-nosnippet>6768</a>                other =&gt; <span class="macro">panic!</span>(<span class="string">"expected SUBSCRIBE, got {other:?}"</span>),
+<a href=#6769 id=6769 data-nosnippet>6769</a>            }
+<a href=#6770 id=6770 data-nosnippet>6770</a>            <span class="kw">let </span>ParseOk::Packet(unsubscribe, <span class="kw">_</span>) =
+<a href=#6771 id=6771 data-nosnippet>6771</a>                MqttPacket::from_bytes_with_version(<span class="kw-2">&amp;</span>outgoing[used..], version).unwrap()
+<a href=#6772 id=6772 data-nosnippet>6772</a>            <span class="kw">else </span>{
+<a href=#6773 id=6773 data-nosnippet>6773</a>                <span class="macro">panic!</span>(<span class="string">"expected UNSUBSCRIBE"</span>);
+<a href=#6774 id=6774 data-nosnippet>6774</a>            };
+<a href=#6775 id=6775 data-nosnippet>6775</a>            <span class="kw">match </span>unsubscribe {
+<a href=#6776 id=6776 data-nosnippet>6776</a>                MqttPacket::Unsubscribe3(p) =&gt; <span class="macro">assert_eq!</span>(p.message_id, unsub_pid),
+<a href=#6777 id=6777 data-nosnippet>6777</a>                MqttPacket::Unsubscribe5(p) =&gt; <span class="macro">assert_eq!</span>(p.packet_id, unsub_pid),
+<a href=#6778 id=6778 data-nosnippet>6778</a>                other =&gt; <span class="macro">panic!</span>(<span class="string">"expected UNSUBSCRIBE, got {other:?}"</span>),
+<a href=#6779 id=6779 data-nosnippet>6779</a>            }
+<a href=#6780 id=6780 data-nosnippet>6780</a>            <span class="kw">for </span>(operation, pid) <span class="kw">in </span>[
+<a href=#6781 id=6781 data-nosnippet>6781</a>                (OperationKind::Subscribe, sub_pid),
+<a href=#6782 id=6782 data-nosnippet>6782</a>                (OperationKind::Unsubscribe, unsub_pid),
+<a href=#6783 id=6783 data-nosnippet>6783</a>            ] {
+<a href=#6784 id=6784 data-nosnippet>6784</a>                <span class="kw">let </span>mqtt = <span class="kw-2">&amp;</span>engine.mqtt_engine;
+<a href=#6785 id=6785 data-nosnippet>6785</a>                <span class="macro">assert_eq!</span>(mqtt.inflight_queue.get(pid).unwrap().stream, <span class="prelude-val">None</span>);
+<a href=#6786 id=6786 data-nosnippet>6786</a>                <span class="macro">assert!</span>(mqtt.state.reserved.contains(<span class="kw-2">&amp;</span>pid));
+<a href=#6787 id=6787 data-nosnippet>6787</a>                <span class="macro">assert!</span>(mqtt.state.deadlines.contains_key(<span class="kw-2">&amp;</span>(operation, <span class="prelude-val">Some</span>(pid))));
+<a href=#6788 id=6788 data-nosnippet>6788</a>            }
+<a href=#6789 id=6789 data-nosnippet>6789</a>
+<a href=#6790 id=6790 data-nosnippet>6790</a>            <span class="comment">// Receive UNSUBACK first to check that each ACK completes only its operation.
+<a href=#6791 id=6791 data-nosnippet>6791</a>            </span><span class="kw">let </span>[hi, lo] = unsub_pid.to_be_bytes();
+<a href=#6792 id=6792 data-nosnippet>6792</a>            <span class="kw">let </span>unsuback = <span class="kw">if </span>version == <span class="number">5 </span>{
+<a href=#6793 id=6793 data-nosnippet>6793</a>                <span class="macro">vec!</span>[<span class="number">0xb0</span>, <span class="number">4</span>, hi, lo, <span class="number">0</span>, <span class="number">0</span>]
+<a href=#6794 id=6794 data-nosnippet>6794</a>            } <span class="kw">else </span>{
+<a href=#6795 id=6795 data-nosnippet>6795</a>                <span class="macro">vec!</span>[<span class="number">0xb0</span>, <span class="number">2</span>, hi, lo]
+<a href=#6796 id=6796 data-nosnippet>6796</a>            };
+<a href=#6797 id=6797 data-nosnippet>6797</a>            <span class="kw">let </span>events = engine.mqtt_engine.handle_incoming(<span class="kw-2">&amp;</span>unsuback);
+<a href=#6798 id=6798 data-nosnippet>6798</a>            <span class="macro">assert!</span>(
+<a href=#6799 id=6799 data-nosnippet>6799</a>                <span class="macro">matches!</span>(events.as_slice(), [MqttEvent::Unsubscribed(r)] <span class="kw">if </span>r.packet_id == unsub_pid)
+<a href=#6800 id=6800 data-nosnippet>6800</a>            );
+<a href=#6801 id=6801 data-nosnippet>6801</a>            <span class="macro">assert!</span>(engine.mqtt_engine.inflight_queue.contains(sub_pid));
+<a href=#6802 id=6802 data-nosnippet>6802</a>
+<a href=#6803 id=6803 data-nosnippet>6803</a>            <span class="kw">let </span>[hi, lo] = sub_pid.to_be_bytes();
+<a href=#6804 id=6804 data-nosnippet>6804</a>            <span class="kw">let </span>suback = <span class="kw">if </span>version == <span class="number">5 </span>{
+<a href=#6805 id=6805 data-nosnippet>6805</a>                <span class="macro">vec!</span>[<span class="number">0x90</span>, <span class="number">4</span>, hi, lo, <span class="number">0</span>, <span class="number">1</span>]
+<a href=#6806 id=6806 data-nosnippet>6806</a>            } <span class="kw">else </span>{
+<a href=#6807 id=6807 data-nosnippet>6807</a>                <span class="macro">vec!</span>[<span class="number">0x90</span>, <span class="number">3</span>, hi, lo, <span class="number">1</span>]
+<a href=#6808 id=6808 data-nosnippet>6808</a>            };
+<a href=#6809 id=6809 data-nosnippet>6809</a>            <span class="kw">let </span>events = engine.mqtt_engine.handle_incoming(<span class="kw-2">&amp;</span>suback);
+<a href=#6810 id=6810 data-nosnippet>6810</a>            <span class="macro">assert!</span>(<span class="macro">matches!</span>(events.as_slice(), [MqttEvent::Subscribed(r)]
+<a href=#6811 id=6811 data-nosnippet>6811</a>                <span class="kw">if </span>r.packet_id == sub_pid &amp;&amp; r.reason_codes == [<span class="number">1</span>]));
+<a href=#6812 id=6812 data-nosnippet>6812</a>            <span class="kw">for </span>pid <span class="kw">in </span>[sub_pid, unsub_pid] {
+<a href=#6813 id=6813 data-nosnippet>6813</a>                <span class="macro">assert!</span>(!engine.mqtt_engine.inflight_queue.contains(pid));
+<a href=#6814 id=6814 data-nosnippet>6814</a>                <span class="macro">assert!</span>(!engine.mqtt_engine.state.reserved.contains(<span class="kw-2">&amp;</span>pid));
+<a href=#6815 id=6815 data-nosnippet>6815</a>                <span class="macro">assert!</span>(!engine
+<a href=#6816 id=6816 data-nosnippet>6816</a>                    .mqtt_engine
+<a href=#6817 id=6817 data-nosnippet>6817</a>                    .state
+<a href=#6818 id=6818 data-nosnippet>6818</a>                    .deadlines
+<a href=#6819 id=6819 data-nosnippet>6819</a>                    .keys()
+<a href=#6820 id=6820 data-nosnippet>6820</a>                    .any(|(<span class="kw">_</span>, id)| <span class="kw-2">*</span>id == <span class="prelude-val">Some</span>(pid)));
+<a href=#6821 id=6821 data-nosnippet>6821</a>            }
+<a href=#6822 id=6822 data-nosnippet>6822</a>            <span class="macro">assert!</span>(engine.mqtt_engine.inflight_queue.contains(data_pid));
+<a href=#6823 id=6823 data-nosnippet>6823</a>        }
+<a href=#6824 id=6824 data-nosnippet>6824</a>    }
+<a href=#6825 id=6825 data-nosnippet>6825</a>
+<a href=#6826 id=6826 data-nosnippet>6826</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#6827 id=6827 data-nosnippet>6827</a>    #[test]
+<a href=#6828 id=6828 data-nosnippet>6828</a>    </span><span class="kw">fn </span>quic_control_subscriptions_preserve_packet_ids_on_backpressure() {
+<a href=#6829 id=6829 data-nosnippet>6829</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
+<a href=#6830 id=6830 data-nosnippet>6830</a>        <span class="kw">let </span><span class="kw-2">mut </span>subscribe = SubscribeCommand::single(<span class="string">"control/#"</span>, <span class="number">1</span>);
+<a href=#6831 id=6831 data-nosnippet>6831</a>        subscribe.packet_id = <span class="prelude-val">Some</span>(<span class="number">41</span>);
+<a href=#6832 id=6832 data-nosnippet>6832</a>        <span class="kw">let </span><span class="kw-2">mut </span>unsubscribe = UnsubscribeCommand::from_topics(<span class="macro">vec!</span>[<span class="string">"control/#"</span>.into()]);
+<a href=#6833 id=6833 data-nosnippet>6833</a>        unsubscribe.packet_id = <span class="prelude-val">Some</span>(<span class="number">42</span>);
+<a href=#6834 id=6834 data-nosnippet>6834</a>
+<a href=#6835 id=6835 data-nosnippet>6835</a>        engine.ping().unwrap(); <span class="comment">// Fill the one-packet outgoing buffer.
+<a href=#6836 id=6836 data-nosnippet>6836</a>        </span><span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#6837 id=6837 data-nosnippet>6837</a>            engine.subscribe_on_control(subscribe.clone()),
+<a href=#6838 id=6838 data-nosnippet>6838</a>            <span class="prelude-val">Err</span>(MqttClientError::BufferFull { .. })
+<a href=#6839 id=6839 data-nosnippet>6839</a>        ));
+<a href=#6840 id=6840 data-nosnippet>6840</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#6841 id=6841 data-nosnippet>6841</a>            engine.unsubscribe_on_control(unsubscribe.clone()),
+<a href=#6842 id=6842 data-nosnippet>6842</a>            <span class="prelude-val">Err</span>(MqttClientError::BufferFull { .. })
+<a href=#6843 id=6843 data-nosnippet>6843</a>        ));
+<a href=#6844 id=6844 data-nosnippet>6844</a>        <span class="macro">assert!</span>(engine.mqtt_engine.inflight_queue.is_empty());
+<a href=#6845 id=6845 data-nosnippet>6845</a>        <span class="macro">assert!</span>(engine.mqtt_engine.state.reserved.is_empty());
+<a href=#6846 id=6846 data-nosnippet>6846</a>        engine.mqtt_engine.take_outgoing();
+<a href=#6847 id=6847 data-nosnippet>6847</a>
+<a href=#6848 id=6848 data-nosnippet>6848</a>        <span class="macro">assert_eq!</span>(engine.subscribe_on_control(subscribe.clone()).unwrap(), <span class="number">41</span>);
+<a href=#6849 id=6849 data-nosnippet>6849</a>        engine.mqtt_engine.take_outgoing();
+<a href=#6850 id=6850 data-nosnippet>6850</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#6851 id=6851 data-nosnippet>6851</a>            engine.subscribe_on_control(subscribe),
+<a href=#6852 id=6852 data-nosnippet>6852</a>            <span class="prelude-val">Err</span>(MqttClientError::InvalidPacketId { packet_id: <span class="number">41 </span>})
+<a href=#6853 id=6853 data-nosnippet>6853</a>        ));
+<a href=#6854 id=6854 data-nosnippet>6854</a>        <span class="macro">assert_eq!</span>(
+<a href=#6855 id=6855 data-nosnippet>6855</a>            engine.unsubscribe_on_control(unsubscribe.clone()).unwrap(),
+<a href=#6856 id=6856 data-nosnippet>6856</a>            <span class="number">42
+<a href=#6857 id=6857 data-nosnippet>6857</a>        </span>);
+<a href=#6858 id=6858 data-nosnippet>6858</a>        engine.mqtt_engine.take_outgoing();
+<a href=#6859 id=6859 data-nosnippet>6859</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#6860 id=6860 data-nosnippet>6860</a>            engine.unsubscribe_on_control(unsubscribe),
+<a href=#6861 id=6861 data-nosnippet>6861</a>            <span class="prelude-val">Err</span>(MqttClientError::InvalidPacketId { packet_id: <span class="number">42 </span>})
+<a href=#6862 id=6862 data-nosnippet>6862</a>        ));
+<a href=#6863 id=6863 data-nosnippet>6863</a>        <span class="macro">assert!</span>(engine.mqtt_engine.take_outgoing().is_empty());
+<a href=#6864 id=6864 data-nosnippet>6864</a>        <span class="macro">assert_eq!</span>(engine.data_stream_count(), <span class="number">0</span>);
+<a href=#6865 id=6865 data-nosnippet>6865</a>    }
+<a href=#6866 id=6866 data-nosnippet>6866</a>
+<a href=#6867 id=6867 data-nosnippet>6867</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#6868 id=6868 data-nosnippet>6868</a>    #[test]
+<a href=#6869 id=6869 data-nosnippet>6869</a>    </span><span class="kw">fn </span>quic_control_subscriptions_reject_disconnected_or_finished_streams() {
+<a href=#6870 id=6870 data-nosnippet>6870</a>        <span class="kw">for </span>state <span class="kw">in </span><span class="number">0</span>..<span class="number">3 </span>{
+<a href=#6871 id=6871 data-nosnippet>6871</a>            <span class="kw">let </span><span class="kw-2">mut </span>engine = <span class="kw">if </span>state == <span class="number">0 </span>{
+<a href=#6872 id=6872 data-nosnippet>6872</a>                QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap()
+<a href=#6873 id=6873 data-nosnippet>6873</a>            } <span class="kw">else </span>{
+<a href=#6874 id=6874 data-nosnippet>6874</a>                mqtt_connected_quic_engine()
+<a href=#6875 id=6875 data-nosnippet>6875</a>            };
+<a href=#6876 id=6876 data-nosnippet>6876</a>            engine.control_finishing = state == <span class="number">1</span>;
+<a href=#6877 id=6877 data-nosnippet>6877</a>            engine.control_finished = state == <span class="number">2</span>;
+<a href=#6878 id=6878 data-nosnippet>6878</a>            <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#6879 id=6879 data-nosnippet>6879</a>                engine.subscribe_on_control(SubscribeCommand::single(<span class="string">"control/#"</span>, <span class="number">1</span>)),
+<a href=#6880 id=6880 data-nosnippet>6880</a>                <span class="prelude-val">Err</span>(MqttClientError::InvalidState { .. })
+<a href=#6881 id=6881 data-nosnippet>6881</a>            ));
+<a href=#6882 id=6882 data-nosnippet>6882</a>            <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#6883 id=6883 data-nosnippet>6883</a>                engine.unsubscribe_on_control(UnsubscribeCommand::from_topics(<span class="macro">vec!</span>[
+<a href=#6884 id=6884 data-nosnippet>6884</a>                    <span class="string">"control/#"</span>.into()
+<a href=#6885 id=6885 data-nosnippet>6885</a>                ])),
+<a href=#6886 id=6886 data-nosnippet>6886</a>                <span class="prelude-val">Err</span>(MqttClientError::InvalidState { .. })
+<a href=#6887 id=6887 data-nosnippet>6887</a>            ));
+<a href=#6888 id=6888 data-nosnippet>6888</a>            <span class="macro">assert!</span>(engine.mqtt_engine.inflight_queue.is_empty());
+<a href=#6889 id=6889 data-nosnippet>6889</a>            <span class="macro">assert!</span>(engine.mqtt_engine.state.reserved.is_empty());
+<a href=#6890 id=6890 data-nosnippet>6890</a>            <span class="macro">assert!</span>(engine.mqtt_engine.take_outgoing().is_empty());
+<a href=#6891 id=6891 data-nosnippet>6891</a>            <span class="macro">assert_eq!</span>(engine.data_stream_count(), <span class="number">0</span>);
+<a href=#6892 id=6892 data-nosnippet>6892</a>        }
+<a href=#6893 id=6893 data-nosnippet>6893</a>    }
+<a href=#6894 id=6894 data-nosnippet>6894</a>
+<a href=#6895 id=6895 data-nosnippet>6895</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#6896 id=6896 data-nosnippet>6896</a>    #[test]
+<a href=#6897 id=6897 data-nosnippet>6897</a>    </span><span class="kw">fn </span>test_quic_data_stream_api_routes_commands_and_reuses_defaults() {
+<a href=#6898 id=6898 data-nosnippet>6898</a>        <span class="kw">use </span>quinn_proto::{Dir, Side, StreamId};
+<a href=#6899 id=6899 data-nosnippet>6899</a>
+<a href=#6900 id=6900 data-nosnippet>6900</a>        <span class="comment">// GIVEN: A QUIC connection exists, but no peer transport parameters have
+<a href=#6901 id=6901 data-nosnippet>6901</a>        // been received to grant client-initiated bidirectional stream capacity.
+<a href=#6902 id=6902 data-nosnippet>6902</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>engine = connected_quic_engine_without_peer_limits();
+<a href=#6903 id=6903 data-nosnippet>6903</a>
+<a href=#6904 id=6904 data-nosnippet>6904</a>        <span class="comment">// WHEN: The caller asks the public API to open a new data stream.
+<a href=#6905 id=6905 data-nosnippet>6905</a>        // THEN: The request fails instead of creating untracked stream state.
+<a href=#6906 id=6906 data-nosnippet>6906</a>        </span><span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#6907 id=6907 data-nosnippet>6907</a>            engine.open_data_stream(),
+<a href=#6908 id=6908 data-nosnippet>6908</a>            <span class="prelude-val">Err</span>(MqttClientError::InternalError { .. })
+<a href=#6909 id=6909 data-nosnippet>6909</a>        ));
+<a href=#6910 id=6910 data-nosnippet>6910</a>
+<a href=#6911 id=6911 data-nosnippet>6911</a>        <span class="comment">// GIVEN: A connected MQTT session with one known QUIC data stream.
+<a href=#6912 id=6912 data-nosnippet>6912</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
+<a href=#6913 id=6913 data-nosnippet>6913</a>        <span class="kw">let </span>stream_id = StreamId::new(Side::Client, Dir::Bi, <span class="number">1</span>);
+<a href=#6914 id=6914 data-nosnippet>6914</a>        engine
+<a href=#6915 id=6915 data-nosnippet>6915</a>            .data_streams
+<a href=#6916 id=6916 data-nosnippet>6916</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">1</span>));
+<a href=#6917 id=6917 data-nosnippet>6917</a>        <span class="kw">let </span>stream = u64::from(stream_id);
+<a href=#6918 id=6918 data-nosnippet>6918</a>        <span class="macro">assert_eq!</span>(engine.data_stream_count(), <span class="number">1</span>);
+<a href=#6919 id=6919 data-nosnippet>6919</a>        <span class="macro">assert!</span>(engine.control_stream_id().is_none());
+<a href=#6920 id=6920 data-nosnippet>6920</a>
+<a href=#6921 id=6921 data-nosnippet>6921</a>        <span class="comment">// WHEN: A publish is targeted at that explicit stream.
+<a href=#6922 id=6922 data-nosnippet>6922</a>        // THEN: The MQTT packet is encoded, tracked, and buffered on the stream.
+<a href=#6923 id=6923 data-nosnippet>6923</a>        </span><span class="kw">let </span>publish_pid = engine
+<a href=#6924 id=6924 data-nosnippet>6924</a>            .publish_on(
+<a href=#6925 id=6925 data-nosnippet>6925</a>                stream,
+<a href=#6926 id=6926 data-nosnippet>6926</a>                PublishCommand::simple(<span class="string">"topic/a"</span>, <span class="string">b"payload"</span>.to_vec(), <span class="number">1</span>, <span class="bool-val">false</span>),
+<a href=#6927 id=6927 data-nosnippet>6927</a>            )
+<a href=#6928 id=6928 data-nosnippet>6928</a>            .unwrap();
+<a href=#6929 id=6929 data-nosnippet>6929</a>        <span class="macro">assert_eq!</span>(publish_pid, <span class="prelude-val">Some</span>(<span class="number">1</span>));
+<a href=#6930 id=6930 data-nosnippet>6930</a>        <span class="macro">assert!</span>(engine
+<a href=#6931 id=6931 data-nosnippet>6931</a>            .data_streams
+<a href=#6932 id=6932 data-nosnippet>6932</a>            .values()
+<a href=#6933 id=6933 data-nosnippet>6933</a>            .any(|ds| ds.pending_packets == <span class="number">1 </span>&amp;&amp; !ds.outgoing.is_empty()));
+<a href=#6934 id=6934 data-nosnippet>6934</a>
+<a href=#6935 id=6935 data-nosnippet>6935</a>        <span class="kw">let </span>bad_stream = stream + <span class="number">4</span>;
+<a href=#6936 id=6936 data-nosnippet>6936</a>        <span class="comment">// WHEN: A publish targets an unknown stream handle.
+<a href=#6937 id=6937 data-nosnippet>6937</a>        // THEN: The API rejects the command before allocating MQTT state.
+<a href=#6938 id=6938 data-nosnippet>6938</a>        </span><span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#6939 id=6939 data-nosnippet>6939</a>            engine.publish_on(
+<a href=#6940 id=6940 data-nosnippet>6940</a>                bad_stream,
+<a href=#6941 id=6941 data-nosnippet>6941</a>                PublishCommand::simple(<span class="string">"topic/b"</span>, <span class="string">b"payload"</span>.to_vec(), <span class="number">0</span>, <span class="bool-val">false</span>)
+<a href=#6942 id=6942 data-nosnippet>6942</a>            ),
+<a href=#6943 id=6943 data-nosnippet>6943</a>            <span class="prelude-val">Err</span>(MqttClientError::InvalidState { .. })
+<a href=#6944 id=6944 data-nosnippet>6944</a>        ));
+<a href=#6945 id=6945 data-nosnippet>6945</a>
+<a href=#6946 id=6946 data-nosnippet>6946</a>        <span class="comment">// GIVEN: A fresh engine that has not registered the previous stream id.
+<a href=#6947 id=6947 data-nosnippet>6947</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
+<a href=#6948 id=6948 data-nosnippet>6948</a>        <span class="comment">// WHEN: A subscribe uses a handle from another engine instance.
+<a href=#6949 id=6949 data-nosnippet>6949</a>        // THEN: The handle is treated as unknown and rejected.
+<a href=#6950 id=6950 data-nosnippet>6950</a>        </span><span class="kw">let </span>sub_pid = engine
+<a href=#6951 id=6951 data-nosnippet>6951</a>            .subscribe_on(stream, SubscribeCommand::single(<span class="string">"topic/sub"</span>, <span class="number">0</span>))
+<a href=#6952 id=6952 data-nosnippet>6952</a>            .expect_err(<span class="string">"stream handle from another engine must be rejected"</span>);
+<a href=#6953 id=6953 data-nosnippet>6953</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(sub_pid, MqttClientError::InvalidState { .. }));
+<a href=#6954 id=6954 data-nosnippet>6954</a>
+<a href=#6955 id=6955 data-nosnippet>6955</a>        <span class="comment">// GIVEN: The stream handle is registered on this engine.
+<a href=#6956 id=6956 data-nosnippet>6956</a>        </span>engine
+<a href=#6957 id=6957 data-nosnippet>6957</a>            .data_streams
+<a href=#6958 id=6958 data-nosnippet>6958</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">1</span>));
+<a href=#6959 id=6959 data-nosnippet>6959</a>        <span class="comment">// WHEN: A subscribe is targeted at the explicit stream.
+<a href=#6960 id=6960 data-nosnippet>6960</a>        // THEN: The SUBSCRIBE packet is allocated and buffered on that stream.
+<a href=#6961 id=6961 data-nosnippet>6961</a>        </span><span class="kw">let </span>sub_pid = engine
+<a href=#6962 id=6962 data-nosnippet>6962</a>            .subscribe_on(stream, SubscribeCommand::single(<span class="string">"topic/sub"</span>, <span class="number">0</span>))
+<a href=#6963 id=6963 data-nosnippet>6963</a>            .unwrap();
+<a href=#6964 id=6964 data-nosnippet>6964</a>        <span class="macro">assert_eq!</span>(sub_pid, <span class="number">1</span>);
+<a href=#6965 id=6965 data-nosnippet>6965</a>
+<a href=#6966 id=6966 data-nosnippet>6966</a>        <span class="comment">// GIVEN: A connected MQTT session with one known QUIC data stream.
+<a href=#6967 id=6967 data-nosnippet>6967</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
+<a href=#6968 id=6968 data-nosnippet>6968</a>        engine
+<a href=#6969 id=6969 data-nosnippet>6969</a>            .data_streams
+<a href=#6970 id=6970 data-nosnippet>6970</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">1</span>));
+<a href=#6971 id=6971 data-nosnippet>6971</a>        <span class="comment">// WHEN: An unsubscribe is targeted at the explicit stream.
+<a href=#6972 id=6972 data-nosnippet>6972</a>        // THEN: The UNSUBSCRIBE packet is allocated and buffered on that stream.
+<a href=#6973 id=6973 data-nosnippet>6973</a>        </span><span class="kw">let </span>unsub_pid = engine
+<a href=#6974 id=6974 data-nosnippet>6974</a>            .unsubscribe_on(
+<a href=#6975 id=6975 data-nosnippet>6975</a>                stream,
+<a href=#6976 id=6976 data-nosnippet>6976</a>                UnsubscribeCommand::from_topics(<span class="macro">vec!</span>[<span class="string">"topic/sub"</span>.to_string()]),
+<a href=#6977 id=6977 data-nosnippet>6977</a>            )
+<a href=#6978 id=6978 data-nosnippet>6978</a>            .unwrap();
+<a href=#6979 id=6979 data-nosnippet>6979</a>        <span class="macro">assert_eq!</span>(unsub_pid, <span class="number">1</span>);
+<a href=#6980 id=6980 data-nosnippet>6980</a>
+<a href=#6981 id=6981 data-nosnippet>6981</a>        <span class="comment">// GIVEN: The default publish stream is already known.
+<a href=#6982 id=6982 data-nosnippet>6982</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
+<a href=#6983 id=6983 data-nosnippet>6983</a>        engine
+<a href=#6984 id=6984 data-nosnippet>6984</a>            .data_streams
+<a href=#6985 id=6985 data-nosnippet>6985</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">1</span>));
+<a href=#6986 id=6986 data-nosnippet>6986</a>        engine.default_pub_stream = <span class="prelude-val">Some</span>(stream_id);
+<a href=#6987 id=6987 data-nosnippet>6987</a>        <span class="comment">// WHEN: The high-level publish API is used.
+<a href=#6988 id=6988 data-nosnippet>6988</a>        // THEN: It reuses the default publish stream instead of opening another.
+<a href=#6989 id=6989 data-nosnippet>6989</a>        </span><span class="kw">let </span>publish_pid = engine
+<a href=#6990 id=6990 data-nosnippet>6990</a>            .publish(PublishCommand::simple(
+<a href=#6991 id=6991 data-nosnippet>6991</a>                <span class="string">"topic/default"</span>,
+<a href=#6992 id=6992 data-nosnippet>6992</a>                <span class="string">b"x"</span>.to_vec(),
+<a href=#6993 id=6993 data-nosnippet>6993</a>                <span class="number">1</span>,
+<a href=#6994 id=6994 data-nosnippet>6994</a>                <span class="bool-val">false</span>,
+<a href=#6995 id=6995 data-nosnippet>6995</a>            ))
+<a href=#6996 id=6996 data-nosnippet>6996</a>            .unwrap();
+<a href=#6997 id=6997 data-nosnippet>6997</a>        <span class="macro">assert_eq!</span>(publish_pid, <span class="prelude-val">Some</span>(<span class="number">1</span>));
+<a href=#6998 id=6998 data-nosnippet>6998</a>        <span class="kw">let </span>default_pub = engine.default_pub_stream.unwrap();
+<a href=#6999 id=6999 data-nosnippet>6999</a>        <span class="macro">assert_eq!</span>(engine.ensure_default_pub_stream().unwrap(), default_pub);
+<a href=#7000 id=7000 data-nosnippet>7000</a>
+<a href=#7001 id=7001 data-nosnippet>7001</a>        <span class="comment">// GIVEN: The default subscribe stream is already known.
+<a href=#7002 id=7002 data-nosnippet>7002</a>        </span><span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
+<a href=#7003 id=7003 data-nosnippet>7003</a>        engine
+<a href=#7004 id=7004 data-nosnippet>7004</a>            .data_streams
+<a href=#7005 id=7005 data-nosnippet>7005</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">2</span>));
+<a href=#7006 id=7006 data-nosnippet>7006</a>        engine.default_sub_stream = <span class="prelude-val">Some</span>(stream_id);
+<a href=#7007 id=7007 data-nosnippet>7007</a>        <span class="comment">// WHEN: The high-level subscribe and unsubscribe APIs are used.
+<a href=#7008 id=7008 data-nosnippet>7008</a>        // THEN: Both commands reuse the default subscribe stream.
+<a href=#7009 id=7009 data-nosnippet>7009</a>        </span><span class="kw">let </span>sub_pid = engine
+<a href=#7010 id=7010 data-nosnippet>7010</a>            .subscribe(SubscribeCommand::single(<span class="string">"topic/default"</span>, <span class="number">0</span>))
+<a href=#7011 id=7011 data-nosnippet>7011</a>            .unwrap();
+<a href=#7012 id=7012 data-nosnippet>7012</a>        <span class="macro">assert_eq!</span>(sub_pid, <span class="number">1</span>);
+<a href=#7013 id=7013 data-nosnippet>7013</a>        <span class="kw">let </span>default_sub = engine.default_sub_stream.unwrap();
+<a href=#7014 id=7014 data-nosnippet>7014</a>        <span class="kw">let </span>unsub_pid = engine
+<a href=#7015 id=7015 data-nosnippet>7015</a>            .unsubscribe(UnsubscribeCommand::from_topics(<span class="macro">vec!</span>[
+<a href=#7016 id=7016 data-nosnippet>7016</a>                <span class="string">"topic/default"</span>.to_string()
+<a href=#7017 id=7017 data-nosnippet>7017</a>            ]))
+<a href=#7018 id=7018 data-nosnippet>7018</a>            .unwrap();
+<a href=#7019 id=7019 data-nosnippet>7019</a>        <span class="macro">assert_eq!</span>(unsub_pid, <span class="number">2</span>);
+<a href=#7020 id=7020 data-nosnippet>7020</a>        <span class="macro">assert_eq!</span>(engine.ensure_default_sub_stream().unwrap(), default_sub);
+<a href=#7021 id=7021 data-nosnippet>7021</a>    }
+<a href=#7022 id=7022 data-nosnippet>7022</a>
+<a href=#7023 id=7023 data-nosnippet>7023</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#7024 id=7024 data-nosnippet>7024</a>    #[test]
+<a href=#7025 id=7025 data-nosnippet>7025</a>    </span><span class="kw">fn </span>test_quic_data_stream_capacity_and_finished_errors() {
+<a href=#7026 id=7026 data-nosnippet>7026</a>        <span class="kw">use </span>quinn_proto::{Dir, Side, StreamId};
+<a href=#7027 id=7027 data-nosnippet>7027</a>
+<a href=#7028 id=7028 data-nosnippet>7028</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = mqtt_connected_quic_engine();
+<a href=#7029 id=7029 data-nosnippet>7029</a>        <span class="kw">let </span>stream_id = StreamId::new(Side::Client, Dir::Bi, <span class="number">1</span>);
+<a href=#7030 id=7030 data-nosnippet>7030</a>        engine
+<a href=#7031 id=7031 data-nosnippet>7031</a>            .data_streams
+<a href=#7032 id=7032 data-nosnippet>7032</a>            .insert(stream_id, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">1</span>));
+<a href=#7033 id=7033 data-nosnippet>7033</a>        <span class="kw">let </span>stream = u64::from(stream_id);
+<a href=#7034 id=7034 data-nosnippet>7034</a>
+<a href=#7035 id=7035 data-nosnippet>7035</a>        engine
+<a href=#7036 id=7036 data-nosnippet>7036</a>            .data_streams
+<a href=#7037 id=7037 data-nosnippet>7037</a>            .get_mut(<span class="kw-2">&amp;</span>stream_id)
+<a href=#7038 id=7038 data-nosnippet>7038</a>            .unwrap()
+<a href=#7039 id=7039 data-nosnippet>7039</a>            .pending_packets = <span class="number">1</span>;
+<a href=#7040 id=7040 data-nosnippet>7040</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#7041 id=7041 data-nosnippet>7041</a>            engine.publish_on(
+<a href=#7042 id=7042 data-nosnippet>7042</a>                stream,
+<a href=#7043 id=7043 data-nosnippet>7043</a>                PublishCommand::simple(<span class="string">"topic/full"</span>, <span class="string">b"payload"</span>.to_vec(), <span class="number">1</span>, <span class="bool-val">false</span>)
+<a href=#7044 id=7044 data-nosnippet>7044</a>            ),
+<a href=#7045 id=7045 data-nosnippet>7045</a>            <span class="prelude-val">Err</span>(MqttClientError::BufferFull {
+<a href=#7046 id=7046 data-nosnippet>7046</a>                buffer_type,
+<a href=#7047 id=7047 data-nosnippet>7047</a>                capacity: <span class="number">1</span>,
+<a href=#7048 id=7048 data-nosnippet>7048</a>            }) <span class="kw">if </span>buffer_type == <span class="string">"quic_stream_outgoing"
+<a href=#7049 id=7049 data-nosnippet>7049</a>        </span>));
+<a href=#7050 id=7050 data-nosnippet>7050</a>
+<a href=#7051 id=7051 data-nosnippet>7051</a>        <span class="kw">let </span>ds = engine.data_streams.get_mut(<span class="kw-2">&amp;</span>stream_id).unwrap();
+<a href=#7052 id=7052 data-nosnippet>7052</a>        ds.pending_packets = <span class="number">0</span>;
+<a href=#7053 id=7053 data-nosnippet>7053</a>        ds.finished = <span class="bool-val">true</span>;
+<a href=#7054 id=7054 data-nosnippet>7054</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#7055 id=7055 data-nosnippet>7055</a>            engine.subscribe_on(stream, SubscribeCommand::single(<span class="string">"topic/finished"</span>, <span class="number">0</span>)),
+<a href=#7056 id=7056 data-nosnippet>7056</a>            <span class="prelude-val">Err</span>(MqttClientError::InvalidState { .. })
+<a href=#7057 id=7057 data-nosnippet>7057</a>        ));
+<a href=#7058 id=7058 data-nosnippet>7058</a>    }
+<a href=#7059 id=7059 data-nosnippet>7059</a>
+<a href=#7060 id=7060 data-nosnippet>7060</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#7061 id=7061 data-nosnippet>7061</a>    #[test]
+<a href=#7062 id=7062 data-nosnippet>7062</a>    </span><span class="kw">fn </span>test_zero_rtt_config_default_and_connect_disables() {
+<a href=#7063 id=7063 data-nosnippet>7063</a>        <span class="kw">let </span>default = QuicZeroRttConfig::default();
+<a href=#7064 id=7064 data-nosnippet>7064</a>        <span class="macro">assert_eq!</span>(default.session_cache_size, <span class="number">256</span>);
+<a href=#7065 id=7065 data-nosnippet>7065</a>        <span class="macro">assert!</span>(default.replay_on_reject);
+<a href=#7066 id=7066 data-nosnippet>7066</a>
+<a href=#7067 id=7067 data-nosnippet>7067</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+<a href=#7068 id=7068 data-nosnippet>7068</a>        engine.zero_rtt_config = <span class="prelude-val">Some</span>(default);
+<a href=#7069 id=7069 data-nosnippet>7069</a>        engine.zero_rtt_status = QuicZeroRttStatus::Attempted;
+<a href=#7070 id=7070 data-nosnippet>7070</a>        engine
+<a href=#7071 id=7071 data-nosnippet>7071</a>            .pending_transport_events
+<a href=#7072 id=7072 data-nosnippet>7072</a>            .push_back(MqttEvent::ZeroRttStatusChanged {
+<a href=#7073 id=7073 data-nosnippet>7073</a>                status: QuicZeroRttStatus::Attempted,
+<a href=#7074 id=7074 data-nosnippet>7074</a>            });
+<a href=#7075 id=7075 data-nosnippet>7075</a>        QuicMqttEngine::journal_stream_open(
+<a href=#7076 id=7076 data-nosnippet>7076</a>            <span class="kw-2">&amp;mut </span>engine.early_stream_journal,
+<a href=#7077 id=7077 data-nosnippet>7077</a>            StreamId::new(quinn_proto::Side::Client, Dir::Bi, <span class="number">0</span>),
+<a href=#7078 id=7078 data-nosnippet>7078</a>            EarlyStreamRole::Control,
+<a href=#7079 id=7079 data-nosnippet>7079</a>        );
+<a href=#7080 id=7080 data-nosnippet>7080</a>
+<a href=#7081 id=7081 data-nosnippet>7081</a>        engine
+<a href=#7082 id=7082 data-nosnippet>7082</a>            .connect(
+<a href=#7083 id=7083 data-nosnippet>7083</a>                <span class="string">"127.0.0.1:4433"</span>.parse().unwrap(),
+<a href=#7084 id=7084 data-nosnippet>7084</a>                <span class="string">"localhost"</span>,
+<a href=#7085 id=7085 data-nosnippet>7085</a>                quic_test_crypto_config(),
+<a href=#7086 id=7086 data-nosnippet>7086</a>                Instant::now(),
+<a href=#7087 id=7087 data-nosnippet>7087</a>            )
+<a href=#7088 id=7088 data-nosnippet>7088</a>            .unwrap();
+<a href=#7089 id=7089 data-nosnippet>7089</a>
+<a href=#7090 id=7090 data-nosnippet>7090</a>        <span class="macro">assert_eq!</span>(engine.zero_rtt_config, <span class="prelude-val">None</span>);
+<a href=#7091 id=7091 data-nosnippet>7091</a>        <span class="macro">assert_eq!</span>(engine.zero_rtt_status(), QuicZeroRttStatus::Disabled);
+<a href=#7092 id=7092 data-nosnippet>7092</a>        <span class="macro">assert!</span>(engine.pending_transport_events.is_empty());
+<a href=#7093 id=7093 data-nosnippet>7093</a>        <span class="macro">assert!</span>(engine.early_stream_journal.is_empty());
+<a href=#7094 id=7094 data-nosnippet>7094</a>    }
+<a href=#7095 id=7095 data-nosnippet>7095</a>
+<a href=#7096 id=7096 data-nosnippet>7096</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#7097 id=7097 data-nosnippet>7097</a>    #[test]
+<a href=#7098 id=7098 data-nosnippet>7098</a>    </span><span class="kw">fn </span>test_connect_with_zero_rtt_emits_unavailable_without_ticket() {
+<a href=#7099 id=7099 data-nosnippet>7099</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+<a href=#7100 id=7100 data-nosnippet>7100</a>        <span class="kw">let </span>config = QuicZeroRttConfig {
+<a href=#7101 id=7101 data-nosnippet>7101</a>            session_cache_size: <span class="number">8</span>,
+<a href=#7102 id=7102 data-nosnippet>7102</a>            replay_on_reject: <span class="bool-val">false</span>,
+<a href=#7103 id=7103 data-nosnippet>7103</a>        };
+<a href=#7104 id=7104 data-nosnippet>7104</a>
+<a href=#7105 id=7105 data-nosnippet>7105</a>        engine
+<a href=#7106 id=7106 data-nosnippet>7106</a>            .connect_with_zero_rtt(
+<a href=#7107 id=7107 data-nosnippet>7107</a>                <span class="string">"127.0.0.1:4433"</span>.parse().unwrap(),
+<a href=#7108 id=7108 data-nosnippet>7108</a>                <span class="string">"localhost"</span>,
+<a href=#7109 id=7109 data-nosnippet>7109</a>                quic_test_crypto_config(),
+<a href=#7110 id=7110 data-nosnippet>7110</a>                config,
+<a href=#7111 id=7111 data-nosnippet>7111</a>                Instant::now(),
+<a href=#7112 id=7112 data-nosnippet>7112</a>            )
+<a href=#7113 id=7113 data-nosnippet>7113</a>            .unwrap();
+<a href=#7114 id=7114 data-nosnippet>7114</a>
+<a href=#7115 id=7115 data-nosnippet>7115</a>        <span class="macro">assert_eq!</span>(engine.zero_rtt_config, <span class="prelude-val">Some</span>(config));
+<a href=#7116 id=7116 data-nosnippet>7116</a>        <span class="macro">assert_eq!</span>(engine.zero_rtt_status(), QuicZeroRttStatus::Unavailable);
+<a href=#7117 id=7117 data-nosnippet>7117</a>        <span class="macro">assert!</span>(engine.zero_rtt_cache.is_some());
+<a href=#7118 id=7118 data-nosnippet>7118</a>
+<a href=#7119 id=7119 data-nosnippet>7119</a>        <span class="kw">let </span>events = engine.take_events();
+<a href=#7120 id=7120 data-nosnippet>7120</a>        <span class="macro">assert_eq!</span>(events.len(), <span class="number">1</span>);
+<a href=#7121 id=7121 data-nosnippet>7121</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#7122 id=7122 data-nosnippet>7122</a>            events[<span class="number">0</span>],
+<a href=#7123 id=7123 data-nosnippet>7123</a>            MqttEvent::ZeroRttStatusChanged {
+<a href=#7124 id=7124 data-nosnippet>7124</a>                status: QuicZeroRttStatus::Unavailable
+<a href=#7125 id=7125 data-nosnippet>7125</a>            }
+<a href=#7126 id=7126 data-nosnippet>7126</a>        ));
+<a href=#7127 id=7127 data-nosnippet>7127</a>        <span class="macro">assert!</span>(engine.take_events().is_empty());
+<a href=#7128 id=7128 data-nosnippet>7128</a>    }
+<a href=#7129 id=7129 data-nosnippet>7129</a>
+<a href=#7130 id=7130 data-nosnippet>7130</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#7131 id=7131 data-nosnippet>7131</a>    #[test]
+<a href=#7132 id=7132 data-nosnippet>7132</a>    </span><span class="kw">fn </span>test_zero_rtt_early_control_open_failure_falls_back_to_unavailable() {
+<a href=#7133 id=7133 data-nosnippet>7133</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+<a href=#7134 id=7134 data-nosnippet>7134</a>        engine.zero_rtt_config = <span class="prelude-val">Some</span>(QuicZeroRttConfig::default());
 <a href=#7135 id=7135 data-nosnippet>7135</a>
-<a href=#7136 id=7136 data-nosnippet>7136</a>        <span class="macro">assert_eq!</span>(engine.zero_rtt_status(), QuicZeroRttStatus::Unavailable);
-<a href=#7137 id=7137 data-nosnippet>7137</a>        <span class="macro">assert_eq!</span>(engine.control_stream, <span class="prelude-val">None</span>);
-<a href=#7138 id=7138 data-nosnippet>7138</a>        <span class="macro">assert!</span>(engine.control_outgoing.is_empty());
-<a href=#7139 id=7139 data-nosnippet>7139</a>        <span class="macro">assert!</span>(engine.early_stream_journal.is_empty());
-<a href=#7140 id=7140 data-nosnippet>7140</a>
-<a href=#7141 id=7141 data-nosnippet>7141</a>        <span class="kw">let </span>events = engine.take_events();
-<a href=#7142 id=7142 data-nosnippet>7142</a>        <span class="macro">assert_eq!</span>(events.len(), <span class="number">1</span>);
-<a href=#7143 id=7143 data-nosnippet>7143</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
-<a href=#7144 id=7144 data-nosnippet>7144</a>            events[<span class="number">0</span>],
-<a href=#7145 id=7145 data-nosnippet>7145</a>            MqttEvent::ZeroRttStatusChanged {
-<a href=#7146 id=7146 data-nosnippet>7146</a>                status: QuicZeroRttStatus::Unavailable
-<a href=#7147 id=7147 data-nosnippet>7147</a>            }
-<a href=#7148 id=7148 data-nosnippet>7148</a>        ));
-<a href=#7149 id=7149 data-nosnippet>7149</a>        <span class="macro">assert!</span>(engine
-<a href=#7150 id=7150 data-nosnippet>7150</a>            .publish(PublishCommand::simple(
-<a href=#7151 id=7151 data-nosnippet>7151</a>                <span class="string">"topic"</span>,
-<a href=#7152 id=7152 data-nosnippet>7152</a>                <span class="string">b"payload"</span>.to_vec(),
-<a href=#7153 id=7153 data-nosnippet>7153</a>                <span class="number">0</span>,
-<a href=#7154 id=7154 data-nosnippet>7154</a>                <span class="bool-val">false
-<a href=#7155 id=7155 data-nosnippet>7155</a>            </span>))
-<a href=#7156 id=7156 data-nosnippet>7156</a>            .is_err());
-<a href=#7157 id=7157 data-nosnippet>7157</a>    }
-<a href=#7158 id=7158 data-nosnippet>7158</a>
-<a href=#7159 id=7159 data-nosnippet>7159</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#7160 id=7160 data-nosnippet>7160</a>    #[test]
-<a href=#7161 id=7161 data-nosnippet>7161</a>    </span><span class="kw">fn </span>test_clearable_quic_session_cache_delegates_and_redacts() {
-<a href=#7162 id=7162 data-nosnippet>7162</a>        <span class="kw">let </span>cache = ClearableQuicSessionCache::new(<span class="number">16</span>);
-<a href=#7163 id=7163 data-nosnippet>7163</a>        <span class="kw">let </span>name = ServerName::try_from(<span class="string">"example.com"</span>).unwrap().to_owned();
-<a href=#7164 id=7164 data-nosnippet>7164</a>
-<a href=#7165 id=7165 data-nosnippet>7165</a>        cache.set_kx_hint(name.clone(), NamedGroup::X25519);
-<a href=#7166 id=7166 data-nosnippet>7166</a>        <span class="macro">assert_eq!</span>(cache.kx_hint(<span class="kw-2">&amp;</span>name), <span class="prelude-val">Some</span>(NamedGroup::X25519));
-<a href=#7167 id=7167 data-nosnippet>7167</a>
-<a href=#7168 id=7168 data-nosnippet>7168</a>        <span class="kw">let </span>debug = <span class="macro">format!</span>(<span class="string">"{:?}"</span>, cache);
-<a href=#7169 id=7169 data-nosnippet>7169</a>        <span class="macro">assert!</span>(debug.contains(<span class="string">"[redacted]"</span>));
-<a href=#7170 id=7170 data-nosnippet>7170</a>        <span class="macro">assert!</span>(!debug.contains(<span class="string">"example.com"</span>));
-<a href=#7171 id=7171 data-nosnippet>7171</a>
-<a href=#7172 id=7172 data-nosnippet>7172</a>        cache.clear();
-<a href=#7173 id=7173 data-nosnippet>7173</a>        <span class="macro">assert_eq!</span>(cache.kx_hint(<span class="kw-2">&amp;</span>name), <span class="prelude-val">None</span>);
-<a href=#7174 id=7174 data-nosnippet>7174</a>    }
-<a href=#7175 id=7175 data-nosnippet>7175</a>
-<a href=#7176 id=7176 data-nosnippet>7176</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
-<a href=#7177 id=7177 data-nosnippet>7177</a>    #[test]
-<a href=#7178 id=7178 data-nosnippet>7178</a>    </span><span class="kw">fn </span>test_early_stream_journal_records_enqueue_not_write() {
-<a href=#7179 id=7179 data-nosnippet>7179</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
-<a href=#7180 id=7180 data-nosnippet>7180</a>        engine.zero_rtt_status = QuicZeroRttStatus::Attempted;
-<a href=#7181 id=7181 data-nosnippet>7181</a>
-<a href=#7182 id=7182 data-nosnippet>7182</a>        <span class="kw">let </span>control = StreamId::new(quinn_proto::Side::Client, Dir::Bi, <span class="number">0</span>);
-<a href=#7183 id=7183 data-nosnippet>7183</a>        <span class="kw">let </span>data = StreamId::new(quinn_proto::Side::Client, Dir::Bi, <span class="number">1</span>);
-<a href=#7184 id=7184 data-nosnippet>7184</a>        engine.control_stream = <span class="prelude-val">Some</span>(control);
-<a href=#7185 id=7185 data-nosnippet>7185</a>        QuicMqttEngine::journal_stream_open(
-<a href=#7186 id=7186 data-nosnippet>7186</a>            <span class="kw-2">&amp;mut </span>engine.early_stream_journal,
-<a href=#7187 id=7187 data-nosnippet>7187</a>            control,
-<a href=#7188 id=7188 data-nosnippet>7188</a>            EarlyStreamRole::Control,
-<a href=#7189 id=7189 data-nosnippet>7189</a>        );
-<a href=#7190 id=7190 data-nosnippet>7190</a>        QuicMqttEngine::journal_stream_open(
-<a href=#7191 id=7191 data-nosnippet>7191</a>            <span class="kw-2">&amp;mut </span>engine.early_stream_journal,
-<a href=#7192 id=7192 data-nosnippet>7192</a>            data,
-<a href=#7193 id=7193 data-nosnippet>7193</a>            EarlyStreamRole::DefaultPub,
-<a href=#7194 id=7194 data-nosnippet>7194</a>        );
-<a href=#7195 id=7195 data-nosnippet>7195</a>        engine
-<a href=#7196 id=7196 data-nosnippet>7196</a>            .data_streams
-<a href=#7197 id=7197 data-nosnippet>7197</a>            .insert(data, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">10</span>));
-<a href=#7198 id=7198 data-nosnippet>7198</a>
-<a href=#7199 id=7199 data-nosnippet>7199</a>        QuicMqttEngine::append_control_outgoing_bytes(
-<a href=#7200 id=7200 data-nosnippet>7200</a>            <span class="kw-2">&amp;mut </span>engine.control_outgoing,
-<a href=#7201 id=7201 data-nosnippet>7201</a>            <span class="kw-2">&amp;mut </span>engine.early_stream_journal,
-<a href=#7202 id=7202 data-nosnippet>7202</a>            engine.zero_rtt_status,
-<a href=#7203 id=7203 data-nosnippet>7203</a>            engine.control_stream,
-<a href=#7204 id=7204 data-nosnippet>7204</a>            <span class="kw-2">&amp;</span>[<span class="number">0x10</span>, <span class="number">0x00</span>],
-<a href=#7205 id=7205 data-nosnippet>7205</a>            <span class="number">1</span>,
-<a href=#7206 id=7206 data-nosnippet>7206</a>        );
-<a href=#7207 id=7207 data-nosnippet>7207</a>        engine.enqueue_on_stream(data, <span class="kw-2">&amp;</span>[<span class="number">0x30</span>, <span class="number">0x01</span>, <span class="string">b'x'</span>]).unwrap();
-<a href=#7208 id=7208 data-nosnippet>7208</a>
-<a href=#7209 id=7209 data-nosnippet>7209</a>        <span class="kw">let </span>control_entry = engine
-<a href=#7210 id=7210 data-nosnippet>7210</a>            .early_stream_journal
-<a href=#7211 id=7211 data-nosnippet>7211</a>            .iter()
-<a href=#7212 id=7212 data-nosnippet>7212</a>            .find(|entry| entry.original_stream_id == control)
-<a href=#7213 id=7213 data-nosnippet>7213</a>            .unwrap();
-<a href=#7214 id=7214 data-nosnippet>7214</a>        <span class="macro">assert_eq!</span>(control_entry.bytes, <span class="macro">vec!</span>[<span class="number">0x10</span>, <span class="number">0x00</span>]);
-<a href=#7215 id=7215 data-nosnippet>7215</a>        <span class="macro">assert_eq!</span>(control_entry.packet_count, <span class="number">1</span>);
-<a href=#7216 id=7216 data-nosnippet>7216</a>
-<a href=#7217 id=7217 data-nosnippet>7217</a>        <span class="kw">let </span>data_entry = engine
-<a href=#7218 id=7218 data-nosnippet>7218</a>            .early_stream_journal
-<a href=#7219 id=7219 data-nosnippet>7219</a>            .iter()
-<a href=#7220 id=7220 data-nosnippet>7220</a>            .find(|entry| entry.original_stream_id == data)
-<a href=#7221 id=7221 data-nosnippet>7221</a>            .unwrap();
-<a href=#7222 id=7222 data-nosnippet>7222</a>        <span class="macro">assert_eq!</span>(data_entry.bytes, <span class="macro">vec!</span>[<span class="number">0x30</span>, <span class="number">0x01</span>, <span class="string">b'x'</span>]);
-<a href=#7223 id=7223 data-nosnippet>7223</a>        <span class="macro">assert_eq!</span>(data_entry.packet_count, <span class="number">1</span>);
-<a href=#7224 id=7224 data-nosnippet>7224</a>
-<a href=#7225 id=7225 data-nosnippet>7225</a>        <span class="comment">// Simulate a partial QUIC write draining the stream buffer. The replay
-<a href=#7226 id=7226 data-nosnippet>7226</a>        // journal must keep the full original enqueue bytes.
-<a href=#7227 id=7227 data-nosnippet>7227</a>        </span>engine
-<a href=#7228 id=7228 data-nosnippet>7228</a>            .data_streams
-<a href=#7229 id=7229 data-nosnippet>7229</a>            .get_mut(<span class="kw-2">&amp;</span>data)
-<a href=#7230 id=7230 data-nosnippet>7230</a>            .unwrap()
-<a href=#7231 id=7231 data-nosnippet>7231</a>            .outgoing
-<a href=#7232 id=7232 data-nosnippet>7232</a>            .drain(..<span class="number">1</span>);
-<a href=#7233 id=7233 data-nosnippet>7233</a>        <span class="kw">let </span>data_entry = engine
-<a href=#7234 id=7234 data-nosnippet>7234</a>            .early_stream_journal
-<a href=#7235 id=7235 data-nosnippet>7235</a>            .iter()
-<a href=#7236 id=7236 data-nosnippet>7236</a>            .find(|entry| entry.original_stream_id == data)
-<a href=#7237 id=7237 data-nosnippet>7237</a>            .unwrap();
-<a href=#7238 id=7238 data-nosnippet>7238</a>        <span class="macro">assert_eq!</span>(data_entry.bytes, <span class="macro">vec!</span>[<span class="number">0x30</span>, <span class="number">0x01</span>, <span class="string">b'x'</span>]);
-<a href=#7239 id=7239 data-nosnippet>7239</a>    }
-<a href=#7240 id=7240 data-nosnippet>7240</a>}
+<a href=#7136 id=7136 data-nosnippet>7136</a>        engine.begin_zero_rtt_attempt(<span class="prelude-val">None</span>);
+<a href=#7137 id=7137 data-nosnippet>7137</a>
+<a href=#7138 id=7138 data-nosnippet>7138</a>        <span class="macro">assert_eq!</span>(engine.zero_rtt_status(), QuicZeroRttStatus::Unavailable);
+<a href=#7139 id=7139 data-nosnippet>7139</a>        <span class="macro">assert_eq!</span>(engine.control_stream, <span class="prelude-val">None</span>);
+<a href=#7140 id=7140 data-nosnippet>7140</a>        <span class="macro">assert!</span>(engine.control_outgoing.is_empty());
+<a href=#7141 id=7141 data-nosnippet>7141</a>        <span class="macro">assert!</span>(engine.early_stream_journal.is_empty());
+<a href=#7142 id=7142 data-nosnippet>7142</a>
+<a href=#7143 id=7143 data-nosnippet>7143</a>        <span class="kw">let </span>events = engine.take_events();
+<a href=#7144 id=7144 data-nosnippet>7144</a>        <span class="macro">assert_eq!</span>(events.len(), <span class="number">1</span>);
+<a href=#7145 id=7145 data-nosnippet>7145</a>        <span class="macro">assert!</span>(<span class="macro">matches!</span>(
+<a href=#7146 id=7146 data-nosnippet>7146</a>            events[<span class="number">0</span>],
+<a href=#7147 id=7147 data-nosnippet>7147</a>            MqttEvent::ZeroRttStatusChanged {
+<a href=#7148 id=7148 data-nosnippet>7148</a>                status: QuicZeroRttStatus::Unavailable
+<a href=#7149 id=7149 data-nosnippet>7149</a>            }
+<a href=#7150 id=7150 data-nosnippet>7150</a>        ));
+<a href=#7151 id=7151 data-nosnippet>7151</a>        <span class="macro">assert!</span>(engine
+<a href=#7152 id=7152 data-nosnippet>7152</a>            .publish(PublishCommand::simple(
+<a href=#7153 id=7153 data-nosnippet>7153</a>                <span class="string">"topic"</span>,
+<a href=#7154 id=7154 data-nosnippet>7154</a>                <span class="string">b"payload"</span>.to_vec(),
+<a href=#7155 id=7155 data-nosnippet>7155</a>                <span class="number">0</span>,
+<a href=#7156 id=7156 data-nosnippet>7156</a>                <span class="bool-val">false
+<a href=#7157 id=7157 data-nosnippet>7157</a>            </span>))
+<a href=#7158 id=7158 data-nosnippet>7158</a>            .is_err());
+<a href=#7159 id=7159 data-nosnippet>7159</a>    }
+<a href=#7160 id=7160 data-nosnippet>7160</a>
+<a href=#7161 id=7161 data-nosnippet>7161</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#7162 id=7162 data-nosnippet>7162</a>    #[test]
+<a href=#7163 id=7163 data-nosnippet>7163</a>    </span><span class="kw">fn </span>test_clearable_quic_session_cache_delegates_and_redacts() {
+<a href=#7164 id=7164 data-nosnippet>7164</a>        <span class="kw">let </span>cache = ClearableQuicSessionCache::new(<span class="number">16</span>);
+<a href=#7165 id=7165 data-nosnippet>7165</a>        <span class="kw">let </span>name = ServerName::try_from(<span class="string">"example.com"</span>).unwrap().to_owned();
+<a href=#7166 id=7166 data-nosnippet>7166</a>
+<a href=#7167 id=7167 data-nosnippet>7167</a>        cache.set_kx_hint(name.clone(), NamedGroup::X25519);
+<a href=#7168 id=7168 data-nosnippet>7168</a>        <span class="macro">assert_eq!</span>(cache.kx_hint(<span class="kw-2">&amp;</span>name), <span class="prelude-val">Some</span>(NamedGroup::X25519));
+<a href=#7169 id=7169 data-nosnippet>7169</a>
+<a href=#7170 id=7170 data-nosnippet>7170</a>        <span class="kw">let </span>debug = <span class="macro">format!</span>(<span class="string">"{:?}"</span>, cache);
+<a href=#7171 id=7171 data-nosnippet>7171</a>        <span class="macro">assert!</span>(debug.contains(<span class="string">"[redacted]"</span>));
+<a href=#7172 id=7172 data-nosnippet>7172</a>        <span class="macro">assert!</span>(!debug.contains(<span class="string">"example.com"</span>));
+<a href=#7173 id=7173 data-nosnippet>7173</a>
+<a href=#7174 id=7174 data-nosnippet>7174</a>        cache.clear();
+<a href=#7175 id=7175 data-nosnippet>7175</a>        <span class="macro">assert_eq!</span>(cache.kx_hint(<span class="kw-2">&amp;</span>name), <span class="prelude-val">None</span>);
+<a href=#7176 id=7176 data-nosnippet>7176</a>    }
+<a href=#7177 id=7177 data-nosnippet>7177</a>
+<a href=#7178 id=7178 data-nosnippet>7178</a>    <span class="attr">#[cfg(feature = <span class="string">"quic-proto"</span>)]
+<a href=#7179 id=7179 data-nosnippet>7179</a>    #[test]
+<a href=#7180 id=7180 data-nosnippet>7180</a>    </span><span class="kw">fn </span>test_early_stream_journal_records_enqueue_not_write() {
+<a href=#7181 id=7181 data-nosnippet>7181</a>        <span class="kw">let </span><span class="kw-2">mut </span>engine = QuicMqttEngine::new(MqttClientOptions::builder().build()).unwrap();
+<a href=#7182 id=7182 data-nosnippet>7182</a>        engine.zero_rtt_status = QuicZeroRttStatus::Attempted;
+<a href=#7183 id=7183 data-nosnippet>7183</a>
+<a href=#7184 id=7184 data-nosnippet>7184</a>        <span class="kw">let </span>control = StreamId::new(quinn_proto::Side::Client, Dir::Bi, <span class="number">0</span>);
+<a href=#7185 id=7185 data-nosnippet>7185</a>        <span class="kw">let </span>data = StreamId::new(quinn_proto::Side::Client, Dir::Bi, <span class="number">1</span>);
+<a href=#7186 id=7186 data-nosnippet>7186</a>        engine.control_stream = <span class="prelude-val">Some</span>(control);
+<a href=#7187 id=7187 data-nosnippet>7187</a>        QuicMqttEngine::journal_stream_open(
+<a href=#7188 id=7188 data-nosnippet>7188</a>            <span class="kw-2">&amp;mut </span>engine.early_stream_journal,
+<a href=#7189 id=7189 data-nosnippet>7189</a>            control,
+<a href=#7190 id=7190 data-nosnippet>7190</a>            EarlyStreamRole::Control,
+<a href=#7191 id=7191 data-nosnippet>7191</a>        );
+<a href=#7192 id=7192 data-nosnippet>7192</a>        QuicMqttEngine::journal_stream_open(
+<a href=#7193 id=7193 data-nosnippet>7193</a>            <span class="kw-2">&amp;mut </span>engine.early_stream_journal,
+<a href=#7194 id=7194 data-nosnippet>7194</a>            data,
+<a href=#7195 id=7195 data-nosnippet>7195</a>            EarlyStreamRole::DefaultPub,
+<a href=#7196 id=7196 data-nosnippet>7196</a>        );
+<a href=#7197 id=7197 data-nosnippet>7197</a>        engine
+<a href=#7198 id=7198 data-nosnippet>7198</a>            .data_streams
+<a href=#7199 id=7199 data-nosnippet>7199</a>            .insert(data, QuicStream::new(<span class="number">1024</span>, <span class="number">5</span>, <span class="number">10</span>));
+<a href=#7200 id=7200 data-nosnippet>7200</a>
+<a href=#7201 id=7201 data-nosnippet>7201</a>        QuicMqttEngine::append_control_outgoing_bytes(
+<a href=#7202 id=7202 data-nosnippet>7202</a>            <span class="kw-2">&amp;mut </span>engine.control_outgoing,
+<a href=#7203 id=7203 data-nosnippet>7203</a>            <span class="kw-2">&amp;mut </span>engine.early_stream_journal,
+<a href=#7204 id=7204 data-nosnippet>7204</a>            engine.zero_rtt_status,
+<a href=#7205 id=7205 data-nosnippet>7205</a>            engine.control_stream,
+<a href=#7206 id=7206 data-nosnippet>7206</a>            <span class="kw-2">&amp;</span>[<span class="number">0x10</span>, <span class="number">0x00</span>],
+<a href=#7207 id=7207 data-nosnippet>7207</a>            <span class="number">1</span>,
+<a href=#7208 id=7208 data-nosnippet>7208</a>        );
+<a href=#7209 id=7209 data-nosnippet>7209</a>        engine.enqueue_on_stream(data, <span class="kw-2">&amp;</span>[<span class="number">0x30</span>, <span class="number">0x01</span>, <span class="string">b'x'</span>]).unwrap();
+<a href=#7210 id=7210 data-nosnippet>7210</a>
+<a href=#7211 id=7211 data-nosnippet>7211</a>        <span class="kw">let </span>control_entry = engine
+<a href=#7212 id=7212 data-nosnippet>7212</a>            .early_stream_journal
+<a href=#7213 id=7213 data-nosnippet>7213</a>            .iter()
+<a href=#7214 id=7214 data-nosnippet>7214</a>            .find(|entry| entry.original_stream_id == control)
+<a href=#7215 id=7215 data-nosnippet>7215</a>            .unwrap();
+<a href=#7216 id=7216 data-nosnippet>7216</a>        <span class="macro">assert_eq!</span>(control_entry.bytes, <span class="macro">vec!</span>[<span class="number">0x10</span>, <span class="number">0x00</span>]);
+<a href=#7217 id=7217 data-nosnippet>7217</a>        <span class="macro">assert_eq!</span>(control_entry.packet_count, <span class="number">1</span>);
+<a href=#7218 id=7218 data-nosnippet>7218</a>
+<a href=#7219 id=7219 data-nosnippet>7219</a>        <span class="kw">let </span>data_entry = engine
+<a href=#7220 id=7220 data-nosnippet>7220</a>            .early_stream_journal
+<a href=#7221 id=7221 data-nosnippet>7221</a>            .iter()
+<a href=#7222 id=7222 data-nosnippet>7222</a>            .find(|entry| entry.original_stream_id == data)
+<a href=#7223 id=7223 data-nosnippet>7223</a>            .unwrap();
+<a href=#7224 id=7224 data-nosnippet>7224</a>        <span class="macro">assert_eq!</span>(data_entry.bytes, <span class="macro">vec!</span>[<span class="number">0x30</span>, <span class="number">0x01</span>, <span class="string">b'x'</span>]);
+<a href=#7225 id=7225 data-nosnippet>7225</a>        <span class="macro">assert_eq!</span>(data_entry.packet_count, <span class="number">1</span>);
+<a href=#7226 id=7226 data-nosnippet>7226</a>
+<a href=#7227 id=7227 data-nosnippet>7227</a>        <span class="comment">// Simulate a partial QUIC write draining the stream buffer. The replay
+<a href=#7228 id=7228 data-nosnippet>7228</a>        // journal must keep the full original enqueue bytes.
+<a href=#7229 id=7229 data-nosnippet>7229</a>        </span>engine
+<a href=#7230 id=7230 data-nosnippet>7230</a>            .data_streams
+<a href=#7231 id=7231 data-nosnippet>7231</a>            .get_mut(<span class="kw-2">&amp;</span>data)
+<a href=#7232 id=7232 data-nosnippet>7232</a>            .unwrap()
+<a href=#7233 id=7233 data-nosnippet>7233</a>            .outgoing
+<a href=#7234 id=7234 data-nosnippet>7234</a>            .drain(..<span class="number">1</span>);
+<a href=#7235 id=7235 data-nosnippet>7235</a>        <span class="kw">let </span>data_entry = engine
+<a href=#7236 id=7236 data-nosnippet>7236</a>            .early_stream_journal
+<a href=#7237 id=7237 data-nosnippet>7237</a>            .iter()
+<a href=#7238 id=7238 data-nosnippet>7238</a>            .find(|entry| entry.original_stream_id == data)
+<a href=#7239 id=7239 data-nosnippet>7239</a>            .unwrap();
+<a href=#7240 id=7240 data-nosnippet>7240</a>        <span class="macro">assert_eq!</span>(data_entry.bytes, <span class="macro">vec!</span>[<span class="number">0x30</span>, <span class="number">0x01</span>, <span class="string">b'x'</span>]);
+<a href=#7241 id=7241 data-nosnippet>7241</a>    }
+<a href=#7242 id=7242 data-nosnippet>7242</a>}
 </code></pre></div></section></main></body></html>
