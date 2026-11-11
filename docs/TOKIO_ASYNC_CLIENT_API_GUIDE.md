@@ -18,6 +18,9 @@ acknowledgement or local completion; they do not block a runtime thread.
 | `subscribe_sync`, `unsubscribe_sync`, QoS 1/2 `publish_sync`, `ping_sync` | The corresponding broker response arrived |
 | QoS 0 `publish_sync` | The engine validated and accepted the publication into its output queue |
 | `publish_with_command_admitted` (all QoS levels) | The engine validated and admitted this publication; no transport write or broker acknowledgement is promised |
+| `try_publish_tracked` | A command entered the worker queue and returned an operation receipt without yielding |
+| `PublishOperation::wait` | Engine admission for QoS 0; PUBACK/PUBCOMP or a broker rejection for QoS 1/2 |
+| `PublishDrain::drain_through` | This operation's initial transport write completed locally; broker delivery is not implied |
 | `puback`, `pubrec`, `pubcomp` | The engine validated the receive stage, queued the acknowledgement, and updated its state |
 | `disconnect`, `disconnect_with` | A disconnect command entered the worker queue |
 | `disconnect_sync`, `disconnect_with_sync` | DISCONNECT was written and the local transport closed |
@@ -40,6 +43,58 @@ those methods inside a callback would wait for the same worker that is running
 the callback. Local `publish_with_command_admitted` is the exception: its
 dedicated bounded queue is serviced while a callback is waiting, without socket
 I/O or recursive event delivery.
+
+### Tracked publication, cancellation, and local drain
+
+`try_publish_tracked(command, deadline)` returns a `PublishOperation` immediately
+when the bounded command queue has space. A full queue returns `BufferFull`
+without accepting the publication. The deadline is an absolute
+`tokio::time::Instant` shared by queue admission and confirmation waiting.
+
+```rust
+use flowsdk::mqtt_client::commands::PublishCommand;
+use tokio::time::{Duration, Instant};
+
+let deadline = Instant::now() + Duration::from_secs(5);
+let mut operation = client.try_publish_tracked(
+    PublishCommand::simple("sensors/temp", b"22.5".to_vec(), 0, false),
+    deadline,
+)?;
+let drain = operation.drain_receipt();
+match operation.wait().await {
+    Ok(result) if result.is_success() => {
+        drain.drain_through(deadline).await?;
+    }
+    Ok(result) => eprintln!("Broker rejected publication: {:?}", result.reason_code),
+    Err(error) => eprintln!("Publish failed (admitted={}): {}", error.admitted, error.error),
+}
+```
+
+Keep the operation handle when cancelling its `wait()` future, then resume the
+same wait to retain its identity and original deadline. Dropping the handle or
+expiring its deadline before engine admission prevents later publication;
+cancellation and admission are arbitrated under the same lock. After admission,
+dropping the handle or timing out a wait does not retract the MQTT exchange.
+`TrackedPublishError::admitted` distinguishes these cases. A missing confirmation
+after admission leaves delivery uncertain, and retrying may duplicate output.
+Broker rejection codes remain in `PublishResult`; inspect `is_success()`.
+
+The receipt identity is independent of a reusable MQTT packet ID. QoS 1/2 still
+use the engine's session recovery. The tracked path requires a connected engine
+and bypasses offline buffering and priority scheduling. Tracked QoS 0 is never
+replayed after transport loss.
+
+A `PublishDrain` waits for the operation's initial local transport write without
+disconnecting the client. Partial or failed writes fail the fence; a completed
+fence remains successful after later transport loss. `same_connection()` compares
+the connection generations in which two operations were admitted, and
+`is_written()` reports successful local write completion. Retain an older failed
+fence when accumulating progress across reconnects so later writes do not hide
+that failure. QoS 1/2 confirmation remains the operation receipt's responsibility.
+
+Tracked commands use the normal worker queue. A blocked callback can delay their
+admission and transport progress; do not await tracked completion inside a
+callback. The existing callback-safe admission API retains its dedicated queue.
 
 ### Configuration precedence and reconnect
 
@@ -69,6 +124,10 @@ I/O or recursive event delivery.
   `no_timeouts()` disables broker-response waits; transport cleanup stays bounded.
 - Native TLS and rustls use the TLS configuration supplied in `MqttClientOptions`,
   including custom trust roots and client credentials.
+- `MqttClientOptions::retransmit_on_timer` defaults to `true`. Set it to `false`
+  to disable MQTT 3 periodic retransmission and its timer wakeups while preserving
+  QoS 1/2 replay during session recovery on reconnect. MQTT 5 already replays only
+  on reconnect.
 
 ### Manual acknowledgements and disconnect metadata
 

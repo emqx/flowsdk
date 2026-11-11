@@ -812,6 +812,9 @@ impl<T: TimePoint> MqttEngine<T> {
     }
 
     fn handle_retransmissions(&mut self, now: T) -> Vec<MqttEvent> {
+        if !self.options.retransmit_on_timer {
+            return Vec::new();
+        }
         let events = Vec::new();
 
         let expired = self
@@ -887,7 +890,11 @@ impl<T: TimePoint> MqttEngine<T> {
 
         // 4. Retransmission timeouts (QoS 1/2 messages)
         // Only for MQTT v3.1.1, as v5.0 forbids client-side retransmission
-        if let Some(resend_at) = self.inflight_queue.next_expiration() {
+        if let Some(resend_at) = self
+            .inflight_queue
+            .next_expiration()
+            .filter(|_| self.options.retransmit_on_timer)
+        {
             if next.is_none() || resend_at < next.unwrap() {
                 next = Some(resend_at);
             }

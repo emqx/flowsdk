@@ -137,6 +137,9 @@ pub struct MqttClientOptions {
     /// - How long to wait before resending unacknowledged messages
     /// - Default: 5000 (5 seconds)
     pub retransmission_timeout_ms: u64,
+    /// Enable periodic MQTT 3 retransmission. Disabling retains reconnect replay.
+    /// MQTT 5 always replays only on reconnect. Defaults to true.
+    pub retransmit_on_timer: bool,
 
     /// Ping timeout multiplier
     /// - After sending PINGREQ, wait keep_alive * multiplier for PINGRESP
@@ -215,6 +218,7 @@ impl Default for MqttClientOptions {
             reconnect_max_delay_ms: 60000,
             max_reconnect_attempts: 0,
             retransmission_timeout_ms: 5000,
+            retransmit_on_timer: true,
             ping_timeout_multiplier: 2,
             max_outgoing_packet_count: 1000,
             max_event_count: 1000,
