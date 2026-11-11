@@ -31,6 +31,8 @@ use super::error::MqttClientError;
 use super::opts::MqttClientOptions;
 
 mod admission;
+mod tracked;
+pub use tracked::{PublishDrain, PublishOperation, TrackedPublishError};
 mod worker;
 use admission::{AdmissionBudget, AdmissionPermit, PublishAdmission};
 pub use admission::{PublishAdmissionConfig, PublishBatchAdmission, PublishBatchAdmissionError};
@@ -259,6 +261,7 @@ pub trait TokioMqttEventHandler: Send + Sync {
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug)]
 enum TokioClientCommand {
+    PublishTracked(tracked::TrackedCommand),
     /// Connect to the broker
     Connect,
     /// Connect to the broker and wait for acknowledgment
@@ -289,7 +292,9 @@ enum TokioClientCommand {
     /// Send ping to broker
     Ping,
     /// Send ping to broker and wait for response
-    PingSync { response_tx: Response<PingResult> },
+    PingSync {
+        response_tx: Response<PingResult>,
+    },
     /// Disconnect from broker
     Disconnect {
         reason_code: u8,
@@ -306,7 +311,9 @@ enum TokioClientCommand {
     /// Shutdown the client and worker
     Shutdown,
     /// Enable/disable automatic reconnection
-    SetAutoReconnect { enabled: bool },
+    SetAutoReconnect {
+        enabled: bool,
+    },
     /// Send AUTH packet for enhanced authentication (MQTT v5)
     Auth {
         reason_code: u8,

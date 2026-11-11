@@ -369,6 +369,9 @@ impl Pending {
 }
 
 pub(super) struct TokioClientWorker {
+    tracked_generation: std::sync::Arc<()>,
+    tracked: HashMap<u16, std::sync::Arc<super::tracked::Receipt>>,
+    tracked_output: std::collections::VecDeque<TrackedWrite>,
     pub(super) engine: MqttEngine,
     pub(super) stream: Option<BoxedTransport>,
     state: ConnectionState,
@@ -393,6 +396,9 @@ impl TokioClientWorker {
         config: TokioAsyncClientConfig,
     ) -> Self {
         Self {
+            tracked_generation: std::sync::Arc::new(()),
+            tracked: HashMap::new(),
+            tracked_output: std::collections::VecDeque::new(),
             engine: MqttEngine::new(options),
             event_handler,
             command_rx,
@@ -574,6 +580,10 @@ impl TokioClientWorker {
                     );
                 }
                 MqttEvent::Published(result) => {
+                    if let Some(receipt) = result.packet_id.and_then(|id| self.tracked.remove(&id))
+                    {
+                        receipt.complete(Ok(result.clone()));
+                    }
                     if let Some(tx) = result
                         .packet_id
                         .and_then(|id| self.pending.publish.remove(&id))
@@ -617,6 +627,10 @@ impl TokioClientWorker {
                     match operation {
                         OperationKind::Connect => self.pending.fail_connect(&error),
                         OperationKind::Publish => {
+                            if let Some(receipt) = packet_id.and_then(|id| self.tracked.remove(&id))
+                            {
+                                receipt.complete(Err(error.clone()));
+                            }
                             if let Some(tx) =
                                 packet_id.and_then(|id| self.pending.publish.remove(&id))
                             {
@@ -753,13 +767,22 @@ impl TokioClientWorker {
     }
 
     async fn write_output(&mut self) -> Result<(), MqttClientError> {
+        while let Some(write) = self.tracked_output.pop_front() {
+            let result = self.write_bytes(&write.bytes).await;
+            write.receipt.written(result.clone());
+            result?;
+        }
         let bytes = self.engine.take_outgoing();
+        self.write_bytes(&bytes).await
+    }
+
+    async fn write_bytes(&mut self, bytes: &[u8]) -> Result<(), MqttClientError> {
         if bytes.is_empty() {
             return Ok(());
         }
         let stream = self.stream.as_mut().ok_or(MqttClientError::NotConnected)?;
         let duration = self.config.default_operation_timeout_ms;
-        tokio::time::timeout(Duration::from_millis(duration), stream.write_all(&bytes))
+        tokio::time::timeout(Duration::from_millis(duration), stream.write_all(bytes))
             .await
             .map_err(|_| MqttClientError::OperationTimeout {
                 operation: "transport write".into(),
@@ -816,6 +839,10 @@ impl TokioClientWorker {
 
     async fn handle_command(&mut self, command: TokioClientCommand) {
         let result = match command {
+            TokioClientCommand::PublishTracked(request) => {
+                self.admit_tracked(&request);
+                Ok(())
+            }
             TokioClientCommand::Connect => {
                 self.start_connect();
                 Ok(())
@@ -983,6 +1010,9 @@ impl TokioClientWorker {
         self.pending.fail_all(&MqttClientError::OperationCancelled {
             operation: "disconnect".into(),
         });
+        self.fail_tracked(&MqttClientError::OperationCancelled {
+            operation: "disconnect".into(),
+        });
         let write = self.write_output().await;
         let close = if let Some(mut stream) = self.stream.take() {
             let duration = self.config.default_operation_timeout_ms;
@@ -1020,6 +1050,10 @@ impl TokioClientWorker {
     }
 
     fn record_connection_lost(&mut self, reason: Option<u8>) -> Option<[TokioMqttEvent; 2]> {
+        self.tracked_generation = std::sync::Arc::new(());
+        // Encoded QoS 0 never enters the engine replay queue. Old write fences
+        // fail permanently; QoS 1/2 remain owned by the engine's session state.
+        self.tracked_output.clear();
         if matches!(self.state, ConnectionState::Disconnected) {
             return None;
         }
@@ -1037,6 +1071,7 @@ impl TokioClientWorker {
             || self.engine.next_tick_at().is_none()
         {
             self.pending.fail_all(&error);
+            self.fail_tracked(&error);
         }
         Some([
             TokioMqttEvent::Disconnected(reason),
@@ -1059,6 +1094,88 @@ fn admit_request(
             publish_command(engine, config, intentional_stop, command)
         }
     });
+}
+
+struct TrackedWrite {
+    bytes: Vec<u8>,
+    receipt: std::sync::Arc<super::tracked::Receipt>,
+}
+
+impl Drop for TrackedWrite {
+    fn drop(&mut self) {
+        self.receipt.written(Err(MqttClientError::ConnectionLost {
+            reason: "transport closed before tracked write completed".into(),
+        }));
+    }
+}
+
+impl Drop for TokioClientWorker {
+    fn drop(&mut self) {
+        for receipt in self.tracked.values() {
+            receipt.fail(MqttClientError::OperationCancelled {
+                operation: "publish worker stopped".into(),
+            });
+        }
+    }
+}
+
+impl TokioClientWorker {
+    fn admit_tracked(&mut self, request: &super::tracked::TrackedCommand) {
+        let mut state = request.receipt.state.lock().unwrap();
+        let result = if state.cancelled || tokio::time::Instant::now() >= request.receipt.deadline {
+            Err(MqttClientError::OperationCancelled {
+                operation: "publish before admission".into(),
+            })
+        } else if self.intentional_stop
+            || self.admission_transport_failed
+            || !self.engine.is_connected()
+        {
+            Err(MqttClientError::NotConnected)
+        } else if !self.tracked_output.is_empty() {
+            // At most one extracted write is retained outside engine accounting.
+            Err(MqttClientError::BufferFull {
+                buffer_type: "tracked output".into(),
+                capacity: 1,
+            })
+        } else {
+            // Bypass the priority/offline queue only for this opt-in API. The
+            // worker owns the returned bytes, ordering, transport and receipts.
+            self.engine.publish_encoded(request.command.clone(), None)
+        };
+        match result {
+            Ok((packet_id, bytes)) => {
+                let mut ordered = self.engine.take_outgoing();
+                ordered.extend(bytes);
+                state.admitted = true;
+                state.generation = Some(self.tracked_generation.clone());
+                if let Some(id) = packet_id {
+                    self.tracked.insert(id, request.receipt.clone());
+                } else {
+                    state.result = Some(Ok(PublishResult {
+                        packet_id: None,
+                        reason_code: None,
+                        properties: None,
+                        qos: 0,
+                    }));
+                }
+                self.tracked_output.push_back(TrackedWrite {
+                    bytes: ordered,
+                    receipt: request.receipt.clone(),
+                });
+            }
+            Err(error) => {
+                state.result = Some(Err(error.clone()));
+                state.written = Some(Err(error));
+            }
+        }
+        request.receipt.changed.send_replace(());
+    }
+
+    fn fail_tracked(&mut self, error: &MqttClientError) {
+        for (_, receipt) in self.tracked.drain() {
+            receipt.fail(error.clone());
+        }
+    }
 }
 
 fn publish_command(
@@ -1328,3 +1445,6 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod tracked_tests;
