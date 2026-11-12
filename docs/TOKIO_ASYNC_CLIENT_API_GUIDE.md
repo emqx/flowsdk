@@ -82,9 +82,12 @@ after admission leaves delivery uncertain, and retrying may duplicate output.
 Broker rejection codes remain in `PublishResult`; inspect `is_success()`.
 
 The receipt identity is independent of a reusable MQTT packet ID. QoS 1/2 still
-use the engine's session recovery. The tracked path requires a connected engine
-and bypasses offline buffering and priority scheduling. Tracked QoS 0 is never
-replayed after transport loss.
+use the engine's session recovery. Disabling auto-reconnect while disconnected
+immediately fails pending tracked confirmations with `NotConnected`; re-enabling
+it does not revive those receipts. Disabling it while connected leaves active
+confirmations pending. The tracked path requires a connected engine and bypasses
+offline buffering and priority scheduling. Tracked QoS 0 is never replayed after
+transport loss.
 
 A `PublishDrain` waits for the operation's initial local transport write and flush
 without disconnecting the client. Both share one transport timeout budget.
