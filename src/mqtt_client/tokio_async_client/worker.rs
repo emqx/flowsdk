@@ -524,6 +524,8 @@ impl TokioClientWorker {
                     }
                 }
                 self.stream = Some(transport);
+                // Explicit disconnect/reconnect does not pass through connection loss.
+                self.tracked_generation = std::sync::Arc::new(());
                 self.engine.reset_for_new_transport();
                 self.engine.connect()
             }

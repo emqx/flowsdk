@@ -129,6 +129,8 @@ impl PublishOperation {
 pub struct PublishDrain(Arc<Receipt>);
 
 impl PublishDrain {
+    /// Compare the transports on which the operations were admitted. Every new
+    /// transport, including an intentional reconnect, has a distinct generation.
     pub fn same_connection(&self, other: &Self) -> bool {
         let generation = self.0.state.lock().unwrap().generation.clone();
         match (generation, &other.0.state.lock().unwrap().generation) {

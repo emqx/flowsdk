@@ -90,7 +90,9 @@ A `PublishDrain` waits for the operation's initial local transport write and flu
 without disconnecting the client. Both share one transport timeout budget.
 Partial writes, flush failures, and transport timeouts fail the fence; a completed
 fence remains successful after later transport loss. `same_connection()` compares
-the connection generations in which two operations were admitted, and
+the connection generations in which two operations were admitted. Every new
+transport gets a distinct generation, including after an intentional disconnect
+and reconnect; existing receipts retain their original generation.
 `is_written()` reports successful local write and flush completion. Retain an older
 failed fence when accumulating progress across reconnects so later writes do not
 hide that failure. QoS 1/2 confirmation remains the operation receipt's responsibility.
