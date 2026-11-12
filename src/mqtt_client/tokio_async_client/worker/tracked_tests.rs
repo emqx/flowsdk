@@ -621,3 +621,81 @@ async fn connection_identity_changes_after_intentional_and_unexpected_reconnects
         }
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn disabling_reconnect_while_disconnected_fails_retained_receipts() {
+    for version in [4, 5] {
+        for (qos, received_pubrec) in [(1, false), (2, false), (2, true)] {
+            let (mut worker, _tx, _) = worker(version).await;
+            worker
+                .handle_command(TokioClientCommand::SetAutoReconnect { enabled: true })
+                .await;
+            let started = tokio::time::Instant::now();
+            let (command, mut operation) = request(qos, started + Duration::from_secs(3600));
+            worker.admit_tracked(&command);
+            let id = *worker.tracked.keys().next().unwrap();
+            worker.handle_outgoing().await.unwrap();
+            if received_pubrec {
+                test_support::receive(&mut worker, &[0x50, 2, (id >> 8) as u8, id as u8]).await;
+                worker.handle_outgoing().await.unwrap();
+            }
+            let drain = operation.drain_receipt();
+            let mut waiting = Box::pin(operation.wait());
+            assert!(futures::poll!(waiting.as_mut()).is_pending());
+            worker.record_connection_lost(None);
+            assert!(worker.tracked.contains_key(&id));
+            assert!(futures::poll!(waiting.as_mut()).is_pending());
+
+            worker
+                .handle_command(TokioClientCommand::SetAutoReconnect { enabled: false })
+                .await;
+            assert!(worker.tracked.is_empty());
+            let Poll::Ready(Err(error)) = futures::poll!(waiting.as_mut()) else {
+                panic!("stopping recovery must immediately fail the pending receipt");
+            };
+            assert!(error.admitted);
+            assert!(matches!(error.error, MqttClientError::NotConnected));
+            drop(waiting);
+            assert_eq!(tokio::time::Instant::now(), started);
+            drain.drain_through(deadline()).await.unwrap();
+
+            worker
+                .handle_command(TokioClientCommand::SetAutoReconnect { enabled: true })
+                .await;
+            assert!(worker.tracked.is_empty());
+            assert!(matches!(
+                operation.wait().await.unwrap_err().error,
+                MqttClientError::NotConnected
+            ));
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn disabling_reconnect_while_connected_preserves_pending_receipts() {
+    for qos in [1, 2] {
+        let (mut worker, _tx, _) = worker(5).await;
+        let (command, mut operation) = request(qos, deadline());
+        worker.admit_tracked(&command);
+        let id = *worker.tracked.keys().next().unwrap();
+        worker.handle_outgoing().await.unwrap();
+        worker
+            .handle_command(TokioClientCommand::SetAutoReconnect { enabled: false })
+            .await;
+        assert!(worker.tracked.contains_key(&id));
+        assert!(operation.receipt.state.lock().unwrap().result.is_none());
+        if qos == 2 {
+            test_support::receive(&mut worker, &[0x50, 2, (id >> 8) as u8, id as u8]).await;
+            worker.handle_outgoing().await.unwrap();
+        }
+        let ack = [
+            if qos == 1 { 0x40 } else { 0x70 },
+            2,
+            (id >> 8) as u8,
+            id as u8,
+        ];
+        test_support::receive(&mut worker, &ack).await;
+        assert!(operation.wait().await.unwrap().is_success());
+        assert!(worker.tracked.is_empty());
+    }
+}

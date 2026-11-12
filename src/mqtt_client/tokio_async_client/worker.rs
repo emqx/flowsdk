@@ -966,6 +966,7 @@ impl TokioClientWorker {
                 self.engine.set_reconnect(enabled && !self.intentional_stop);
                 if !enabled && matches!(self.state, ConnectionState::Disconnected) {
                     self.pending.fail_all(&MqttClientError::NotConnected);
+                    self.fail_tracked(&MqttClientError::NotConnected);
                 } else if matches!(self.state, ConnectionState::Disconnected)
                     && !self.intentional_stop
                 {
