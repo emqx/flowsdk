@@ -523,6 +523,45 @@ async fn cancelled_wait_preserves_only_timely_broker_rejections() {
     }
 }
 
+#[tokio::test(start_paused = true)]
+async fn pre_admission_wait_timeout_is_not_replaced_by_late_cancellation() {
+    for version in [4, 5] {
+        for qos in [0, 1, 2] {
+            let (mut worker, _tx, bytes) = worker(version).await;
+            let (command, mut operation) = request(qos, tokio::time::Instant::now() + Duration::from_millis(1));
+            // Wait past the deadline before admission; the timeout is recorded
+            // with admitted=false and marks the command cancelled.
+            let error = operation.wait().await.unwrap_err();
+            assert!(!error.admitted);
+            assert!(matches!(
+                error.error,
+                MqttClientError::OperationTimeout { .. }
+            ));
+            worker.admit_tracked(&command);
+            // The late cancellation must not replace the stored timeout.
+            let state = operation.receipt.state.lock().unwrap();
+            assert!(state.cancelled);
+            assert!(matches!(
+                state.result.as_ref().unwrap().as_ref().unwrap_err(),
+                MqttClientError::OperationTimeout { .. }
+            ));
+            assert!(matches!(
+                state.written.as_ref().unwrap().as_ref().unwrap_err(),
+                MqttClientError::OperationTimeout { .. }
+            ));
+            drop(state);
+            // The next wait reports the same timeout, not the cancellation.
+            let error = operation.wait().await.unwrap_err();
+            assert!(!error.admitted);
+            assert!(matches!(
+                error.error,
+                MqttClientError::OperationTimeout { .. }
+            ));
+            assert!(bytes.lock().unwrap().is_empty());
+        }
+    }
+}
+
 #[tokio::test]
 async fn intentional_disconnect_and_terminal_loss_wake_receipts_immediately() {
     for disconnect in [false, true] {

@@ -1172,8 +1172,10 @@ impl TokioClientWorker {
                 });
             }
             Err(error) => {
-                state.result = Some(Err(error.clone()));
-                state.written = Some(Err(error));
+                // A wait that timed out before admission already stored its
+                // OperationTimeout; keep that first recorded result stable.
+                state.result.get_or_insert(Err(error.clone()));
+                state.written.get_or_insert(Err(error));
             }
         }
         request.receipt.changed.send_replace(());
