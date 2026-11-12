@@ -782,13 +782,18 @@ impl TokioClientWorker {
         }
         let stream = self.stream.as_mut().ok_or(MqttClientError::NotConnected)?;
         let duration = self.config.default_operation_timeout_ms;
-        tokio::time::timeout(Duration::from_millis(duration), stream.write_all(bytes))
-            .await
-            .map_err(|_| MqttClientError::OperationTimeout {
-                operation: "transport write".into(),
-                timeout_ms: duration,
-            })?
-            .map_err(|error| MqttClientError::from_io_error(error, "transport write"))
+        // Buffered transports can accept the entire write before their underlying
+        // I/O completes. Flush within the same timeout before completing a fence.
+        tokio::time::timeout(Duration::from_millis(duration), async {
+            stream.write_all(bytes).await?;
+            stream.flush().await
+        })
+        .await
+        .map_err(|_| MqttClientError::OperationTimeout {
+            operation: "transport write".into(),
+            timeout_ms: duration,
+        })?
+        .map_err(|error| MqttClientError::from_io_error(error, "transport write"))
     }
 
     pub(super) async fn handle_outgoing(&mut self) -> Result<(), MqttClientError> {

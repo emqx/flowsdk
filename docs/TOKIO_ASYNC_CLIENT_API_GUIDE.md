@@ -84,13 +84,14 @@ use the engine's session recovery. The tracked path requires a connected engine
 and bypasses offline buffering and priority scheduling. Tracked QoS 0 is never
 replayed after transport loss.
 
-A `PublishDrain` waits for the operation's initial local transport write without
-disconnecting the client. Partial or failed writes fail the fence; a completed
+A `PublishDrain` waits for the operation's initial local transport write and flush
+without disconnecting the client. Both share one transport timeout budget.
+Partial writes, flush failures, and transport timeouts fail the fence; a completed
 fence remains successful after later transport loss. `same_connection()` compares
 the connection generations in which two operations were admitted, and
-`is_written()` reports successful local write completion. Retain an older failed
-fence when accumulating progress across reconnects so later writes do not hide
-that failure. QoS 1/2 confirmation remains the operation receipt's responsibility.
+`is_written()` reports successful local write and flush completion. Retain an older
+failed fence when accumulating progress across reconnects so later writes do not
+hide that failure. QoS 1/2 confirmation remains the operation receipt's responsibility.
 
 Tracked commands use the normal worker queue. A blocked callback can delay their
 admission and transport progress; do not await tracked completion inside a
