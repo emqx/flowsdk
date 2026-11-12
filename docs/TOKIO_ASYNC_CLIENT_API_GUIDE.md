@@ -71,10 +71,12 @@ match operation.wait().await {
 ```
 
 Keep the operation handle when cancelling its `wait()` future, then resume the
-same wait to retain its identity and original deadline. Dropping the handle or
-expiring its deadline before engine admission prevents later publication;
-cancellation and admission are arbitrated under the same lock. After admission,
-dropping the handle or timing out a wait does not retract the MQTT exchange.
+same wait to retain its identity and original deadline. Confirmations recorded
+before the deadline remain available when the wait resumes afterward; confirmations
+recorded at or after the deadline produce `OperationTimeout`, even without an active
+waiter. Dropping the handle or expiring its deadline before engine admission prevents
+later publication; cancellation and admission are arbitrated under the same lock.
+After admission, dropping the handle or timing out a wait does not retract the MQTT exchange.
 `TrackedPublishError::admitted` distinguishes these cases. A missing confirmation
 after admission leaves delivery uncertain, and retrying may duplicate output.
 Broker rejection codes remain in `PublishResult`; inspect `is_success()`.

@@ -430,6 +430,99 @@ async fn late_ack_does_not_complete_another_operation_and_worker_drop_fails_pend
     assert!(second.wait().await.unwrap_err().admitted);
 }
 
+#[tokio::test(start_paused = true)]
+async fn cancelled_wait_keeps_original_confirmation_deadline() {
+    for version in [4, 5] {
+        for qos in [1, 2] {
+            for ack_delay_ms in [999, 1000, 1001] {
+                let (mut worker, _tx, _) = worker(version).await;
+                let (command, mut operation) = request(qos, deadline());
+                worker.admit_tracked(&command);
+                let id = *worker.tracked.keys().next().unwrap();
+                worker.handle_outgoing().await.unwrap();
+                {
+                    let mut wait = Box::pin(operation.wait());
+                    assert!(futures::poll!(wait.as_mut()).is_pending());
+                }
+                if qos == 2 {
+                    test_support::receive(&mut worker, &[0x50, 2, (id >> 8) as u8, id as u8]).await;
+                    worker.handle_outgoing().await.unwrap();
+                    assert!(operation.receipt.state.lock().unwrap().result.is_none());
+                }
+
+                tokio::time::advance(Duration::from_millis(ack_delay_ms)).await;
+                let ack = [
+                    if qos == 1 { 0x40 } else { 0x70 },
+                    2,
+                    (id >> 8) as u8,
+                    id as u8,
+                ];
+                test_support::receive(&mut worker, &ack).await;
+                // The final ACK still finishes the exchange and releases its tracking.
+                assert!(worker.tracked.is_empty());
+                assert!(operation.drain_receipt().is_written());
+                assert!(!operation.receipt.state.lock().unwrap().cancelled);
+
+                // Resume only after the deadline, even for a timely confirmation.
+                tokio::time::advance(Duration::from_secs(1)).await;
+                for _ in 0..2 {
+                    let result = operation.wait().await;
+                    if ack_delay_ms < 1000 {
+                        assert!(result.unwrap().is_success());
+                    } else {
+                        let error = result.unwrap_err();
+                        assert!(error.admitted);
+                        assert!(matches!(
+                            error.error,
+                            MqttClientError::OperationTimeout { .. }
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn cancelled_wait_preserves_only_timely_broker_rejections() {
+    for qos in [1, 2] {
+        for ack_delay_ms in [999, 1000, 1001] {
+            let (mut worker, _tx, _) = worker(5).await;
+            let (command, mut operation) = request(qos, deadline());
+            worker.admit_tracked(&command);
+            let id = *worker.tracked.keys().next().unwrap();
+            worker.handle_outgoing().await.unwrap();
+            {
+                let mut wait = Box::pin(operation.wait());
+                assert!(futures::poll!(wait.as_mut()).is_pending());
+            }
+            tokio::time::advance(Duration::from_millis(ack_delay_ms)).await;
+            let ack = [
+                if qos == 1 { 0x40 } else { 0x50 },
+                4,
+                (id >> 8) as u8,
+                id as u8,
+                0x87,
+                0,
+            ];
+            test_support::receive(&mut worker, &ack).await;
+            assert!(worker.tracked.is_empty());
+            tokio::time::advance(Duration::from_secs(1)).await;
+            let result = operation.wait().await;
+            if ack_delay_ms < 1000 {
+                assert_eq!(result.unwrap().reason_code, Some(0x87));
+            } else {
+                let error = result.unwrap_err();
+                assert!(error.admitted);
+                assert!(matches!(
+                    error.error,
+                    MqttClientError::OperationTimeout { .. }
+                ));
+            }
+        }
+    }
+}
+
 #[tokio::test]
 async fn intentional_disconnect_and_terminal_loss_wake_receipts_immediately() {
     for disconnect in [false, true] {
