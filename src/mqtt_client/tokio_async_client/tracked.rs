@@ -58,6 +58,7 @@ impl Receipt {
                 result
             }
         });
+        drop(state);
         self.changed.send_replace(());
     }
 }
