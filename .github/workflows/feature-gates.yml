@@ -245,6 +245,8 @@ jobs:
       - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0 # v2
         with:
           key: feature-contracts
+      - name: Test feature contract artifact discovery
+        run: python3 -m unittest discover -s scripts -p test_feature_contracts.py -v
       - name: Check API, dependency, and C export gates
         shell: bash
         run: |

@@ -38,12 +38,20 @@ def build(package, features, offline):
                   "--lib", "--message-format=json"])
     artifacts = []
     enabled = set()
+    dependency_dirs = set()
     for line in result.stdout.splitlines():
         event = json.loads(line)
-        if event.get("reason") == "compiler-artifact" and event["target"]["name"] == package:
-            artifacts.extend(map(Path, event["filenames"]))
+        if event.get("reason") != "compiler-artifact":
+            continue
+        filenames = list(map(Path, event["filenames"]))
+        # Exported libraries and dependency artifacts may use separate build
+        # directories. Cargo also reports cached dependencies with fresh=true.
+        dependency_dirs.update(path.parent for path in filenames
+                               if path.suffix in {".rlib", ".rmeta", ".so", ".dylib", ".dll"})
+        if event["target"]["name"] == package:
+            artifacts.extend(filenames)
             enabled.update(event["features"])
-    return artifacts, enabled
+    return artifacts, enabled, sorted(dependency_dirs)
 
 
 def check_dependencies(package, features, forbidden, offline):
@@ -66,11 +74,10 @@ def check_rust_apis(directory, offline):
         "durable-session": "ClientSessionState",
     }
     for features in ["alloc", "alloc,shared-payloads", "arbitrary", *(f"alloc,{feature}" for feature in apis)]:
-        artifacts, enabled_features = build("flowsdk", features, offline)
+        artifacts, enabled_features, dependency_dirs = build("flowsdk", features, offline)
         library = next(path for path in artifacts if path.suffix == ".rlib")
-        dependencies = library.parent / "deps"
-        if not dependencies.is_dir():
-            dependencies = library.parent
+        search_paths = [argument for path in dependency_dirs
+                        for argument in ("-L", f"dependency={path}")]
         snapshot = directory / "libflowsdk.rlib"
         shutil.copyfile(library, snapshot)
         # rustc compiles an external consumer using the exact production artifact;
@@ -82,7 +89,7 @@ def check_rust_apis(directory, offline):
                               f"pub fn require_api(_: Option<{api.split('::')[-1]}>) {{}}\n")
             result = run(["rustc", "--edition=2021", "--crate-type=lib", source,
                           "--emit=metadata", "-o", directory / "consumer.rmeta",
-                          "--extern", f"flowsdk={snapshot}", "-L", f"dependency={dependencies}"],
+                          "--extern", f"flowsdk={snapshot}", *search_paths],
                          expect_success=False)
             enabled = not feature or feature in enabled_features
             if enabled and result.returncode:
@@ -106,7 +113,7 @@ def check_c_exports(offline):
         "quic": "mqtt_quic_engine_new",
     }
     for features in ["", "json", "durable-session", "quic", "tls", "uniffi-bindings", "tls,quic-openssl,durable-session"]:
-        artifacts, enabled = build("flowsdk_ffi", features, offline)
+        artifacts, enabled, _ = build("flowsdk_ffi", features, offline)
         library = next(path for path in artifacts if path.suffix in {".so", ".dylib"})
         symbols = exported_symbols(library)
         for feature, symbol in gates.items():

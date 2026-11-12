@@ -528,7 +528,8 @@ async fn pre_admission_wait_timeout_is_not_replaced_by_late_cancellation() {
     for version in [4, 5] {
         for qos in [0, 1, 2] {
             let (mut worker, _tx, bytes) = worker(version).await;
-            let (command, mut operation) = request(qos, tokio::time::Instant::now() + Duration::from_millis(1));
+            let (command, mut operation) =
+                request(qos, tokio::time::Instant::now() + Duration::from_millis(1));
             // Wait past the deadline before admission; the timeout is recorded
             // with admitted=false and marks the command cancelled.
             let error = operation.wait().await.unwrap_err();
