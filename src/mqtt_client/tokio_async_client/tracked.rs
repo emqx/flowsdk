@@ -45,7 +45,19 @@ impl Receipt {
     }
 
     pub fn complete(&self, result: Result<PublishResult, MqttClientError>) {
-        self.state.lock().unwrap().result.get_or_insert(result);
+        let mut state = self.state.lock().unwrap();
+        // A cancelled wait may leave nobody polling the deadline when an ACK
+        // arrives. Only confirmations recorded before that deadline can win.
+        state.result.get_or_insert_with(|| {
+            if Deadline::now() >= self.deadline {
+                Err(MqttClientError::OperationTimeout {
+                    operation: "tracked publish".into(),
+                    timeout_ms: 0,
+                })
+            } else {
+                result
+            }
+        });
         self.changed.send_replace(());
     }
 }
@@ -74,6 +86,8 @@ impl PublishOperation {
     /// QoS 0 completes at engine admission; QoS 1/2 at PUBACK/PUBCOMP (or rejection).
     /// Timeout atomically cancels a command still awaiting admission. An admitted
     /// exchange is never retracted by a timeout or by dropping its waiter.
+    /// Cancelling this wait preserves its original deadline. Confirmations recorded
+    /// before that deadline remain available when the wait resumes afterward.
     pub async fn wait(&mut self) -> Result<PublishResult, TrackedPublishError> {
         let mut changed = self.receipt.changed.subscribe();
         loop {
