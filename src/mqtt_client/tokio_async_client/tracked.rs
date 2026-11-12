@@ -109,7 +109,8 @@ impl PublishOperation {
     }
 }
 
-/// A per-operation local transport fence. Success does not prove broker delivery.
+/// A per-operation local transport write-and-flush fence.
+/// Success does not prove broker delivery.
 #[derive(Clone)]
 pub struct PublishDrain(Arc<Receipt>);
 

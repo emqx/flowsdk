@@ -12,6 +12,8 @@ impl TokioMqttEventHandler for Handler {}
 struct Wire {
     bytes: Arc<Mutex<Vec<u8>>>,
     limit: usize,
+    write_gate: Option<oneshot::Receiver<()>>,
+    flush_gate: Option<oneshot::Receiver<io::Result<()>>>,
 }
 impl AsyncRead for Wire {
     fn poll_read(
@@ -24,10 +26,14 @@ impl AsyncRead for Wire {
 }
 impl AsyncWrite for Wire {
     fn poll_write(
-        self: Pin<&mut Self>,
-        _: &mut Context<'_>,
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
         bytes: &[u8],
     ) -> Poll<io::Result<usize>> {
+        if let Some(gate) = self.write_gate.as_mut() {
+            std::task::ready!(Pin::new(gate).poll(cx)).unwrap();
+            self.write_gate = None;
+        }
         let mut output = self.bytes.lock().unwrap();
         let available = self.limit.saturating_sub(output.len());
         if available == 0 {
@@ -37,7 +43,12 @@ impl AsyncWrite for Wire {
         output.extend_from_slice(&bytes[..len]);
         Poll::Ready(Ok(len))
     }
-    fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        if let Some(gate) = self.flush_gate.as_mut() {
+            let result = std::task::ready!(Pin::new(gate).poll(cx)).unwrap();
+            self.flush_gate = None;
+            return Poll::Ready(result);
+        }
         Poll::Ready(Ok(()))
     }
     fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
@@ -80,6 +91,8 @@ async fn worker(
     worker.stream = Some(Box::new(Wire {
         bytes: bytes.clone(),
         limit: usize::MAX,
+        write_gate: None,
+        flush_gate: None,
     }));
     (worker, tx, bytes)
 }
@@ -169,6 +182,8 @@ async fn qos0_admission_and_write_are_distinct_and_old_fences_survive_loss() {
         worker.stream = Some(Box::new(Wire {
             bytes: partial.clone(),
             limit: 2,
+            write_gate: None,
+            flush_gate: None,
         }));
         assert!(worker.handle_outgoing().await.is_err());
         assert_eq!(partial.lock().unwrap().len(), 2);
@@ -194,6 +209,142 @@ async fn qos0_admission_and_write_are_distinct_and_old_fences_survive_loss() {
         .drain_receipt();
         assert!(!first_drain.same_connection(&new_drain));
     }
+}
+
+#[tokio::test(start_paused = true)]
+async fn tracked_drain_waits_for_flush_and_preserves_success_after_loss() {
+    for version in [4, 5] {
+        for qos in [0, 1, 2] {
+            let (mut worker, _tx, bytes) = worker(version).await;
+            let (flush_tx, flush_rx) = oneshot::channel();
+            worker.stream = Some(Box::new(Wire {
+                bytes: bytes.clone(),
+                limit: usize::MAX,
+                write_gate: None,
+                flush_gate: Some(flush_rx),
+            }));
+            let (command, mut operation) = request(qos, deadline());
+            worker.admit_tracked(&command);
+            if qos == 0 {
+                operation.wait().await.unwrap();
+            }
+            let drain = operation.drain_receipt();
+            let mut outgoing = Box::pin(worker.handle_outgoing());
+            assert!(futures::poll!(outgoing.as_mut()).is_pending());
+            // write_all accepted the payload, but the transport still needs flushing.
+            assert!(bytes.lock().unwrap().ends_with(b"body"));
+            assert!(!drain.is_written());
+            let mut draining = Box::pin(drain.drain_through(deadline()));
+            assert!(futures::poll!(draining.as_mut()).is_pending());
+
+            flush_tx.send(Ok(())).unwrap();
+            outgoing.await.unwrap();
+            draining.await.unwrap();
+            assert!(drain.is_written());
+            worker.record_connection_lost(None);
+            drain.drain_through(deadline()).await.unwrap();
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn tracked_drain_preserves_flush_failure() {
+    for qos in [0, 1, 2] {
+        let (mut worker, _tx, bytes) = worker(5).await;
+        let (flush_tx, flush_rx) = oneshot::channel();
+        worker.stream = Some(Box::new(Wire {
+            bytes: bytes.clone(),
+            limit: usize::MAX,
+            write_gate: None,
+            flush_gate: Some(flush_rx),
+        }));
+        let (command, mut operation) = request(qos, deadline());
+        worker.admit_tracked(&command);
+        flush_tx
+            .send(Err(io::ErrorKind::BrokenPipe.into()))
+            .unwrap();
+        let error = worker.handle_outgoing().await.unwrap_err();
+        assert!(matches!(
+            error,
+            MqttClientError::NetworkError {
+                kind: io::ErrorKind::BrokenPipe,
+                ..
+            }
+        ));
+        assert!(bytes.lock().unwrap().ends_with(b"body"));
+        let drain = operation.drain_receipt();
+        assert!(!drain.is_written());
+        assert_eq!(
+            drain
+                .drain_through(deadline())
+                .await
+                .unwrap_err()
+                .to_string(),
+            error.to_string()
+        );
+        worker.record_connection_lost(None);
+        assert_eq!(
+            drain
+                .drain_through(deadline())
+                .await
+                .unwrap_err()
+                .to_string(),
+            error.to_string()
+        );
+        if qos == 0 {
+            // Admission succeeded even though local transport draining failed.
+            operation.wait().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test(start_paused = true)]
+async fn tracked_write_and_flush_share_the_transport_timeout() {
+    let (mut worker, _tx, bytes) = worker(5).await;
+    worker.config.default_operation_timeout_ms = 100;
+    let (write_tx, write_rx) = oneshot::channel();
+    let (_flush_tx, flush_rx) = oneshot::channel();
+    worker.stream = Some(Box::new(Wire {
+        bytes: bytes.clone(),
+        limit: usize::MAX,
+        write_gate: Some(write_rx),
+        flush_gate: Some(flush_rx),
+    }));
+    let (command, operation) = request(0, deadline());
+    worker.admit_tracked(&command);
+    let drain = operation.drain_receipt();
+    let mut outgoing = Box::pin(worker.handle_outgoing());
+    assert!(futures::poll!(outgoing.as_mut()).is_pending());
+    tokio::time::advance(Duration::from_millis(60)).await;
+    write_tx.send(()).unwrap();
+    assert!(futures::poll!(outgoing.as_mut()).is_pending());
+    assert!(bytes.lock().unwrap().ends_with(b"body"));
+    tokio::time::advance(Duration::from_millis(40)).await;
+    assert!(matches!(
+        futures::poll!(outgoing.as_mut()),
+        Poll::Ready(Err(MqttClientError::OperationTimeout {
+            timeout_ms: 100,
+            ..
+        }))
+    ));
+    drop(outgoing);
+    let error = drain.drain_through(deadline()).await.unwrap_err();
+    assert!(matches!(
+        error,
+        MqttClientError::OperationTimeout {
+            timeout_ms: 100,
+            ..
+        }
+    ));
+    worker.record_connection_lost(None);
+    assert_eq!(
+        drain
+            .drain_through(deadline())
+            .await
+            .unwrap_err()
+            .to_string(),
+        error.to_string()
+    );
 }
 
 #[tokio::test]
