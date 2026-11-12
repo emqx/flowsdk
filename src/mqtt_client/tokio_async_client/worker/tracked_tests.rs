@@ -543,3 +543,81 @@ async fn intentional_disconnect_and_terminal_loss_wake_receipts_immediately() {
         assert!(worker.tracked.is_empty());
     }
 }
+
+#[tokio::test(start_paused = true)]
+async fn connection_identity_changes_after_intentional_and_unexpected_reconnects() {
+    for version in [4, 5] {
+        for intentional in [true, false] {
+            let (mut worker, _tx, _) = worker(version).await;
+            worker
+                .handle_command(TokioClientCommand::SetAutoReconnect { enabled: true })
+                .await;
+            let mut old_drains = Vec::new();
+            for qos in [0, 1, 2] {
+                let (command, operation) = request(qos, deadline());
+                worker.admit_tracked(&command);
+                worker.handle_outgoing().await.unwrap();
+                old_drains.push(operation.drain_receipt());
+            }
+            for drain in &old_drains {
+                assert!(drain.same_connection(&old_drains[0]));
+            }
+            if intentional {
+                let (response_tx, response_rx) = oneshot::channel();
+                worker
+                    .handle_command(TokioClientCommand::Disconnect {
+                        reason_code: 0,
+                        properties: vec![],
+                        response_tx: Some(response_tx),
+                    })
+                    .await;
+                response_rx.await.unwrap().unwrap();
+            } else {
+                worker.record_connection_lost(None);
+                assert_eq!(worker.tracked.len(), 2);
+            }
+
+            let (response_tx, response_rx) = oneshot::channel();
+            worker
+                .handle_command(TokioClientCommand::ConnectSync { response_tx })
+                .await;
+            // Supply a fresh fake transport in place of the unpolled network dial.
+            worker.connecting = None;
+            worker
+                .transport_connected(Ok(Box::new(Wire {
+                    bytes: Arc::new(Mutex::new(Vec::new())),
+                    limit: usize::MAX,
+                    write_gate: None,
+                    flush_gate: None,
+                })))
+                .await;
+            worker.handle_outgoing().await.unwrap();
+            let connack: &[u8] = if version == 5 {
+                &[0x20, 3, 0, 0, 0]
+            } else {
+                &[0x20, 2, 0, 0]
+            };
+            test_support::receive(&mut worker, connack).await;
+            assert!(response_rx.await.unwrap().unwrap().is_success());
+
+            let (command, operation) = request(0, deadline());
+            worker.admit_tracked(&command);
+            worker.handle_outgoing().await.unwrap();
+            let new_drain = operation.drain_receipt();
+            for drain in &old_drains {
+                assert!(drain.same_connection(&old_drains[0]));
+                assert!(!drain.same_connection(&new_drain));
+                drain.drain_through(deadline()).await.unwrap();
+            }
+            // A redundant connect on an existing transport keeps its identity.
+            let (response_tx, response_rx) = oneshot::channel();
+            worker
+                .handle_command(TokioClientCommand::ConnectSync { response_tx })
+                .await;
+            response_rx.await.unwrap().unwrap();
+            let (command, operation) = request(0, deadline());
+            worker.admit_tracked(&command);
+            assert!(new_drain.same_connection(&operation.drain_receipt()));
+        }
+    }
+}
