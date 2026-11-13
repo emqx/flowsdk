@@ -1,125 +1,158 @@
 // SPDX-License-Identifier: Apache-2.0
-//! Opt-in operation receipts. Queue cancellation and engine admission share a lock.
+//! Opt-in operation receipts. Enqueueing transfers publication ownership to the worker.
 use super::*;
-use std::sync::{Arc, Mutex};
-use tokio::sync::watch;
+use std::sync::{Arc, OnceLock};
+use tokio::sync::Notify;
 use tokio::time::Instant as Deadline;
 
 #[derive(Debug)]
 pub struct TrackedPublishError {
+    /// Whether engine admission has been observed when this error is returned.
+    /// On timeout, `false` does not prevent later admission or make retrying safe.
     pub admitted: bool,
     pub error: MqttClientError,
 }
 
 #[derive(Debug)]
-pub(super) struct State {
-    pub generation: Option<Arc<()>>,
-    pub admitted: bool,
-    pub cancelled: bool,
-    pub result: Option<Result<PublishResult, MqttClientError>>,
-    pub written: Option<Result<(), MqttClientError>>,
+pub(super) struct Completion {
+    at: Deadline,
+    result: Result<PublishResult, MqttClientError>,
 }
 
 #[derive(Debug)]
 pub(super) struct Receipt {
-    pub state: Mutex<State>,
-    pub changed: watch::Sender<()>,
+    // Only the worker publishes these immutable milestones. Waiters never
+    // change the request or contend with admission over mutable receipt state.
+    pub generation: OnceLock<Arc<()>>,
+    pub completion: OnceLock<Completion>,
+    pub written: OnceLock<Result<(), MqttClientError>>,
+    changed: Notify,
     pub deadline: Deadline,
 }
 
 impl Receipt {
+    pub fn new(deadline: Deadline) -> Self {
+        Self {
+            generation: OnceLock::new(),
+            completion: OnceLock::new(),
+            written: OnceLock::new(),
+            changed: Notify::new(),
+            deadline,
+        }
+    }
+
+    pub fn is_admitted(&self) -> bool {
+        self.generation.get().is_some()
+    }
+
     pub fn fail(&self, error: MqttClientError) {
-        let mut state = self.state.lock().unwrap();
-        if state.result.is_none() {
-            state.result = Some(Err(error.clone()));
-        }
-        if state.written.is_none() {
-            state.written = Some(Err(error));
-        }
-        self.changed.send_replace(());
+        self.completion.get_or_init(|| Completion {
+            at: Deadline::now(),
+            result: Err(error.clone()),
+        });
+        self.written.get_or_init(|| Err(error));
+        self.changed.notify_waiters();
     }
 
     pub fn written(&self, result: Result<(), MqttClientError>) {
-        self.state.lock().unwrap().written.get_or_insert(result);
-        self.changed.send_replace(());
+        if self.written.set(result).is_ok() {
+            self.changed.notify_waiters();
+        }
     }
 
     pub fn complete(&self, result: Result<PublishResult, MqttClientError>) {
-        let mut state = self.state.lock().unwrap();
-        // A cancelled wait may leave nobody polling the deadline when an ACK
-        // arrives. Only confirmations recorded before that deadline can win.
-        state.result.get_or_insert_with(|| {
-            if Deadline::now() >= self.deadline {
-                Err(MqttClientError::OperationTimeout {
-                    operation: "tracked publish".into(),
-                    timeout_ms: 0,
-                })
-            } else {
-                result
-            }
-        });
-        drop(state);
-        self.changed.send_replace(());
+        // Preserve confirmation timing even if nobody is currently waiting.
+        if self
+            .completion
+            .set(Completion {
+                at: Deadline::now(),
+                result,
+            })
+            .is_ok()
+        {
+            self.changed.notify_waiters();
+        }
     }
 }
 
 /// One publication, independently identified from its reusable MQTT packet ID.
-/// Keep this handle across cancellation of `wait`; dropping it cancels only a
-/// command which the worker has not admitted yet.
+/// Dropping this handle or cancelling `wait` never retracts a queued publication.
 pub struct PublishOperation {
     pub(super) receipt: Arc<Receipt>,
-}
-
-impl Drop for PublishOperation {
-    fn drop(&mut self) {
-        let mut state = self.receipt.state.lock().unwrap();
-        if !state.admitted {
-            state.cancelled = true;
-        }
-    }
+    timed_out: bool,
 }
 
 impl PublishOperation {
+    pub(super) fn new(receipt: Arc<Receipt>) -> Self {
+        Self {
+            receipt,
+            timed_out: false,
+        }
+    }
+
     pub fn drain_receipt(&self) -> PublishDrain {
         PublishDrain(self.receipt.clone())
     }
 
     /// QoS 0 completes at engine admission; QoS 1/2 at PUBACK/PUBCOMP (or rejection).
-    /// Timeout atomically cancels a command still awaiting admission. An admitted
-    /// exchange is never retracted by a timeout or by dropping its waiter.
+    /// Timeout stops only this wait; even a command awaiting admission may still
+    /// publish afterward. A timeout is not evidence that retrying is safe.
     /// Cancelling this wait preserves its original deadline. Confirmations recorded
     /// before that deadline remain available when the wait resumes afterward.
     pub async fn wait(&mut self) -> Result<PublishResult, TrackedPublishError> {
-        let mut changed = self.receipt.changed.subscribe();
+        if self.timed_out {
+            return Err(self.timeout_error());
+        }
         loop {
-            {
-                let mut state = self.receipt.state.lock().unwrap();
-                if let Some(result) = state.result.clone() {
-                    return result.map_err(|error| TrackedPublishError {
-                        admitted: state.admitted,
-                        error,
-                    });
-                }
-                if Deadline::now() >= self.receipt.deadline {
-                    if !state.admitted {
-                        state.cancelled = true;
-                    }
-                    let error = MqttClientError::OperationTimeout {
-                        operation: "tracked publish".into(),
-                        timeout_ms: 0,
-                    };
-                    state.result = Some(Err(error.clone()));
-                    if !state.admitted {
-                        state.written = Some(Err(error.clone()));
-                    }
-                    self.receipt.changed.send_replace(());
-                    return Err(TrackedPublishError {
-                        admitted: state.admitted,
-                        error,
-                    });
-                }
+            if let Some(result) = self.completed_result() {
+                return result;
             }
-            let _ = tokio::time::timeout_at(self.receipt.deadline, changed.changed()).await;
+            if Deadline::now() >= self.receipt.deadline {
+                // A timely completion may have arrived between the first read
+                // and observing the deadline. Prefer it over a local timeout.
+                if let Some(result) = self.completed_result() {
+                    return result;
+                }
+                // Cache timeout only on this handle. It neither changes worker
+                // state nor poisons the independently observable write fence.
+                self.timed_out = true;
+                return Err(self.timeout_error());
+            }
+            // Register then recheck to avoid missing a concurrent completion.
+            // Already completed receipts never need a notification waiter.
+            let changed = self.receipt.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self.receipt.completion.get().is_some() {
+                continue;
+            }
+            let _ = tokio::time::timeout_at(self.receipt.deadline, changed).await;
+        }
+    }
+
+    fn completed_result(&self) -> Option<Result<PublishResult, TrackedPublishError>> {
+        self.receipt.completion.get().map(|completion| {
+            if completion.at < self.receipt.deadline {
+                completion
+                    .result
+                    .clone()
+                    .map_err(|error| TrackedPublishError {
+                        admitted: self.receipt.is_admitted(),
+                        error,
+                    })
+            } else {
+                Err(self.timeout_error())
+            }
+        })
+    }
+
+    fn timeout_error(&self) -> TrackedPublishError {
+        TrackedPublishError {
+            admitted: self.receipt.is_admitted(),
+            error: MqttClientError::OperationTimeout {
+                operation: "tracked publish".into(),
+                timeout_ms: 0,
+            },
         }
     }
 }
@@ -133,31 +166,32 @@ impl PublishDrain {
     /// Compare the transports on which the operations were admitted. Every new
     /// transport, including an intentional reconnect, has a distinct generation.
     pub fn same_connection(&self, other: &Self) -> bool {
-        let generation = self.0.state.lock().unwrap().generation.clone();
-        match (generation, &other.0.state.lock().unwrap().generation) {
-            (Some(a), Some(b)) => Arc::ptr_eq(&a, b),
+        match (self.0.generation.get(), other.0.generation.get()) {
+            (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             _ => false,
         }
     }
     pub fn is_written(&self) -> bool {
-        matches!(self.0.state.lock().unwrap().written, Some(Ok(())))
+        matches!(self.0.written.get(), Some(Ok(())))
     }
 
     /// Wait only through this operation, without disconnecting the shared client.
     pub async fn drain_through(&self, deadline: Deadline) -> Result<(), MqttClientError> {
-        let mut changed = self.0.changed.subscribe();
         loop {
-            if let Some(result) = self.0.state.lock().unwrap().written.clone() {
-                return result;
+            if let Some(result) = self.0.written.get() {
+                return result.clone();
             }
-            tokio::time::timeout_at(deadline, changed.changed())
+            let changed = self.0.changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
+            if self.0.written.get().is_some() {
+                continue;
+            }
+            tokio::time::timeout_at(deadline, changed)
                 .await
                 .map_err(|_| MqttClientError::OperationTimeout {
                     operation: "publish drain".into(),
                     timeout_ms: 0,
-                })?
-                .map_err(|_| MqttClientError::ChannelClosed {
-                    channel: "publish drain".into(),
                 })?;
         }
     }
@@ -172,9 +206,9 @@ pub(super) struct TrackedCommand {
 impl Drop for TrackedCommand {
     fn drop(&mut self) {
         // Also wakes waiters when the worker is aborted with queued commands.
-        if !self.receipt.state.lock().unwrap().admitted {
+        if !self.receipt.is_admitted() {
             self.receipt.fail(MqttClientError::OperationCancelled {
-                operation: "queued publish".into(),
+                operation: "publish worker stopped before admission".into(),
             });
         }
     }
@@ -183,23 +217,14 @@ impl Drop for TrackedCommand {
 impl TokioAsyncMqttClient {
     /// Enqueue without yielding, so the caller can retain its receipt atomically.
     /// A full command channel has not admitted the publication and is retryable.
+    /// After successful enqueueing, dropping the operation or reaching `deadline`
+    /// does not cancel publication. The deadline bounds confirmation waiting only.
     pub fn try_publish_tracked(
         &self,
         command: PublishCommand,
         deadline: Deadline,
     ) -> Result<PublishOperation, MqttClientError> {
-        let (changed, _) = watch::channel(());
-        let receipt = Arc::new(Receipt {
-            state: Mutex::new(State {
-                generation: None,
-                admitted: false,
-                cancelled: false,
-                result: None,
-                written: None,
-            }),
-            changed,
-            deadline,
-        });
+        let receipt = Arc::new(Receipt::new(deadline));
         self.command_tx
             .try_send(TokioClientCommand::PublishTracked(TrackedCommand {
                 command,
@@ -214,6 +239,6 @@ impl TokioAsyncMqttClient {
                     channel: "tracked command queue".into(),
                 },
             })?;
-        Ok(PublishOperation { receipt })
+        Ok(PublishOperation::new(receipt))
     }
 }
