@@ -44,12 +44,14 @@ the callback. Local `publish_with_command_admitted` is the exception: its
 dedicated bounded queue is serviced while a callback is waiting, without socket
 I/O or recursive event delivery.
 
-### Tracked publication, cancellation, and local drain
+### Tracked publication, confirmation deadlines, and local drain
 
 `try_publish_tracked(command, deadline)` returns a `PublishOperation` immediately
 when the bounded command queue has space. A full queue returns `BufferFull`
-without accepting the publication. The deadline is an absolute
-`tokio::time::Instant` shared by queue admission and confirmation waiting.
+without accepting the publication. Successful enqueueing transfers ownership to
+the worker: dropping the operation or timing out a wait does not retract it.
+The absolute `tokio::time::Instant` deadline limits confirmation waiting only;
+the worker may still admit and transmit a queued publication after that deadline.
 
 ```rust
 use flowsdk::mqtt_client::commands::PublishCommand;
@@ -74,11 +76,17 @@ Keep the operation handle when cancelling its `wait()` future, then resume the
 same wait to retain its identity and original deadline. Confirmations recorded
 before the deadline remain available when the wait resumes afterward; confirmations
 recorded at or after the deadline produce `OperationTimeout`, even without an active
-waiter. Dropping the handle or expiring its deadline before engine admission prevents
-later publication; cancellation and admission are arbitrated under the same lock.
-After admission, dropping the handle or timing out a wait does not retract the MQTT exchange.
-`TrackedPublishError::admitted` distinguishes these cases. A missing confirmation
-after admission leaves delivery uncertain, and retrying may duplicate output.
+waiter. Once a wait reports a timeout, repeating it still reports a timeout, but
+the publication and its independent drain receipt can continue progressing.
+Dropping the whole operation handle also leaves the queued publication intact;
+a retained drain receipt can still observe its initial write and flush.
+
+`TrackedPublishError::admitted` reports whether engine admission has been observed
+when the error is returned. On timeout, `admitted: false` means the command has not
+yet been observed admitted; it does **not** guarantee that publication was prevented.
+Retrying after any confirmation timeout may duplicate output. The worker can still
+reject queued work for connection, validation, or capacity errors. Stopping the
+worker fails outstanding work rather than guaranteeing delivery.
 Broker rejection codes remain in `PublishResult`; inspect `is_success()`.
 
 The receipt identity is independent of a reusable MQTT packet ID. QoS 1/2 still

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: Apache-2.0
-use super::super::tracked::{PublishOperation, Receipt, State, TrackedCommand};
+use super::super::tracked::{PublishOperation, Receipt, TrackedCommand};
 use super::*;
 use crate::mqtt_client::transport::TransportError;
 use std::sync::{Arc, Mutex};
@@ -98,28 +98,168 @@ async fn worker(
 }
 
 fn request(qos: u8, deadline: tokio::time::Instant) -> (TrackedCommand, PublishOperation) {
-    let (changed, _) = tokio::sync::watch::channel(());
-    let receipt = Arc::new(Receipt {
-        state: Mutex::new(State {
-            generation: None,
-            admitted: false,
-            cancelled: false,
-            result: None,
-            written: None,
-        }),
-        changed,
-        deadline,
-    });
+    let receipt = Arc::new(Receipt::new(deadline));
     (
         TrackedCommand {
             command: PublishCommand::simple("t", b"body".to_vec(), qos, false),
             receipt: receipt.clone(),
         },
-        PublishOperation { receipt },
+        PublishOperation::new(receipt),
     )
 }
 fn deadline() -> tokio::time::Instant {
     tokio::time::Instant::now() + Duration::from_secs(1)
+}
+
+async fn queued_publish_continues(expired: bool) {
+    for version in [4, 5] {
+        for qos in [0, 1, 2] {
+            let (worker, command_tx, bytes) = worker(version).await;
+            let config = worker.config.clone();
+            let client = TokioAsyncMqttClient {
+                command_tx,
+                admission_tx: mpsc::channel(1).0,
+                admission_budget: None,
+                _config: config,
+                worker: tokio::spawn(worker.run()),
+            };
+            let until = if expired {
+                tokio::time::Instant::now()
+            } else {
+                deadline()
+            };
+            let mut operation = client
+                .try_publish_tracked(
+                    PublishCommand::simple("t", b"body".to_vec(), qos, false),
+                    until,
+                )
+                .unwrap();
+            let drain = operation.drain_receipt();
+            if expired {
+                assert!(matches!(
+                    operation.wait().await.unwrap_err().error,
+                    MqttClientError::OperationTimeout { .. }
+                ));
+            }
+            // The current-thread worker has not run yet: dropping the handle
+            // or expiring its confirmation window must not retract this request.
+            drop(operation);
+            drain.drain_through(deadline()).await.unwrap();
+            assert!(bytes.lock().unwrap().ends_with(b"body"));
+            client.shutdown().await.unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn queued_tracked_publish_survives_dropped_operation() {
+    queued_publish_continues(false).await;
+}
+
+#[tokio::test]
+async fn queued_tracked_publish_survives_expired_confirmation_deadline() {
+    queued_publish_continues(true).await;
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn confirmation_and_cloned_drains_wake_across_threads() {
+    for stop_worker in [false, true] {
+        let (mut worker, _tx, _) = worker(5).await;
+        let until = tokio::time::Instant::now() + Duration::from_secs(10);
+        let (command, mut operation) = request(1, until);
+        worker.admit_tracked(&command).await;
+        let id = *worker.tracked.keys().next().unwrap();
+        let (ready_tx, mut ready_rx) = mpsc::channel(9);
+        let mut drains = Vec::new();
+        for _ in 0..8 {
+            let drain = operation.drain_receipt();
+            let ready = ready_tx.clone();
+            drains.push(tokio::spawn(async move {
+                let mut waiting = Box::pin(drain.drain_through(until));
+                assert!(futures::poll!(waiting.as_mut()).is_pending());
+                ready.send(()).await.unwrap();
+                waiting.await
+            }));
+        }
+        let confirmation = tokio::spawn(async move {
+            // Dropping a registered waiter must not disturb subsequent waiters.
+            {
+                let mut cancelled = Box::pin(operation.wait());
+                assert!(futures::poll!(cancelled.as_mut()).is_pending());
+            }
+            let mut waiting = Box::pin(operation.wait());
+            assert!(futures::poll!(waiting.as_mut()).is_pending());
+            ready_tx.send(()).await.unwrap();
+            waiting.await
+        });
+        for _ in 0..9 {
+            ready_rx.recv().await.unwrap();
+        }
+        if stop_worker {
+            drop(worker);
+        } else {
+            worker.handle_outgoing().await.unwrap();
+            test_support::receive(&mut worker, &[0x40, 2, (id >> 8) as u8, id as u8]).await;
+        }
+        // Finish well before receipt deadlines: a missed notification must not
+        // be hidden by a timer eventually waking the same task.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            for waiter in drains {
+                let result = waiter.await.unwrap();
+                if stop_worker {
+                    assert!(matches!(
+                        result,
+                        Err(MqttClientError::OperationCancelled { .. })
+                    ));
+                } else {
+                    result.unwrap();
+                }
+            }
+            let result = confirmation.await.unwrap();
+            if stop_worker {
+                let error = result.unwrap_err();
+                assert!(error.admitted);
+                assert!(matches!(
+                    error.error,
+                    MqttClientError::OperationCancelled { .. }
+                ));
+            } else {
+                assert!(result.unwrap().is_success());
+            }
+        })
+        .await
+        .unwrap();
+    }
+}
+
+#[tokio::test]
+async fn stopping_worker_fails_queued_confirmation_and_drain() {
+    let (worker, tx, _) = worker(5).await;
+    let until = tokio::time::Instant::now() + Duration::from_secs(10);
+    let (command, mut operation) = request(0, until);
+    tx.try_send(TokioClientCommand::PublishTracked(command))
+        .unwrap();
+    let drain = operation.drain_receipt();
+    let mut confirmation = Box::pin(operation.wait());
+    let mut draining = Box::pin(drain.drain_through(until));
+    assert!(futures::poll!(confirmation.as_mut()).is_pending());
+    assert!(futures::poll!(draining.as_mut()).is_pending());
+    drop(worker);
+    let (confirmation, draining) = tokio::time::timeout(Duration::from_secs(1), async {
+        tokio::join!(confirmation, draining)
+    })
+    .await
+    .unwrap();
+    let error = confirmation.unwrap_err();
+    assert!(!error.admitted);
+    assert!(matches!(
+        error.error,
+        MqttClientError::OperationCancelled { .. }
+    ));
+    assert!(matches!(
+        draining,
+        Err(MqttClientError::OperationCancelled { .. })
+    ));
 }
 
 #[test]
@@ -203,10 +343,7 @@ async fn qos0_admission_and_write_are_distinct_and_old_fences_survive_loss() {
         assert!(worker.engine.take_outgoing().is_empty());
         let (command, _operation) = request(0, deadline());
         worker.admit_tracked(&command).await;
-        let new_drain = super::super::tracked::PublishOperation {
-            receipt: command.receipt.clone(),
-        }
-        .drain_receipt();
+        let new_drain = PublishOperation::new(command.receipt.clone()).drain_receipt();
         assert!(!first_drain.same_connection(&new_drain));
     }
 }
@@ -348,20 +485,6 @@ async fn tracked_write_and_flush_share_the_transport_timeout() {
 }
 
 #[tokio::test]
-async fn cancelled_or_expired_before_admission_never_reaches_wire() {
-    let (mut worker, _tx, bytes) = worker(5).await;
-    let (command, operation) = request(1, deadline());
-    drop(operation);
-    worker.admit_tracked(&command).await;
-    let (expired, mut operation) = request(1, tokio::time::Instant::now());
-    assert!(!operation.wait().await.unwrap_err().admitted);
-    worker.admit_tracked(&expired).await;
-    worker.handle_outgoing().await.unwrap();
-    assert!(bytes.lock().unwrap().is_empty());
-    assert!(worker.tracked.is_empty());
-}
-
-#[tokio::test]
 async fn qos1_and_qos2_wait_for_final_ack_and_preserve_rejection_codes() {
     for version in [4, 5] {
         for qos in [1, 2] {
@@ -376,7 +499,7 @@ async fn qos1_and_qos2_wait_for_final_ack_and_preserve_rejection_codes() {
                 let id = *worker.tracked.keys().next().unwrap();
                 worker.handle_outgoing().await.unwrap();
                 assert!(operation.drain_receipt().is_written());
-                assert!(operation.receipt.state.lock().unwrap().result.is_none());
+                assert!(operation.receipt.completion.get().is_none());
                 // Dropping a wait future leaves the same operation resumable.
                 assert!(
                     tokio::time::timeout(Duration::from_millis(1), operation.wait())
@@ -395,7 +518,7 @@ async fn qos1_and_qos2_wait_for_final_ack_and_preserve_rejection_codes() {
                 }
                 test_support::receive(&mut worker, &ack).await;
                 if qos == 2 && reason == 0 {
-                    assert!(operation.receipt.state.lock().unwrap().result.is_none());
+                    assert!(operation.receipt.completion.get().is_none());
                     worker.handle_outgoing().await.unwrap();
                     test_support::receive(&mut worker, &[0x70, 2, (id >> 8) as u8, id as u8]).await;
                 }
@@ -424,7 +547,7 @@ async fn late_ack_does_not_complete_another_operation_and_worker_drop_fails_pend
         &[0x40, 2, (first_id >> 8) as u8, first_id as u8],
     )
     .await;
-    assert!(second.receipt.state.lock().unwrap().result.is_none());
+    assert!(second.receipt.completion.get().is_none());
     assert!(worker.tracked.contains_key(&second_id));
     drop(worker);
     assert!(second.wait().await.unwrap_err().admitted);
@@ -447,7 +570,7 @@ async fn cancelled_wait_keeps_original_confirmation_deadline() {
                 if qos == 2 {
                     test_support::receive(&mut worker, &[0x50, 2, (id >> 8) as u8, id as u8]).await;
                     worker.handle_outgoing().await.unwrap();
-                    assert!(operation.receipt.state.lock().unwrap().result.is_none());
+                    assert!(operation.receipt.completion.get().is_none());
                 }
 
                 tokio::time::advance(Duration::from_millis(ack_delay_ms)).await;
@@ -461,7 +584,6 @@ async fn cancelled_wait_keeps_original_confirmation_deadline() {
                 // The final ACK still finishes the exchange and releases its tracking.
                 assert!(worker.tracked.is_empty());
                 assert!(operation.drain_receipt().is_written());
-                assert!(!operation.receipt.state.lock().unwrap().cancelled);
 
                 // Resume only after the deadline, even for a timely confirmation.
                 tokio::time::advance(Duration::from_secs(1)).await;
@@ -524,42 +646,57 @@ async fn cancelled_wait_preserves_only_timely_broker_rejections() {
 }
 
 #[tokio::test(start_paused = true)]
-async fn pre_admission_wait_timeout_is_not_replaced_by_late_cancellation() {
+async fn confirmation_timeout_does_not_cancel_later_admission_or_poison_drain() {
     for version in [4, 5] {
         for qos in [0, 1, 2] {
-            let (mut worker, _tx, bytes) = worker(version).await;
-            let (command, mut operation) =
-                request(qos, tokio::time::Instant::now() + Duration::from_millis(1));
-            // Wait past the deadline before admission; the timeout is recorded
-            // with admitted=false and marks the command cancelled.
-            let error = operation.wait().await.unwrap_err();
-            assert!(!error.admitted);
-            assert!(matches!(
-                error.error,
-                MqttClientError::OperationTimeout { .. }
-            ));
-            worker.admit_tracked(&command).await;
-            // The late cancellation must not replace the stored timeout.
-            {
-                let state = operation.receipt.state.lock().unwrap();
-                assert!(state.cancelled);
-                assert!(matches!(
-                    state.result.as_ref().unwrap().as_ref().unwrap_err(),
-                    MqttClientError::OperationTimeout { .. }
-                ));
-                assert!(matches!(
-                    state.written.as_ref().unwrap().as_ref().unwrap_err(),
-                    MqttClientError::OperationTimeout { .. }
-                ));
+            for wait_before_admission in [false, true] {
+                let (mut worker, _tx, bytes) = worker(version).await;
+                let (command, mut operation) =
+                    request(qos, tokio::time::Instant::now() + Duration::from_millis(1));
+                tokio::time::advance(Duration::from_millis(2)).await;
+                if wait_before_admission {
+                    let error = operation.wait().await.unwrap_err();
+                    assert!(!error.admitted);
+                    assert!(matches!(
+                        error.error,
+                        MqttClientError::OperationTimeout { .. }
+                    ));
+                }
+                worker.admit_tracked(&command).await;
+                worker.handle_outgoing().await.unwrap();
+                operation
+                    .drain_receipt()
+                    .drain_through(deadline())
+                    .await
+                    .unwrap();
+                assert!(bytes.lock().unwrap().ends_with(b"body"));
+                if qos > 0 {
+                    let id = *worker.tracked.keys().next().unwrap();
+                    if qos == 2 {
+                        test_support::receive(&mut worker, &[0x50, 2, (id >> 8) as u8, id as u8])
+                            .await;
+                        worker.handle_outgoing().await.unwrap();
+                    }
+                    let ack = [
+                        if qos == 1 { 0x40 } else { 0x70 },
+                        2,
+                        (id >> 8) as u8,
+                        id as u8,
+                    ];
+                    test_support::receive(&mut worker, &ack).await;
+                }
+                assert!(worker.tracked.is_empty());
+                // The exchange finishes, but its confirmation missed the original
+                // deadline whether or not the caller was waiting at that time.
+                for _ in 0..2 {
+                    let error = operation.wait().await.unwrap_err();
+                    assert!(error.admitted);
+                    assert!(matches!(
+                        error.error,
+                        MqttClientError::OperationTimeout { .. }
+                    ));
+                }
             }
-            // The next wait reports the same timeout, not the cancellation.
-            let error = operation.wait().await.unwrap_err();
-            assert!(!error.admitted);
-            assert!(matches!(
-                error.error,
-                MqttClientError::OperationTimeout { .. }
-            ));
-            assert!(bytes.lock().unwrap().is_empty());
         }
     }
 }
@@ -724,7 +861,7 @@ async fn disabling_reconnect_while_connected_preserves_pending_receipts() {
             .handle_command(TokioClientCommand::SetAutoReconnect { enabled: false })
             .await;
         assert!(worker.tracked.contains_key(&id));
-        assert!(operation.receipt.state.lock().unwrap().result.is_none());
+        assert!(operation.receipt.completion.get().is_none());
         if qos == 2 {
             test_support::receive(&mut worker, &[0x50, 2, (id >> 8) as u8, id as u8]).await;
             worker.handle_outgoing().await.unwrap();

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
-use super::super::tracked::{PublishOperation, Receipt, State, TrackedCommand};
+use super::super::tracked::{PublishOperation, Receipt, TrackedCommand};
 use super::*;
 use std::sync::{Arc, Mutex};
 
@@ -22,24 +22,15 @@ impl TokioMqttEventHandler for PauseOnSecondMessage {
 }
 
 fn request(qos: u8) -> (TrackedCommand, PublishOperation) {
-    let (changed, _) = tokio::sync::watch::channel(());
-    let receipt = Arc::new(Receipt {
-        state: Mutex::new(State {
-            generation: None,
-            admitted: false,
-            cancelled: false,
-            result: None,
-            written: None,
-        }),
-        changed,
-        deadline: tokio::time::Instant::now() + Duration::from_secs(5),
-    });
+    let receipt = Arc::new(Receipt::new(
+        tokio::time::Instant::now() + Duration::from_secs(5),
+    ));
     (
         TrackedCommand {
             command: PublishCommand::simple("out", b"body".to_vec(), qos, false),
             receipt: receipt.clone(),
         },
-        PublishOperation { receipt },
+        PublishOperation::new(receipt),
     )
 }
 
@@ -97,7 +88,7 @@ async fn buffered_closure(tracked: bool) {
                     let error = operation.wait().await.unwrap_err();
                     assert!(!error.admitted);
                     assert!(matches!(error.error, MqttClientError::NotConnected));
-                    assert!(operation.receipt.state.lock().unwrap().generation.is_none());
+                    assert!(operation.receipt.generation.get().is_none());
                     assert!(matches!(
                         operation
                             .drain_receipt()
@@ -191,7 +182,7 @@ async fn closure_during_drain_fails_an_already_admitted_write_fence() {
         let (mut worker, mut peer) = connected(5, 1024).await;
         let (request, mut operation) = request(qos);
         worker.admit_tracked(&request).await;
-        assert!(request.receipt.state.lock().unwrap().admitted);
+        assert!(request.receipt.is_admitted());
         let input = [test_support::publish(5, 1, 0), vec![0xe0, 0]].concat();
         test_support::receive(&mut worker, &input).await;
         assert!(worker.engine.is_connected());
@@ -244,7 +235,7 @@ async fn intentional_disconnect_preserves_pending_publication_and_disconnect_pac
 }
 
 #[tokio::test(start_paused = true)]
-async fn cancellation_and_expiry_during_preparation_prevent_admission() {
+async fn dropping_or_expiring_wait_during_preparation_does_not_cancel_publish() {
     for expire in [false, true] {
         // The one-byte pipe stalls halfway through the preceding PINGREQ.
         let (mut worker, mut peer) = connected(5, 1).await;
@@ -254,7 +245,7 @@ async fn cancellation_and_expiry_during_preparation_prevent_admission() {
         let drain = operation.as_ref().unwrap().drain_receipt();
         let mut preparation = Box::pin(worker.admit_tracked(&request));
         assert!(futures::poll!(preparation.as_mut()).is_pending());
-        assert!(!request.receipt.state.lock().unwrap().admitted);
+        assert!(!request.receipt.is_admitted());
         if expire {
             tokio::time::advance(Duration::from_secs(5)).await;
             assert!(
@@ -274,23 +265,29 @@ async fn cancellation_and_expiry_during_preparation_prevent_admission() {
         result.unwrap();
         drop(preparation);
         assert_eq!(ping, [0xc0, 0]);
-        assert!(!request.receipt.state.lock().unwrap().admitted);
-        assert!(request.receipt.state.lock().unwrap().generation.is_none());
-        assert!(worker.tracked.is_empty() && worker.tracked_output.is_empty());
-        let error = drain
-            .drain_through(request.receipt.deadline)
-            .await
-            .unwrap_err();
+        assert!(request.receipt.is_admitted());
+        let mut command = request.command.clone();
+        command.packet_id = worker.tracked.keys().next().copied();
+        let expected = encoded(command, 5);
+        let mut output = vec![0; expected.len()];
+        let (write, read, drained) = tokio::join!(
+            worker.handle_outgoing(),
+            peer.read_exact(&mut output),
+            drain.drain_through(tokio::time::Instant::now() + Duration::from_secs(1)),
+        );
+        write.unwrap();
+        read.unwrap();
+        drained.unwrap();
+        assert_eq!(output, expected);
+        assert!(drain.is_written());
         if expire {
-            assert!(matches!(error, MqttClientError::OperationTimeout { .. }));
+            let error = operation.as_mut().unwrap().wait().await.unwrap_err();
+            assert!(error.admitted);
             assert!(matches!(
-                operation.as_mut().unwrap().wait().await.unwrap_err().error,
+                error.error,
                 MqttClientError::OperationTimeout { .. }
             ));
-        } else {
-            assert!(matches!(error, MqttClientError::OperationCancelled { .. }));
         }
-        assert!(futures::poll!(Box::pin(peer.read_u8())).is_pending());
     }
 }
 
@@ -343,7 +340,7 @@ async fn tracked_preparation_keeps_callback_output_before_its_publication() {
         let mut preparation = Box::pin(worker.admit_tracked(&request));
         assert!(futures::poll!(preparation.as_mut()).is_pending());
         second_message.try_recv().unwrap();
-        assert!(!request.receipt.state.lock().unwrap().admitted);
+        assert!(!request.receipt.is_admitted());
         let earlier = PublishCommand::simple("earlier", b"callback".to_vec(), 0, false);
         let (response_tx, mut response) = oneshot::channel();
         admissions
@@ -360,14 +357,7 @@ async fn tracked_preparation_keeps_callback_output_before_its_publication() {
         preparation.await;
         operation.wait().await.unwrap();
         assert!(Arc::ptr_eq(
-            request
-                .receipt
-                .state
-                .lock()
-                .unwrap()
-                .generation
-                .as_ref()
-                .unwrap(),
+            request.receipt.generation.get().unwrap(),
             &generation
         ));
         assert!(!operation.drain_receipt().is_written());

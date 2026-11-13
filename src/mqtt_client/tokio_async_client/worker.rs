@@ -1135,24 +1135,8 @@ impl Drop for TokioClientWorker {
 }
 
 impl TokioClientWorker {
-    fn check_tracked_admission(
-        &self,
-        request: &super::tracked::TrackedCommand,
-        state: &super::tracked::State,
-    ) -> Result<(), MqttClientError> {
-        if state.cancelled {
-            Err(MqttClientError::OperationCancelled {
-                operation: "publish before admission".into(),
-            })
-        } else if tokio::time::Instant::now() >= request.receipt.deadline {
-            Err(MqttClientError::OperationTimeout {
-                operation: "tracked publish".into(),
-                timeout_ms: 0,
-            })
-        } else if self.intentional_stop
-            || self.admission_transport_failed
-            || !self.engine.is_connected()
-        {
+    fn check_tracked_admission(&self) -> Result<(), MqttClientError> {
+        if self.intentional_stop || self.admission_transport_failed || !self.engine.is_connected() {
             Err(MqttClientError::NotConnected)
         } else if !self.tracked_output.is_empty() {
             // At most one extracted write is retained outside engine accounting.
@@ -1166,56 +1150,51 @@ impl TokioClientWorker {
     }
 
     async fn admit_tracked(&mut self, request: &super::tracked::TrackedCommand) {
-        let rejection = self
-            .check_tracked_admission(request, &request.receipt.state.lock().unwrap())
-            .err();
-        if let Some(error) = rejection {
+        if let Err(error) = self.check_tracked_admission() {
             request.receipt.fail(error);
             return;
         }
         loop {
-            // Resolve buffered input and preceding output before admission. No
-            // receipt lock is held across transport I/O or event callbacks.
+            // Resolve buffered input and preceding output before admission.
             if let Err(error) = self.handle_outgoing().await {
                 request.receipt.fail(error.clone());
                 self.transport_failed(error).await;
                 return;
             }
-            let mut state = request.receipt.state.lock().unwrap();
-            let result = match self.check_tracked_admission(request, &state) {
-                // A callback may have admitted more output. Preserve its order,
-                // and recheck the deadline/cancellation after each drain.
+            let result = match self.check_tracked_admission() {
+                // A callback may have admitted more output. Preserve its order
+                // and recheck the connection after each drain.
                 Ok(()) if self.engine.has_pending_output() => continue,
                 Ok(()) => self.engine.publish_encoded(request.command.clone(), None),
                 Err(error) => Err(error),
             };
             match result {
                 Ok((packet_id, bytes)) => {
-                    state.admitted = true;
-                    state.generation = Some(self.tracked_generation.clone());
+                    request
+                        .receipt
+                        .generation
+                        .set(self.tracked_generation.clone())
+                        .unwrap();
                     if let Some(id) = packet_id {
                         self.tracked.insert(id, request.receipt.clone());
-                    } else {
-                        state.result = Some(Ok(PublishResult {
+                    }
+                    self.tracked_output.push_back(TrackedWrite {
+                        bytes,
+                        receipt: request.receipt.clone(),
+                    });
+                    if packet_id.is_none() {
+                        request.receipt.complete(Ok(PublishResult {
                             packet_id: None,
                             reason_code: None,
                             properties: None,
                             qos: 0,
                         }));
                     }
-                    self.tracked_output.push_back(TrackedWrite {
-                        bytes,
-                        receipt: request.receipt.clone(),
-                    });
                 }
                 Err(error) => {
-                    // Preserve a timeout already recorded by the caller.
-                    state.result.get_or_insert(Err(error.clone()));
-                    state.written.get_or_insert(Err(error));
+                    request.receipt.fail(error);
                 }
             }
-            drop(state);
-            request.receipt.changed.send_replace(());
             return;
         }
     }
