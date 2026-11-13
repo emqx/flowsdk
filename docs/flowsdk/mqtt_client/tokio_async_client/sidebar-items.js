@@ -1,1 +1,1 @@
-window.SIDEBAR_ITEMS = {"enum":["PublishBatchAdmissionError","TokioMqttEvent"],"struct":["ConfigBuilder","PublishAdmissionConfig","PublishBatchAdmission","TokioAsyncClientConfig","TokioAsyncMqttClient"],"trait":["TokioMqttEventHandler"]};
+window.SIDEBAR_ITEMS = {"enum":["PublishBatchAdmissionError","TokioMqttEvent"],"struct":["ConfigBuilder","PublishAdmissionConfig","PublishBatchAdmission","PublishDrain","PublishOperation","TokioAsyncClientConfig","TokioAsyncMqttClient","TrackedPublishError"],"trait":["TokioMqttEventHandler"]};
