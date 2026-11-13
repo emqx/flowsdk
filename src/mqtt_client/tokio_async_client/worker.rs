@@ -1140,9 +1140,14 @@ impl TokioClientWorker {
         request: &super::tracked::TrackedCommand,
         state: &super::tracked::State,
     ) -> Result<(), MqttClientError> {
-        if state.cancelled || tokio::time::Instant::now() >= request.receipt.deadline {
+        if state.cancelled {
             Err(MqttClientError::OperationCancelled {
                 operation: "publish before admission".into(),
+            })
+        } else if tokio::time::Instant::now() >= request.receipt.deadline {
+            Err(MqttClientError::OperationTimeout {
+                operation: "tracked publish".into(),
+                timeout_ms: 0,
             })
         } else if self.intentional_stop
             || self.admission_transport_failed
