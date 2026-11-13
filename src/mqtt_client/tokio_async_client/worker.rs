@@ -769,12 +769,19 @@ impl TokioClientWorker {
     }
 
     async fn write_output(&mut self) -> Result<(), MqttClientError> {
+        // Draining also pumps buffered input. It can close the MQTT session,
+        // invalidating both these bytes and any previously extracted writes.
+        let bytes = self.engine.take_outgoing();
+        if matches!(self.state, ConnectionState::Connected(_)) && !self.engine.is_connected() {
+            // handle_outgoing dispatches the closure and fails old write fences.
+            // Connecting and intentional Disconnecting still send their packets.
+            return Ok(());
+        }
         while let Some(write) = self.tracked_output.pop_front() {
             let result = self.write_bytes(&write.bytes).await;
             write.receipt.written(result.clone());
             result?;
         }
-        let bytes = self.engine.take_outgoing();
         self.write_bytes(&bytes).await
     }
 
@@ -847,7 +854,7 @@ impl TokioClientWorker {
     async fn handle_command(&mut self, command: TokioClientCommand) {
         let result = match command {
             TokioClientCommand::PublishTracked(request) => {
-                self.admit_tracked(&request);
+                self.admit_tracked(&request).await;
                 Ok(())
             }
             TokioClientCommand::Connect => {
@@ -1128,9 +1135,12 @@ impl Drop for TokioClientWorker {
 }
 
 impl TokioClientWorker {
-    fn admit_tracked(&mut self, request: &super::tracked::TrackedCommand) {
-        let mut state = request.receipt.state.lock().unwrap();
-        let result = if state.cancelled || tokio::time::Instant::now() >= request.receipt.deadline {
+    fn check_tracked_admission(
+        &self,
+        request: &super::tracked::TrackedCommand,
+        state: &super::tracked::State,
+    ) -> Result<(), MqttClientError> {
+        if state.cancelled || tokio::time::Instant::now() >= request.receipt.deadline {
             Err(MqttClientError::OperationCancelled {
                 operation: "publish before admission".into(),
             })
@@ -1146,39 +1156,63 @@ impl TokioClientWorker {
                 capacity: 1,
             })
         } else {
-            // Bypass the priority/offline queue only for this opt-in API. The
-            // worker owns the returned bytes, ordering, transport and receipts.
-            self.engine.publish_encoded(request.command.clone(), None)
-        };
-        match result {
-            Ok((packet_id, bytes)) => {
-                let mut ordered = self.engine.take_outgoing();
-                ordered.extend(bytes);
-                state.admitted = true;
-                state.generation = Some(self.tracked_generation.clone());
-                if let Some(id) = packet_id {
-                    self.tracked.insert(id, request.receipt.clone());
-                } else {
-                    state.result = Some(Ok(PublishResult {
-                        packet_id: None,
-                        reason_code: None,
-                        properties: None,
-                        qos: 0,
-                    }));
-                }
-                self.tracked_output.push_back(TrackedWrite {
-                    bytes: ordered,
-                    receipt: request.receipt.clone(),
-                });
-            }
-            Err(error) => {
-                // A wait that timed out before admission already stored its
-                // OperationTimeout; keep that first recorded result stable.
-                state.result.get_or_insert(Err(error.clone()));
-                state.written.get_or_insert(Err(error));
-            }
+            Ok(())
         }
-        request.receipt.changed.send_replace(());
+    }
+
+    async fn admit_tracked(&mut self, request: &super::tracked::TrackedCommand) {
+        let rejection = self
+            .check_tracked_admission(request, &request.receipt.state.lock().unwrap())
+            .err();
+        if let Some(error) = rejection {
+            request.receipt.fail(error);
+            return;
+        }
+        loop {
+            // Resolve buffered input and preceding output before admission. No
+            // receipt lock is held across transport I/O or event callbacks.
+            if let Err(error) = self.handle_outgoing().await {
+                request.receipt.fail(error.clone());
+                self.transport_failed(error).await;
+                return;
+            }
+            let mut state = request.receipt.state.lock().unwrap();
+            let result = match self.check_tracked_admission(request, &state) {
+                // A callback may have admitted more output. Preserve its order,
+                // and recheck the deadline/cancellation after each drain.
+                Ok(()) if self.engine.has_pending_output() => continue,
+                Ok(()) => self.engine.publish_encoded(request.command.clone(), None),
+                Err(error) => Err(error),
+            };
+            match result {
+                Ok((packet_id, bytes)) => {
+                    state.admitted = true;
+                    state.generation = Some(self.tracked_generation.clone());
+                    if let Some(id) = packet_id {
+                        self.tracked.insert(id, request.receipt.clone());
+                    } else {
+                        state.result = Some(Ok(PublishResult {
+                            packet_id: None,
+                            reason_code: None,
+                            properties: None,
+                            qos: 0,
+                        }));
+                    }
+                    self.tracked_output.push_back(TrackedWrite {
+                        bytes,
+                        receipt: request.receipt.clone(),
+                    });
+                }
+                Err(error) => {
+                    // Preserve a timeout already recorded by the caller.
+                    state.result.get_or_insert(Err(error.clone()));
+                    state.written.get_or_insert(Err(error));
+                }
+            }
+            drop(state);
+            request.receipt.changed.send_replace(());
+            return;
+        }
     }
 
     fn fail_tracked(&mut self, error: &MqttClientError) {
@@ -1213,6 +1247,9 @@ fn publish_command(
 
 #[cfg(test)]
 mod batch_tests;
+
+#[cfg(test)]
+mod output_tests;
 
 #[cfg(all(test, feature = "shared-payloads"))]
 mod payload_tests;

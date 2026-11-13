@@ -167,7 +167,7 @@ async fn qos0_admission_and_write_are_distinct_and_old_fences_survive_loss() {
     for version in [4, 5] {
         let (mut worker, _tx, bytes) = worker(version).await;
         let (command, mut first) = request(0, deadline());
-        worker.admit_tracked(&command);
+        worker.admit_tracked(&command).await;
         first.wait().await.unwrap();
         let first_drain = first.drain_receipt();
         assert!(bytes.lock().unwrap().is_empty());
@@ -175,7 +175,7 @@ async fn qos0_admission_and_write_are_distinct_and_old_fences_survive_loss() {
         worker.handle_outgoing().await.unwrap();
         first_drain.drain_through(deadline()).await.unwrap();
         let (command, mut second) = request(0, deadline());
-        worker.admit_tracked(&command);
+        worker.admit_tracked(&command).await;
         second.wait().await.unwrap();
         let second_drain = second.drain_receipt();
         let partial = Arc::new(Mutex::new(Vec::new()));
@@ -202,7 +202,7 @@ async fn qos0_admission_and_write_are_distinct_and_old_fences_survive_loss() {
         test_support::receive(&mut worker, connack).await;
         assert!(worker.engine.take_outgoing().is_empty());
         let (command, _operation) = request(0, deadline());
-        worker.admit_tracked(&command);
+        worker.admit_tracked(&command).await;
         let new_drain = super::super::tracked::PublishOperation {
             receipt: command.receipt.clone(),
         }
@@ -224,7 +224,7 @@ async fn tracked_drain_waits_for_flush_and_preserves_success_after_loss() {
                 flush_gate: Some(flush_rx),
             }));
             let (command, mut operation) = request(qos, deadline());
-            worker.admit_tracked(&command);
+            worker.admit_tracked(&command).await;
             if qos == 0 {
                 operation.wait().await.unwrap();
             }
@@ -259,7 +259,7 @@ async fn tracked_drain_preserves_flush_failure() {
             flush_gate: Some(flush_rx),
         }));
         let (command, mut operation) = request(qos, deadline());
-        worker.admit_tracked(&command);
+        worker.admit_tracked(&command).await;
         flush_tx
             .send(Err(io::ErrorKind::BrokenPipe.into()))
             .unwrap();
@@ -311,7 +311,7 @@ async fn tracked_write_and_flush_share_the_transport_timeout() {
         flush_gate: Some(flush_rx),
     }));
     let (command, operation) = request(0, deadline());
-    worker.admit_tracked(&command);
+    worker.admit_tracked(&command).await;
     let drain = operation.drain_receipt();
     let mut outgoing = Box::pin(worker.handle_outgoing());
     assert!(futures::poll!(outgoing.as_mut()).is_pending());
@@ -352,10 +352,10 @@ async fn cancelled_or_expired_before_admission_never_reaches_wire() {
     let (mut worker, _tx, bytes) = worker(5).await;
     let (command, operation) = request(1, deadline());
     drop(operation);
-    worker.admit_tracked(&command);
+    worker.admit_tracked(&command).await;
     let (expired, mut operation) = request(1, tokio::time::Instant::now());
     assert!(!operation.wait().await.unwrap_err().admitted);
-    worker.admit_tracked(&expired);
+    worker.admit_tracked(&expired).await;
     worker.handle_outgoing().await.unwrap();
     assert!(bytes.lock().unwrap().is_empty());
     assert!(worker.tracked.is_empty());
@@ -372,7 +372,7 @@ async fn qos1_and_qos2_wait_for_final_ack_and_preserve_rejection_codes() {
             } {
                 let (mut worker, _tx, _) = worker(version).await;
                 let (command, mut operation) = request(qos, deadline());
-                worker.admit_tracked(&command);
+                worker.admit_tracked(&command).await;
                 let id = *worker.tracked.keys().next().unwrap();
                 worker.handle_outgoing().await.unwrap();
                 assert!(operation.drain_receipt().is_written());
@@ -411,12 +411,12 @@ async fn qos1_and_qos2_wait_for_final_ack_and_preserve_rejection_codes() {
 async fn late_ack_does_not_complete_another_operation_and_worker_drop_fails_pending() {
     let (mut worker, _tx, _) = worker(5).await;
     let (command, mut first) = request(1, tokio::time::Instant::now() + Duration::from_millis(5));
-    worker.admit_tracked(&command);
+    worker.admit_tracked(&command).await;
     worker.handle_outgoing().await.unwrap();
     let first_id = *worker.tracked.keys().next().unwrap();
     assert!(first.wait().await.unwrap_err().admitted);
     let (command, mut second) = request(1, deadline());
-    worker.admit_tracked(&command);
+    worker.admit_tracked(&command).await;
     worker.handle_outgoing().await.unwrap();
     let second_id = *worker.tracked.keys().find(|&&id| id != first_id).unwrap();
     test_support::receive(
@@ -437,7 +437,7 @@ async fn cancelled_wait_keeps_original_confirmation_deadline() {
             for ack_delay_ms in [999, 1000, 1001] {
                 let (mut worker, _tx, _) = worker(version).await;
                 let (command, mut operation) = request(qos, deadline());
-                worker.admit_tracked(&command);
+                worker.admit_tracked(&command).await;
                 let id = *worker.tracked.keys().next().unwrap();
                 worker.handle_outgoing().await.unwrap();
                 {
@@ -489,7 +489,7 @@ async fn cancelled_wait_preserves_only_timely_broker_rejections() {
         for ack_delay_ms in [999, 1000, 1001] {
             let (mut worker, _tx, _) = worker(5).await;
             let (command, mut operation) = request(qos, deadline());
-            worker.admit_tracked(&command);
+            worker.admit_tracked(&command).await;
             let id = *worker.tracked.keys().next().unwrap();
             worker.handle_outgoing().await.unwrap();
             {
@@ -538,19 +538,20 @@ async fn pre_admission_wait_timeout_is_not_replaced_by_late_cancellation() {
                 error.error,
                 MqttClientError::OperationTimeout { .. }
             ));
-            worker.admit_tracked(&command);
+            worker.admit_tracked(&command).await;
             // The late cancellation must not replace the stored timeout.
-            let state = operation.receipt.state.lock().unwrap();
-            assert!(state.cancelled);
-            assert!(matches!(
-                state.result.as_ref().unwrap().as_ref().unwrap_err(),
-                MqttClientError::OperationTimeout { .. }
-            ));
-            assert!(matches!(
-                state.written.as_ref().unwrap().as_ref().unwrap_err(),
-                MqttClientError::OperationTimeout { .. }
-            ));
-            drop(state);
+            {
+                let state = operation.receipt.state.lock().unwrap();
+                assert!(state.cancelled);
+                assert!(matches!(
+                    state.result.as_ref().unwrap().as_ref().unwrap_err(),
+                    MqttClientError::OperationTimeout { .. }
+                ));
+                assert!(matches!(
+                    state.written.as_ref().unwrap().as_ref().unwrap_err(),
+                    MqttClientError::OperationTimeout { .. }
+                ));
+            }
             // The next wait reports the same timeout, not the cancellation.
             let error = operation.wait().await.unwrap_err();
             assert!(!error.admitted);
@@ -569,7 +570,7 @@ async fn intentional_disconnect_and_terminal_loss_wake_receipts_immediately() {
         let (mut worker, _tx, _) = worker(5).await;
         worker.config.auto_reconnect = false;
         let (command, mut operation) = request(1, deadline());
-        worker.admit_tracked(&command);
+        worker.admit_tracked(&command).await;
         worker.handle_outgoing().await.unwrap();
         if disconnect {
             worker.disconnect(0, vec![]).await.unwrap();
@@ -595,7 +596,7 @@ async fn connection_identity_changes_after_intentional_and_unexpected_reconnects
             let mut old_drains = Vec::new();
             for qos in [0, 1, 2] {
                 let (command, operation) = request(qos, deadline());
-                worker.admit_tracked(&command);
+                worker.admit_tracked(&command).await;
                 worker.handle_outgoing().await.unwrap();
                 old_drains.push(operation.drain_receipt());
             }
@@ -641,7 +642,7 @@ async fn connection_identity_changes_after_intentional_and_unexpected_reconnects
             assert!(response_rx.await.unwrap().unwrap().is_success());
 
             let (command, operation) = request(0, deadline());
-            worker.admit_tracked(&command);
+            worker.admit_tracked(&command).await;
             worker.handle_outgoing().await.unwrap();
             let new_drain = operation.drain_receipt();
             for drain in &old_drains {
@@ -656,7 +657,7 @@ async fn connection_identity_changes_after_intentional_and_unexpected_reconnects
                 .await;
             response_rx.await.unwrap().unwrap();
             let (command, operation) = request(0, deadline());
-            worker.admit_tracked(&command);
+            worker.admit_tracked(&command).await;
             assert!(new_drain.same_connection(&operation.drain_receipt()));
         }
     }
@@ -672,7 +673,7 @@ async fn disabling_reconnect_while_disconnected_fails_retained_receipts() {
                 .await;
             let started = tokio::time::Instant::now();
             let (command, mut operation) = request(qos, started + Duration::from_secs(3600));
-            worker.admit_tracked(&command);
+            worker.admit_tracked(&command).await;
             let id = *worker.tracked.keys().next().unwrap();
             worker.handle_outgoing().await.unwrap();
             if received_pubrec {
@@ -716,7 +717,7 @@ async fn disabling_reconnect_while_connected_preserves_pending_receipts() {
     for qos in [1, 2] {
         let (mut worker, _tx, _) = worker(5).await;
         let (command, mut operation) = request(qos, deadline());
-        worker.admit_tracked(&command);
+        worker.admit_tracked(&command).await;
         let id = *worker.tracked.keys().next().unwrap();
         worker.handle_outgoing().await.unwrap();
         worker
