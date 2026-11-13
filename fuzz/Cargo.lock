@@ -103,7 +103,7 @@ checksum = "ef25905e51abafe4dcea6c15fec58c57b601cdbd0ee53d22ea1d3016c587d39b"
 
 [[package]]
 name = "flowsdk"
-version = "0.8.1"
+version = "0.8.2"
 dependencies = [
  "arbitrary",
  "async-trait",
