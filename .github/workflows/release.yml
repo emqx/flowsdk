@@ -250,7 +250,7 @@ jobs:
       run: |
         cargo build --release --package mqtt-grpc-proxy --target ${{ matrix.target }}
         # Packaging includes every example, including those behind feature gates.
-        cargo build --release --package flowsdk --examples --no-default-features --features quic,rustls-tls,durable-session --target ${{ matrix.target }}
+        cargo build --release --package flowsdk --examples --no-default-features --features quic,rustls-tls,tls,durable-session --target ${{ matrix.target }}
 
     - name: Create release package (Unix)
       if: runner.os != 'Windows'
