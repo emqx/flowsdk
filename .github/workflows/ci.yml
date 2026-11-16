@@ -175,20 +175,21 @@ jobs:
       run: cargo build -p flowsdk_ffi --features quic-openssl --no-default-features --profile release-small
 
   security:
-    name: Security Audit
+    name: Dependency Advisories
     runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
     steps:
     - name: Checkout code
-      uses: actions/checkout@v4
+      uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
-    - name: Install Rust
-      uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
-
-    - name: Install cargo-audit
-      run: cargo install cargo-audit
-
-    - name: Run security audit
-      run: cargo audit
+    - name: Check dependency advisories
+      uses: EmbarkStudios/cargo-deny-action@bb137d7af7e4fb67e5f82a49c4fce4fad40782fe # v2
+      with:
+        rust-version: stable
+        arguments: --workspace --all-features
+        command: check advisories
 
   python-bindings:
     name: Python Bindings (${{ matrix.python }}, ${{ matrix.session_flags }})
