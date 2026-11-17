@@ -1,2 +1,5 @@
 [advisories]
-ignore = []
+# Retain upstream Askama instead of maintaining a parser fork. This dependency
+# is confined to the repository's binding generator, not published SDK libraries.
+# Remove the exception when UniFFI's upstream Askama dependency replaces it.
+ignore = ["RUSTSEC-2026-0374"] # basic-toml: unmaintained

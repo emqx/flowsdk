@@ -1,0 +1,17 @@
+[package]
+name = "flowsdk-bindgen"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.85"
+publish = false
+
+[[bin]]
+name = "uniffi-bindgen"
+path = "src/main.rs"
+
+[dependencies]
+# Must match flowsdk_ffi: generated bindings and native scaffolding share an ABI.
+uniffi = { version = "=0.29.5", features = ["cli"] }
+# UniFFI allows newer 0.16 releases, but 0.16.4 requires Rust 1.88.
+# Keep the generator's documented Rust 1.85 build working on fresh resolutions.
+textwrap = { version = "=0.16.2", default-features = false, features = ["smawk"] }

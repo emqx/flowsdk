@@ -34,7 +34,7 @@ cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features "$FEATURES"
 
 echo "Generating Python bindings..."
 # Output direct to python/package/flowsdk
-cargo run -p flowsdk_ffi --features "$FEATURES" --bin uniffi-bindgen generate \
+cargo run -p flowsdk-bindgen --bin uniffi-bindgen generate \
     --library "$TARGET_DIR/$LIB_FILE" \
     --language python \
     --out-dir python/package/flowsdk
