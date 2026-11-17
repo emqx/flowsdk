@@ -406,10 +406,14 @@ mod imp {
                         })?;
                     }
                 } else {
-                    let native_certs = rustls_native_certs::load_native_certs().map_err(|e| {
-                        TransportError::Quic(format!("failed to load platform root certs: {}", e))
-                    })?;
-                    for cert in native_certs {
+                    let native_certs = rustls_native_certs::load_native_certs();
+                    // Preserve fail-on-error behavior even when some roots were loaded.
+                    if let Some(error) = native_certs.errors.into_iter().next() {
+                        return Err(TransportError::Quic(format!(
+                            "failed to load platform root certs: {error}"
+                        )));
+                    }
+                    for cert in native_certs.certs {
                         roots.add(cert).map_err(|e| {
                             TransportError::Quic(format!("failed to add root cert: {:?}", e))
                         })?;

@@ -139,7 +139,11 @@ pub fn run_example(exit_when_rcvd: bool) -> Result<(), Box<dyn std::error::Error
         .build();
 
     let mut root_store = rustls::RootCertStore::empty();
-    for cert in rustls_native_certs::load_native_certs()? {
+    let native_certs = rustls_native_certs::load_native_certs();
+    if let Some(error) = native_certs.errors.into_iter().next() {
+        return Err(error.into());
+    }
+    for cert in native_certs.certs {
         root_store.add(cert).ok();
     }
     let crypto = rustls::ClientConfig::builder()
