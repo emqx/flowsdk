@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use super::{ffi_types::*, InsecureServerCertVerifier};
-use rustls::pki_types::CertificateDer;
-use std::{fs::File, io::BufReader, sync::Arc};
+use rustls::pki_types::{pem::PemObject, CertificateDer, PrivateKeyDer};
+use std::{fs::File, sync::Arc};
 
 fn configuration(error: impl std::fmt::Display) -> MqttErrorFFI {
     MqttErrorFFI::Configuration {
@@ -13,13 +13,23 @@ fn configuration(error: impl std::fmt::Display) -> MqttErrorFFI {
 fn certificates(path: &str) -> Result<Vec<CertificateDer<'static>>, MqttErrorFFI> {
     let file = File::open(path)
         .map_err(|e| configuration(format!("Cannot read certificate {path}: {e}")))?;
-    let certs = rustls_pemfile::certs(&mut BufReader::new(file))
+    let certs = CertificateDer::pem_reader_iter(file)
         .collect::<Result<Vec<_>, _>>()
         .map_err(configuration)?;
     if certs.is_empty() {
         return Err(configuration(format!("No certificates found in {path}")));
     }
     Ok(certs)
+}
+
+fn native_certificates(
+    result: rustls_native_certs::CertificateResult,
+) -> Result<Vec<CertificateDer<'static>>, MqttErrorFFI> {
+    // Loading part of the trust store must not hide a platform or parsing error.
+    if let Some(error) = result.errors.into_iter().next() {
+        return Err(configuration(error));
+    }
+    Ok(result.certs)
 }
 
 pub(super) fn client_config(
@@ -41,7 +51,7 @@ pub(super) fn client_config(
         let mut roots = rustls::RootCertStore::empty();
         let certs = match &opts.ca_cert_file {
             Some(path) => certificates(path)?,
-            None => rustls_native_certs::load_native_certs().map_err(configuration)?,
+            None => native_certificates(rustls_native_certs::load_native_certs())?,
         };
         for cert in certs {
             roots.add(cert).map_err(configuration)?;
@@ -58,9 +68,12 @@ pub(super) fn client_config(
             let certs = certificates(cert_path)?;
             let file = File::open(key_path)
                 .map_err(|e| configuration(format!("Cannot read private key {key_path}: {e}")))?;
-            let key = rustls_pemfile::private_key(&mut BufReader::new(file))
-                .map_err(configuration)?
-                .ok_or_else(|| configuration(format!("No private key found in {key_path}")))?;
+            let key = PrivateKeyDer::from_pem_reader(file).map_err(|error| match error {
+                rustls::pki_types::pem::Error::NoItemsFound => {
+                    configuration(format!("No private key found in {key_path}"))
+                }
+                error => configuration(error),
+            })?;
             // This provider does not expose SigningKey::public_key to rustls,
             // so rustls cannot perform its usual certificate/key match check.
             #[cfg(feature = "quic-openssl")]
@@ -113,9 +126,15 @@ mod tests {
     };
 
     fn identity() -> (tempfile::TempDir, MqttTlsOptionsFFI) {
-        let dir = tempfile::tempdir().unwrap();
         let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
         let key = PKey::from_ec_key(EcKey::generate(&group).unwrap()).unwrap();
+        identity_with_key(key)
+    }
+
+    fn identity_with_key(
+        key: PKey<openssl::pkey::Private>,
+    ) -> (tempfile::TempDir, MqttTlsOptionsFFI) {
+        let dir = tempfile::tempdir().unwrap();
         let mut name = X509NameBuilder::new().unwrap();
         name.append_entry_by_text("CN", "localhost").unwrap();
         let name = name.build();
@@ -142,6 +161,60 @@ mod tests {
         (dir, opts)
     }
 
+    #[test]
+    fn certificate_chains_and_invalid_pem_are_handled() {
+        let (_dir, opts) = identity();
+        let path = opts.ca_cert_file.unwrap();
+        let cert = std::fs::read(&path).unwrap();
+        std::fs::write(&path, [cert.as_slice(), cert.as_slice()].concat()).unwrap();
+        assert_eq!(certificates(&path).unwrap().len(), 2);
+        let invalid = b"-----BEGIN CERTIFICATE-----\n!invalid!\n-----END CERTIFICATE-----\n";
+        std::fs::write(&path, [cert.as_slice(), invalid.as_slice()].concat()).unwrap();
+        assert!(certificates(&path).is_err());
+    }
+
+    #[test]
+    fn pkcs1_pkcs8_and_sec1_client_keys_are_supported() {
+        let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1).unwrap();
+        let ec = EcKey::generate(&group).unwrap();
+        let rsa = openssl::rsa::Rsa::generate(2048).unwrap();
+        for (key, traditional_pem) in [
+            (
+                PKey::from_ec_key(ec.clone()).unwrap(),
+                ec.private_key_to_pem().unwrap(),
+            ),
+            (
+                PKey::from_rsa(rsa.clone()).unwrap(),
+                rsa.private_key_to_pem().unwrap(),
+            ),
+        ] {
+            let pkcs8_pem = key.private_key_to_pem_pkcs8().unwrap();
+            let (_dir, opts) = identity_with_key(key);
+            for pem in [traditional_pem, pkcs8_pem] {
+                std::fs::write(opts.client_key_file.as_ref().unwrap(), pem).unwrap();
+                assert!(client_config(&opts)
+                    .unwrap()
+                    .client_auth_cert_resolver
+                    .has_certs());
+            }
+        }
+    }
+
+    #[test]
+    fn partial_native_trust_store_errors_are_not_ignored() {
+        let (_dir, opts) = identity();
+        let mut result = rustls_native_certs::CertificateResult::default();
+        result.certs = certificates(opts.ca_cert_file.as_ref().unwrap()).unwrap();
+        result.errors.push(rustls_native_certs::Error {
+            context: "invalid native certificate",
+            kind: rustls_native_certs::ErrorKind::Pem(rustls::pki_types::pem::Error::NoItemsFound),
+        });
+        assert!(matches!(
+            native_certificates(result),
+            Err(MqttErrorFFI::Configuration { .. })
+        ));
+    }
+
     #[cfg(feature = "tls")]
     #[test]
     fn tls_backpressure_preserves_large_publish_and_disconnect() {
@@ -154,12 +227,10 @@ mod tests {
         let config = client_config(&opts).unwrap();
         let cert = std::fs::read(opts.client_cert_file.as_ref().unwrap()).unwrap();
         let key = std::fs::read(opts.client_key_file.as_ref().unwrap()).unwrap();
-        let certs = rustls_pemfile::certs(&mut cert.as_slice())
+        let certs = CertificateDer::pem_slice_iter(&cert)
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        let key = rustls_pemfile::private_key(&mut key.as_slice())
-            .unwrap()
-            .unwrap();
+        let key = PrivateKeyDer::from_pem_slice(&key).unwrap();
         let mut client_roots = rustls::RootCertStore::empty();
         client_roots.add(certs[0].clone()).unwrap();
         let verifier = rustls::server::WebPkiClientVerifier::builder_with_provider(

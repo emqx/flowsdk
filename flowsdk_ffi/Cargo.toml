@@ -28,13 +28,12 @@ serde_json = { version = "1.0", optional = true }
 rustls = { version = "0.23", optional = true, default-features = false, features = ["std", "ring"] }
 rustls-openssl = { version = "0.3", optional = true }
 openssl = { version = "0.10", optional = true }
-rustls-pemfile = { version = "2.1", optional = true }
-rustls-native-certs = { version = "0.7", optional = true }
+rustls-native-certs = { version = "0.8.5", optional = true }
 # Mainstream quinn-proto (ring crypto, crates.io)
 quinn-proto = { version = "0.11", optional = true, default-features = false, features = ["rustls", "ring"] }
 # Fork quinn-proto (OpenSSL crypto, for release-small builds)
 quinn-proto-openssl = { package = "quinn-proto", git = "https://github.com/qzhuyan/quinn.git", branch = "dev/william/ring-no-deps", optional = true, default-features = false, features = ["rustls-openssl"] }
-rustls-pki-types = { version = "1", optional = true }
+rustls-pki-types = { version = "1.10", optional = true, features = ["std"] }
 
 [features]
 default = ["tls", "quic", "uniffi-bindings"]
@@ -49,7 +48,6 @@ quic = [
 	"dep:quinn-proto",
 	"dep:rustls",
 	"dep:rustls-native-certs",
-	"dep:rustls-pemfile",
 	"dep:rustls-pki-types",
 ]
 quic-openssl = [
@@ -61,7 +59,7 @@ quic-openssl = [
 	"dep:rustls-openssl",
 	"dep:openssl",
 ]
-tls = ["flowsdk/rustls-tls", "flowsdk/strict-protocol-compliance", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pemfile", "dep:rustls-pki-types"]
+tls = ["flowsdk/rustls-tls", "flowsdk/strict-protocol-compliance", "dep:rustls", "dep:rustls-native-certs", "dep:rustls-pki-types"]
 # UniFFI bindings for Kotlin/Python/Swift language bindings
 uniffi-bindings = ["dep:uniffi", "dep:uniffi_macros"]
 

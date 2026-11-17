@@ -52,10 +52,14 @@ mod imp {
             let mut roots = RootCertStore::empty();
 
             if self.use_system_roots {
-                let native_certs = rustls_native_certs::load_native_certs().map_err(|e| {
-                    TransportError::Tls(format!("failed to load platform root certs: {}", e))
-                })?;
-                for cert in native_certs {
+                let native_certs = rustls_native_certs::load_native_certs();
+                // Preserve fail-on-error behavior even when some roots were loaded.
+                if let Some(error) = native_certs.errors.into_iter().next() {
+                    return Err(TransportError::Tls(format!(
+                        "failed to load platform root certs: {error}"
+                    )));
+                }
+                for cert in native_certs.certs {
                     roots.add(cert).map_err(|e| {
                         TransportError::Tls(format!("failed to add root cert: {:?}", e))
                     })?;

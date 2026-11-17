@@ -41,8 +41,8 @@ quinn-openssl = { package = "quinn", git = "https://github.com/qzhuyan/quinn.git
 quinn-proto-openssl = { package = "quinn-proto", git = "https://github.com/qzhuyan/quinn.git", branch = "dev/william/ring-no-deps", optional = true, default-features = false, features = ["rustls-openssl"] }
 rustls = { version = "0.23", optional = true, default-features = false, features = ["std"] }
 rustls-openssl = { version = "0.3", optional = true }
-rustls-native-certs = { version = "0.7", optional = true }
-rustls-pki-types = { version = "1", optional = true }
+rustls-native-certs = { version = "0.8.5", optional = true }
+rustls-pki-types = { version = "1.10", optional = true, features = ["std"] }
 tokio-rustls = { version = "0.26", optional = true, default-features = false, features = ["ring", "tls12"] }
 
 [features]
