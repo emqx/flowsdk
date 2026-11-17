@@ -146,6 +146,10 @@ def main():
     check_dependencies("flowsdk", "alloc,shared-payloads", core_only | {"serde_json", "portable-atomic", "critical-section"}, args.offline)
     check_dependencies("flowsdk", "default", {"quinn", "quinn-proto", "rustls", "tokio-rustls"}, args.offline)
     check_dependencies("flowsdk_ffi", "", transports | {"uniffi", "uniffi_macros"}, args.offline)
+    # Keep the accepted basic-toml maintenance advisory confined to tooling.
+    generator_deps = {"uniffi_bindgen", "askama", "askama_derive", "basic-toml"}
+    retired_deps = {"bincode", "paste", "rustls-pemfile"}
+    check_dependencies("flowsdk_ffi", "uniffi-bindings", generator_deps | retired_deps, args.offline)
     with tempfile.TemporaryDirectory(prefix="flowsdk-feature-contracts-") as temporary:
         check_rust_apis(Path(temporary), args.offline)
     check_c_exports(args.offline)

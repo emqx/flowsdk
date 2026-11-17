@@ -33,7 +33,7 @@ echo "Generating Kotlin bindings..."
 mkdir -p kotlin/package/src/main/kotlin
 
 # Output direct to kotlin/package/src/main/kotlin
-cargo run -p flowsdk_ffi --features "$FEATURES" --bin uniffi-bindgen generate \
+cargo run -p flowsdk-bindgen --bin uniffi-bindgen generate \
     --library "$TARGET_DIR/libflowsdk_ffi.$EXT" \
     --language kotlin \
     --out-dir kotlin/package/src/main/kotlin

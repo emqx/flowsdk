@@ -46,7 +46,7 @@ cargo build -p flowsdk_ffi --profile "$CARGO_PROFILE" --features "$FEATURES"
 
 echo "Generating Swift bindings..."
 mkdir -p "$SWIFT_GEN_DIR"
-cargo run -p flowsdk_ffi --features "$FEATURES" --bin uniffi-bindgen generate \
+cargo run -p flowsdk-bindgen --bin uniffi-bindgen generate \
     --library "$TARGET_DIR/libflowsdk_ffi.dylib" \
     --language swift \
     --out-dir "$SWIFT_GEN_DIR"
