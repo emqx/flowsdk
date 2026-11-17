@@ -43,6 +43,8 @@ python/package/dist/
 
 # Kotlin Examples (generated files)
 kotlin/package/src/main/resources/libflowsdk_ffi.dylib
+kotlin/package/src/main/resources/libflowsdk_ffi.so
+kotlin/package/src/main/resources/flowsdk_ffi.dll
 kotlin/.gradle/
 kotlin/build/
 kotlin/**/build/
