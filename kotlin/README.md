@@ -8,7 +8,7 @@ disk restart tests; plain builds test in-memory session resumption. Runtime
 options and ordinary reconnect work without the feature.
 
 Regenerate with `scripts/build_kotlin_bindings.sh` using JDK 17. The package now
-tracks the Rust/Python version, 0.6.1. `MqttRuntimeOptionsFfi` and
+tracks the Rust/Python version, 0.8.3. `MqttRuntimeOptionsFfi` and
 `newWithRuntimeOptions` expose deadlines, byte limits, reconnect policy and an
 explicit peer identity. Existing constructors remain available.
 

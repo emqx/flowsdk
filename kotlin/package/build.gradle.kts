@@ -4,7 +4,7 @@ plugins {
 }
 
 group = "io.emqx"
-version = "0.6.1"
+version = "0.8.3"
 
 repositories {
     mavenCentral()
