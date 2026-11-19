@@ -1,6 +1,6 @@
 [package]
 name = "flowsdk_ffi"
-version = "0.8.2"
+version = "0.8.3"
 edition = "2021"
 description = "FFI bindings for FlowSDK, allowing multi-language integration."
 license = "Apache-2.0"
@@ -13,7 +13,7 @@ categories = ["api-bindings"]
 crate-type = ["cdylib", "staticlib", "rlib"]
 
 [dependencies]
-flowsdk = { path = "..", version = "0.8.2", default-features = false, features = ["std", "strict-protocol-compliance"] }
+flowsdk = { path = "..", version = "0.8.3", default-features = false, features = ["std", "strict-protocol-compliance"] }
 libc = "0.2"
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"], optional = true }

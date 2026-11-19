@@ -113,7 +113,9 @@ jobs:
           ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_ref || github.ref_name) || github.ref }}
 
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
+        with:
+          toolchain: stable
 
       - name: Install protoc
         uses: arduino/setup-protoc@v3
@@ -213,8 +215,9 @@ jobs:
         ref: ${{ github.event_name == 'workflow_dispatch' && (inputs.release_ref || github.ref_name) || github.ref }}
 
     - name: Install Rust
-      uses: dtolnay/rust-toolchain@stable
+      uses: dtolnay/rust-toolchain@39008827e6b4319a349e9a42dfc90579dd25f1ca # stable
       with:
+        toolchain: stable
         targets: ${{ matrix.target }}
 
     - name: Install musl and vendored OpenSSL build tools
