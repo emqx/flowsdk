@@ -6,6 +6,9 @@ on:
   pull_request:
     branches: [ main ]
 
+permissions:
+  contents: read
+
 jobs:
   documentation:
     name: Build Documentation
@@ -47,8 +50,31 @@ jobs:
           exit 1
         fi
 
-    - name: Deploy documentation (main branch only)
+    - name: Upload documentation
       if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+      uses: actions/upload-artifact@v4
+      with:
+        name: rust-documentation
+        path: ./target/doc
+        if-no-files-found: error
+        retention-days: 1
+
+  deploy-documentation:
+    name: Deploy Documentation
+    needs: documentation
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download documentation
+      uses: actions/download-artifact@v4
+      with:
+        name: rust-documentation
+        path: ./target/doc
+
+    - name: Deploy documentation
       uses: peaceiris/actions-gh-pages@v3
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
