@@ -4,6 +4,9 @@ on:
   push:
     branches: [ '*' ]
 
+permissions:
+  contents: read
+
 jobs:
   quick-check:
     name: Quick Check
