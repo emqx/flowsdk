@@ -23,7 +23,7 @@ jobs:
           toolchain: stable
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2
+        uses: pypa/cibuildwheel@e5486e0b831d3a4954f271c2a053fbbc0e227d6a # v2.23.4
         with:
           package-dir: python/package
         env:
@@ -57,6 +57,6 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - uses: pypa/gh-action-pypi-publish@release/v1
+      - uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
