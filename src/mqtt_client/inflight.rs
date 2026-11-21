@@ -181,6 +181,11 @@ impl<T: TimePoint> InflightQueue<T> {
 
     pub fn acknowledge(&mut self, packet_id: u16) -> Option<InflightEntry<T>> {
         let entry = self.entries.remove(&packet_id)?;
+        if self.entries.is_empty() {
+            // Removing the last entry can retain a whole node or bucket array
+            // of inline MQTT packets for the rest of an idle connection.
+            self.entries = Map::new();
+        }
         self.admission_order.retain(|id| *id != packet_id);
         self.deadline_queue.retain(|(id, _)| *id != packet_id);
         if matches!(
@@ -250,7 +255,7 @@ impl<T: TimePoint> InflightQueue<T> {
     }
 
     pub fn clear(&mut self) {
-        self.entries.clear();
+        self.entries = Map::new();
         self.admission_order.clear();
         self.deadline_queue.clear();
         self.publish_quota_used = 0;
@@ -290,6 +295,26 @@ mod tests {
         assert_eq!(q.len(), 1);
         q.acknowledge(1).unwrap();
         assert_eq!(q.len(), 0);
+    }
+
+    #[test]
+    fn idle_queue_releases_entry_storage_and_can_be_reused() {
+        let mut queue = InflightQueue::new(2, 3, Duration::from_secs(1));
+        queue.push(1, create_packet(1), 1).unwrap();
+        queue.push(2, create_packet(2), 1).unwrap();
+        queue.acknowledge(1).unwrap();
+        assert!(queue.contains(2));
+
+        queue.acknowledge(2).unwrap();
+        assert_eq!(queue.entries.capacity(), 0);
+        assert!(queue.next_expiration().is_none());
+        assert!(queue.can_push_publish());
+
+        queue.push(2, create_packet(2), 1).unwrap();
+        queue.clear();
+        assert_eq!(queue.entries.capacity(), 0);
+        queue.push(1, create_packet(1), 1).unwrap();
+        assert_eq!(queue.acknowledge(1).unwrap().packet_id, 1);
     }
 
     #[test]
