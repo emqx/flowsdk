@@ -119,6 +119,10 @@ options.peer = "custom.broker.com:1883".to_string();
 options.client_id = "custom_id".to_string();
 ```
 
+The `.will(will)` builder accepts an owned `Will`. For direct field access,
+use `options.will = Some(Box::new(will))` to set it, `options.will = None` to
+clear it, and `options.will.as_deref()` to borrow an `Option<&Will>`.
+
 ### 7. Complete Example with TokioAsyncMqttClient
 
 ```rust

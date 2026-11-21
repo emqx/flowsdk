@@ -1025,7 +1025,7 @@ impl<T: TimePoint> MqttEngine<T> {
                 self.options.client_id.clone(),
                 self.options.username.clone(),
                 self.options.password.clone(),
-                self.options.will.clone(),
+                self.options.will.as_deref().cloned(),
                 self.options.keep_alive,
                 self.options.clean_start,
                 properties,

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
+use alloc::boxed::Box;
 use alloc::string::String;
 use alloc::string::ToString;
 use alloc::vec::Vec;
@@ -57,7 +58,8 @@ pub struct MqttClientOptions {
     pub keep_alive: u16,
     pub username: Option<String>,
     pub password: Option<Vec<u8>>,
-    pub will: Option<Will>,
+    /// Allocate Last Will data only for clients that configure it.
+    pub will: Option<Box<Will>>,
     pub reconnect: bool,
     /// MQTT protocol version to use
     /// - 3 or 4: MQTT v3.1.1 (both values use the same protocol)
@@ -316,7 +318,7 @@ impl MqttClientOptions {
 
     /// Set the Last Will and Testament
     pub fn will(mut self, will: Will) -> Self {
-        self.will = Some(will);
+        self.will = Some(Box::new(will));
         self
     }
 
@@ -743,6 +745,15 @@ mod mqtt_client_options_tests {
         assert_eq!(options.request_problem_information, None);
         #[cfg(feature = "tls")]
         assert!(options.tls_config.is_none());
+    }
+
+    #[test]
+    fn optional_will_occupies_one_pointer_in_client_options() {
+        let options = MqttClientOptions::default();
+        assert_eq!(
+            core::mem::size_of_val(&options.will),
+            core::mem::size_of::<usize>()
+        );
     }
 
     // ==================== Maximum Packet Size Tests ====================

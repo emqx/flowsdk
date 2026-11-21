@@ -413,7 +413,7 @@ impl super::ffi_types::MqttConnectOptionsFFI {
         }
         options.connect_properties = properties;
         if let Some(will) = self.will {
-            options.will = Some(will.into_core(version)?);
+            options = options.will(will.into_core(version)?);
         }
         if let Some(tuning) = self.engine_options {
             tuning.apply(&mut options)?;
