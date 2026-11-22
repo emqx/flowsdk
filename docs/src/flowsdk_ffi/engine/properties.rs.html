@@ -413,7 +413,7 @@
 <a href=#413 id=413 data-nosnippet>413</a>        }
 <a href=#414 id=414 data-nosnippet>414</a>        options.connect_properties = properties;
 <a href=#415 id=415 data-nosnippet>415</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(will) = <span class="self">self</span>.will {
-<a href=#416 id=416 data-nosnippet>416</a>            options.will = <span class="prelude-val">Some</span>(will.into_core(version)<span class="question-mark">?</span>);
+<a href=#416 id=416 data-nosnippet>416</a>            options = options.will(will.into_core(version)<span class="question-mark">?</span>);
 <a href=#417 id=417 data-nosnippet>417</a>        }
 <a href=#418 id=418 data-nosnippet>418</a>        <span class="kw">if let </span><span class="prelude-val">Some</span>(tuning) = <span class="self">self</span>.engine_options {
 <a href=#419 id=419 data-nosnippet>419</a>            tuning.apply(<span class="kw-2">&amp;mut </span>options)<span class="question-mark">?</span>;
